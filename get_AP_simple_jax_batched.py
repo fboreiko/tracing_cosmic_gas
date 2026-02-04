@@ -1,0 +1,590 @@
+"""
+JAX + MPI implementation for aperture photometry on tau maps.
+Processes galaxy catalogs in batches with MPI parallelization.
+"""
+
+import numpy as np
+import jax
+import jax.numpy as jnp
+from jax import jit, vmap
+from functools import partial
+from mpi4py import MPI
+from tqdm import tqdm
+import os
+from astropy.cosmology import FlatLambdaCDM
+from astropy import units as u
+from utils import select_halos
+from colossus.cosmology import cosmology
+from colossus.halo import mass_defs, concentration
+
+# Initialize MPI
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+# --------------------
+# Simulation Constants (never change)
+# --------------------
+LBOX = 681     # cMpc/h
+H = 0.681
+OM_M = 0.306
+
+
+def M200c_to_M200m(M200c, z):
+    c200c = concentration.concentration(
+        M200c, '200c', z, model='diemer19'
+    )
+    M200m, R200m, c200m = mass_defs.changeMassDefinition(
+        M200c, c200c, z,
+        mdef_in='200c',
+        mdef_out='200m'
+    )
+    return M200m
+
+
+def get_cutout_dims(r_max, dx):
+    """Calculate cutout dimensions based on maximum radius."""
+    half_size = int(np.ceil(1.2 * r_max / dx))
+    cutout_size = 2 * half_size + 1
+    return cutout_size
+
+
+def load_data(tau_map_path, halo_mstar_path, halo_pos_path):
+    """Load tau map and halo catalog data."""
+    tau_map = np.load(tau_map_path)
+    halo_mstar = np.load(halo_mstar_path)  # Msun/h
+    halo_pos = np.load(halo_pos_path)      # cMpc/h
+    return tau_map, halo_mstar, halo_pos
+
+
+@partial(jit, static_argnums=(1,))
+def bilinear_interpolate_grid(cutout, scale_factor):
+    """
+    Bilinear interpolation to increase resolution using JAX.
+    
+    Args:
+        cutout: Input array (H, W)
+        scale_factor: Integer upsampling factor (static)
+    
+    Returns:
+        Upsampled array (H*scale_factor, W*scale_factor)
+    """
+    if scale_factor == 1:
+        return cutout
+    
+    H, W = cutout.shape
+    H_new, W_new = H * scale_factor, W * scale_factor
+    
+    # Create coordinate grids for the new resolution
+    # Coordinates in the original grid space
+    y_new = jnp.arange(H_new) / scale_factor
+    x_new = jnp.arange(W_new) / scale_factor
+    
+    # Get integer parts and fractional parts
+    y0 = jnp.floor(y_new).astype(jnp.int32)
+    x0 = jnp.floor(x_new).astype(jnp.int32)
+    y1 = jnp.minimum(y0 + 1, H - 1)
+    x1 = jnp.minimum(x0 + 1, W - 1)
+    
+    # Fractional parts
+    fy = y_new - y0
+    fx = x_new - x0
+    
+    # Broadcast for 2D interpolation
+    Y0, X0 = jnp.meshgrid(y0, x0, indexing='ij')
+    Y1, X1 = jnp.meshgrid(y1, x1, indexing='ij')
+    FY, FX = jnp.meshgrid(fy, fx, indexing='ij')
+    
+    # Bilinear interpolation
+    interpolated = (
+        cutout[Y0, X0] * (1 - FY) * (1 - FX) +
+        cutout[Y0, X1] * (1 - FY) * FX +
+        cutout[Y1, X0] * FY * (1 - FX) +
+        cutout[Y1, X1] * FY * FX
+    )
+    
+    return interpolated
+
+
+@partial(jit, static_argnums=(4, 5))
+def extract_cutout_jax(tau_map, halo_x, halo_y, dx, half_size, n_cell):
+    """
+    Extract cutout centered on halo position using JAX.
+    
+    Args:
+        tau_map: Full tau map (n_cell, n_cell)
+        halo_x, halo_y: Halo position in cMpc/h
+        dx: Pixel size in cMpc/h
+        half_size: Half size of cutout in pixels (static)
+        n_cell: Grid resolution (static)
+    
+    Returns:
+        cutout: Extracted cutout
+        center_x_frac: Fractional x position within cutout
+        center_y_frac: Fractional y position within cutout
+    """
+    # Convert to pixel coordinates
+    pix_x = halo_x / dx
+    pix_y = halo_y / dx
+    
+    # Center pixel
+    center_x = jnp.round(pix_x).astype(jnp.int32)
+    center_y = jnp.round(pix_y).astype(jnp.int32)
+    
+    # Calculate cutout size (must be static for JAX)
+    cutout_size = 2 * half_size + 1
+    
+    # Calculate start indices with boundary handling
+    # Clamp the start indices so the cutout stays within bounds
+    x_start = jnp.clip(center_x - half_size, 0, n_cell - cutout_size)
+    y_start = jnp.clip(center_y - half_size, 0, n_cell - cutout_size)
+    
+    # Extract the cutout with fixed size
+    cutout = jax.lax.dynamic_slice(
+        tau_map,
+        (x_start, y_start),
+        (cutout_size, cutout_size)
+    )
+    
+    # Calculate fractional position within cutout
+    halo_x_cutout = pix_x - x_start
+    halo_y_cutout = pix_y - y_start
+    
+    return cutout, halo_x_cutout, halo_y_cutout
+
+
+@jit
+def compute_aperture_signal_single(cutout_highres, true_x, true_y, dx_highres, r_ap):
+    """
+    Compute aperture signal for a single radius using JAX.
+    
+    Args:
+        cutout_highres: High-resolution cutout
+        true_x, true_y: True halo position in high-res pixels
+        dx_highres: High-res pixel size
+        r_ap: Aperture radius in cMpc/h
+    
+    Returns:
+        tau_signal: Integrated tau signal
+    """
+    n_pix = cutout_highres.shape[0]
+    
+    # Create pixel coordinate grids
+    pixel_indices = jnp.arange(n_pix)
+    pixel_coords_x = pixel_indices * dx_highres - true_x * dx_highres
+    pixel_coords_y = pixel_indices * dx_highres - true_y * dx_highres
+    
+    # Create 2D distance grid
+    X, Y = jnp.meshgrid(pixel_coords_x, pixel_coords_y, indexing='ij')
+    R = jnp.sqrt(X**2 + Y**2)
+    
+    # Create masks for inner and outer annuli
+    mask_inner = R <= r_ap
+    mask_outer = (R > r_ap) & (R <= jnp.sqrt(2) * r_ap)
+    
+    # Compute mean tau values
+    tau_inner = jnp.sum(cutout_highres * mask_inner) / jnp.sum(mask_inner)
+    tau_outer = jnp.sum(cutout_highres * mask_outer) / jnp.sum(mask_outer)
+    
+    # Integrated signal
+    tau_signal = (tau_inner - tau_outer) * jnp.pi * r_ap**2
+    
+    return tau_signal
+
+
+@partial(jit, static_argnums=(4, 6, 7))
+def process_single_halo(tau_map, halo_x, halo_y, dx, half_size, r_apertures, n_cell, res_increase):
+    """
+    Process a single halo and compute all aperture signals.
+    
+    Args:
+        tau_map: Full tau map
+        halo_x, halo_y: Halo position
+        dx: Pixel size
+        half_size: Cutout half size (static)
+        r_apertures: Array of aperture radii
+        n_cell: Grid resolution (static)
+        res_increase: Resolution increase factor (static)
+    
+    Returns:
+        signals: Array of tau signals for each aperture
+    """
+    # Extract cutout
+    cutout, true_x, true_y = extract_cutout_jax(tau_map, halo_x, halo_y, dx, half_size, n_cell)
+    
+    # Pad cutout if needed
+    cutout_size = 2 * half_size + 1
+    pad_x = cutout_size - cutout.shape[0]
+    pad_y = cutout_size - cutout.shape[1]
+    
+    cutout = jnp.pad(cutout, ((0, pad_x), (0, pad_y)), mode='constant', constant_values=0)
+    
+    # Upsample to higher resolution
+    if res_increase > 1:
+        cutout_highres = bilinear_interpolate_grid(cutout, res_increase)
+    else:
+        cutout_highres = cutout
+    
+    # Adjust halo position for high-res grid
+    true_x_highres = true_x * res_increase
+    true_y_highres = true_y * res_increase
+    dx_highres = dx / res_increase
+    
+    # Compute signals for all apertures
+    def compute_for_radius(r_ap):
+        return compute_aperture_signal_single(cutout_highres, true_x_highres, true_y_highres, dx_highres, r_ap)
+    
+    signals = vmap(compute_for_radius)(r_apertures)
+    
+    return signals
+
+
+def process_batch_numpy(tau_map_jax, halo_positions, dx, half_size, r_apertures_jax, 
+                        n_cell, batch_size=100, res_increase=8, rank=0):
+    """
+    Process a batch of halos using NumPy loop (for large batches that don't fit in GPU memory).
+    
+    Args:
+        tau_map_jax: Tau map as JAX array
+        halo_positions: Array of halo positions (N, 2)
+        dx: Pixel size
+        half_size: Cutout half size
+        r_apertures_jax: Aperture radii as JAX array
+        n_cell: Grid resolution
+        batch_size: Internal batch size for processing
+        res_increase: Resolution increase factor for upsampling
+        rank: MPI rank (for progress bar display)
+    
+    Returns:
+        signals: Array of signals (N, n_apertures)
+    """
+    n_halos = len(halo_positions)
+    n_apertures = len(r_apertures_jax)
+    signals = np.zeros((n_halos, n_apertures))
+    
+    # Create progress bar for rank 0
+    iterator = range(0, n_halos, batch_size)
+    if rank == 0:
+        iterator = tqdm(iterator, desc=f"Processing halos (rank {rank})", total=(n_halos + batch_size - 1) // batch_size)
+    
+    for i in iterator:
+        end_idx = min(i + batch_size, n_halos)
+        batch_pos = halo_positions[i:end_idx]
+        
+        # Process each halo in the batch
+        for j, (halo_x, halo_y) in enumerate(batch_pos):
+            halo_signals = process_single_halo(tau_map_jax, halo_x, halo_y, dx, half_size, r_apertures_jax, n_cell, res_increase)
+            signals[i + j] = np.array(halo_signals)
+    
+    return signals
+
+
+def split_workload(n_total, n_ranks):
+    """Split workload among MPI ranks."""
+    base_size = n_total // n_ranks
+    remainder = n_total % n_ranks
+    
+    # Calculate start and end indices for each rank
+    counts = np.array([base_size + (1 if i < remainder else 0) for i in range(n_ranks)])
+    displacements = np.array([sum(counts[:i]) for i in range(n_ranks)])
+    
+    return counts, displacements
+
+
+def compute_distances(cosmo, z):
+    d_L = cosmo.luminosity_distance(z).to(u.Mpc).value
+    d_C = d_L / (1.0 + z)                      # Mpc
+    d_A = d_L / (1.0 + z) ** 2                 # Mpc
+    d_C *= H                                   # Mpc/h
+    d_A *= H                                   # Mpc/h
+    return d_A, d_C
+
+
+def translate_grid_params_to_degrees(z, n_cell):
+    a = 1.0 / (1.0 + z)
+    cosmo = FlatLambdaCDM(H0=H * 100.0, Om0=OM_M, Tcmb0=2.725)
+    d_A, _ = compute_distances(cosmo, z)
+    Lbox_rad = (a * LBOX) / d_A                     # rad
+    Lbox_deg = Lbox_rad * 180.0 / np.pi          # degrees
+    cell_size_deg = Lbox_deg / n_cell
+
+    return Lbox_rad, Lbox_deg, cell_size_deg
+
+def gauss_beam(ellsq, fwhm):
+    """
+    Gaussian beam of size fwhm
+    """
+    tht_fwhm = np.deg2rad(fwhm/60.)
+    return np.exp(-(tht_fwhm**2.)*(ellsq)/(2.*8.*np.log(2.)))
+
+def get_smooth_density(D, fwhm, pixsizedeg, Lboxdeg, N_dim):
+    """
+    Smooth density map D ((0, Lbox] and N_dim^2 cells) with Gaussian beam of FWHM
+    """
+    kstep = 2*np.pi/(N_dim*np.pi/180*pixsizedeg)
+    #karr = np.fft.fftfreq(N_dim, d=Lbox/(2*np.pi*N_dim)) # physical (not correct)
+    karr = np.fft.fftfreq(N_dim, d=Lboxdeg*np.pi/180./(2*np.pi*N_dim)) # angular
+    #print("kstep = ", kstep, karr[1]-karr[0]) # N_dim/d gives kstep
+
+    # fourier transform the map and apply gaussian beam
+    dfour = np.fft.fftn(D)
+    dksmo = np.zeros((N_dim, N_dim), dtype=complex)
+    ksq = np.zeros((N_dim, N_dim), dtype=complex)
+    ksq[:, :] = karr[None, :]**2+karr[:,None]**2
+    dksmo[:, :] = gauss_beam(ksq, fwhm)*dfour
+    drsmo = np.real(np.fft.ifftn(dksmo))
+
+    return drsmo
+
+def match_aperture_radii(z):
+    """Get aperture radii matching the observational data."""
+    figure_content = np.load("/home/fb635/fedirfiles/tracing_cosmic_gas/data/Fig2_sim.npz")
+    theta_arcmin = figure_content['theta_arcmins']
+    cosmo = FlatLambdaCDM(H0=H*100, Om0=OM_M, Tcmb0=2.725)
+    _, d_C = compute_distances(cosmo, z)
+    theta_rad = theta_arcmin * (np.pi / 180) / 60  # radians
+    r_comoving_mpc = d_C * theta_rad  # cMpc/h
+    return r_comoving_mpc
+
+
+def get_paths_from_config(config):
+    """Derive file paths from configuration."""
+    gas_type = config['gas_type']
+    tau_method = config['tau_method']
+    account_for_miscentering = config['account_for_miscentering']
+    beam_smoothing = config.get('beam_smoothing', True)
+    
+    # Handle mass-dependent tau reconstruction
+    if tau_method == '2D_FT_massdep_tau_reconstruction':
+        if 'A' not in config:
+            raise ValueError(f"tau_method '{tau_method}' requires parameter 'A' to be specified in config")
+        A = config['A']
+        tau_map_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/tau_maps/{tau_method}/tau_map_{gas_type}_A_{A:.5f}.npy"
+    else:
+        # Tau map path for standard methods
+        tau_map_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/tau_maps/{tau_method}/tau_map_{gas_type}.npy"
+    
+    # Determine halo catalog paths
+    if account_for_miscentering:
+        if gas_type in ['fiducial', 'strongest_AGN']:
+            data_type = 'hydro'
+            variant = gas_type
+        else:
+            data_type = 'dmo'
+            variant = None
+    else:
+        data_type = 'hydro'
+        if gas_type in ['fiducial_reconstructed', 'fiducial']:
+            variant = 'fiducial'
+        else:
+            variant = 'strongest_AGN'
+    
+    if data_type == 'dmo':
+        halo_mstar_path = "/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_dmo/halo_mass.npy"
+        halo_pos_path = "/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_dmo/halo_pos.npy"
+    else:
+        halo_mstar_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_hydro/halo_mass_{variant}.npy"
+        halo_pos_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_hydro/halo_pos_{variant}.npy"
+    
+    # Output path
+    base_dir = "simple_CAP_code"
+    tau_method_dir = f"{tau_method}_smoothed" if beam_smoothing else tau_method
+    misc_str = "_acc_for_misc" if account_for_miscentering else ""
+    
+    # Add A parameter to filename if using mass-dependent reconstruction
+    A_str = f"_A_{config['A']:.5f}" if tau_method == '2D_FT_massdep_tau_reconstruction' else ""
+    
+    if config.get('halo_mass_range') is not None:
+        subdir = f"tau_apertures_{gas_type}{A_str}_massbin_{config['halo_mass_range']}_ngrid_{config['n_cell']}{misc_str}_JAX_MPI"
+    else:
+        subdir = f"tau_apertures_{gas_type}{A_str}_ngrid_{config['n_cell']}{misc_str}_JAX_MPI"
+    
+    output_file = f"data/{base_dir}/{tau_method_dir}/{subdir}/tau_apertures.npz"
+    
+    return {
+        'tau_map_path': tau_map_path,
+        'halo_mstar_path': halo_mstar_path,
+        'halo_pos_path': halo_pos_path,
+        'output_file': output_file
+    }
+
+
+def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
+    """Main processing pipeline with MPI parallelization.
+    
+    Parameters:
+    -----------
+    config : dict
+        Configuration dictionary with keys:
+        - gas_type: str (e.g., 'fiducial', 'fiducial_reconstructed', 'strongest_AGN', 'strongest_AGN_reconstructed')
+        - tau_method: str (e.g., 'fullFT_tau_reconstruction', 'histmethod_tau_reconstruction')
+        - n_cell: int (grid resolution, cells per side)
+        - z_real: float (redshift)
+        - n_gal_density: float (galaxy number density in cMpc/h^-3, e.g., 87e-5 or 1e-4) - only used when halo_mass_range is None
+        - halo_mass_range: int or None (mass bin index 0 to N-1, where N bins are created with ~5000 halos per bin between 10^13 and max mass)
+        - beam_smoothing: bool (whether to apply beam smoothing, default True)
+        - account_for_miscentering: bool (whether to account for miscentering, default True)
+    fwhm_beam_arcmin : float, optional
+        Beam FWHM in arcminutes (default 1.6)
+    batch_size : int, optional
+        Batch size for processing (default 100)
+    res_increase : int, optional
+        Resolution increase factor for upsampling (default 8)
+    """
+    
+    # Extract config values with defaults
+    gas_type = config['gas_type']
+    tau_method = config['tau_method']
+    n_cell = config['n_cell']
+    z = config['z_real']
+    n_gal_density = config['n_gal_density']
+    halo_mass_range = config.get('halo_mass_range', None)
+    beam_smoothing = config.get('beam_smoothing', True)
+    account_for_miscentering = config.get('account_for_miscentering', True)
+    
+    # Get paths from config
+    paths = get_paths_from_config(config)
+    
+    # Load data on all ranks
+    if rank == 0:
+        print("Loading data...")
+        print(f"Gas type: {gas_type}")
+        print(f"Tau method: {tau_method}")
+        print(f"N_cell: {n_cell}")
+        print(f"Redshift: {z}")
+    
+    tau_map, halo_mstar, halo_pos = load_data(
+        paths['tau_map_path'],
+        paths['halo_mstar_path'],
+        paths['halo_pos_path']
+    )
+
+    if beam_smoothing:
+        _, Lbox_deg_real, cell_size_deg_real = translate_grid_params_to_degrees(z, n_cell)
+        tau_map = get_smooth_density(tau_map, fwhm_beam_arcmin, cell_size_deg_real, Lbox_deg_real, n_cell)
+        
+    halo_pos_selected, halo_indices = select_halos(
+        halo_mstar, halo_pos, 
+        n_gal_density=n_gal_density, 
+        halo_mass_range=halo_mass_range, 
+        rank=rank
+    )
+
+    params = {'flat': True, 'H0': H*100, 'Om0': 0.306, 'Ob0': 0.0486, 'sigma8': 0.807, 'ns': 0.967}
+    cosmology.setCosmology('myCosmo', params)
+    selected_masses = halo_mstar[halo_indices]
+    halo_m200m = M200c_to_M200m(selected_masses, z) # Msun/h
+
+    if rank == 0:
+        print(f"Total halos selected: {len(halo_pos_selected)}")
+        print(f"  Log10 mass range: [{np.log10(np.min(selected_masses)):.2f}, {np.log10(np.max(selected_masses)):.2f}]")
+        print(f"  Mean M200m: {np.log10(np.mean(halo_m200m)):.2f} Msun/h")
+        print("Starting aperture photometry...")
+    
+    # Convert to JAX arrays
+    tau_map_jax = jnp.array(tau_map)
+    R_comoving_mpc = match_aperture_radii(z)
+    r_apertures_jax = jnp.array(R_comoving_mpc)
+    
+    # Calculate cutout parameters
+    dx = LBOX / n_cell
+    cutout_size = get_cutout_dims(np.max(R_comoving_mpc), dx)
+    half_size = cutout_size // 2
+    
+    if rank == 0:
+        print(f"Cutout size: {cutout_size} x {cutout_size} coarse pixels")
+        print(f"High-res cutout: {cutout_size * res_increase} x {cutout_size * res_increase} pixels")
+        print(f"Total halos: {len(halo_pos_selected)}")
+        print(f"MPI ranks: {size}")
+    
+    # Split workload among MPI ranks
+    n_halos_total = len(halo_pos_selected)
+    counts, displacements = split_workload(n_halos_total, size)
+    
+    # Get this rank's subset of halos
+    start_idx = displacements[rank]
+    end_idx = start_idx + counts[rank]
+    my_halo_positions = halo_pos_selected[start_idx:end_idx]
+    
+    if rank == 0:
+        print(f"\nWork distribution:")
+        for r in range(size):
+            print(f"  Rank {r}: {counts[r]} halos (indices {displacements[r]}-{displacements[r]+counts[r]-1})")
+    
+    # Process this rank's halos
+    if rank == 0:
+        print(f"\nRank {rank}: Processing {counts[rank]} halos...")
+    
+    my_signals = process_batch_numpy(
+        tau_map_jax, 
+        my_halo_positions, 
+        dx, 
+        half_size, 
+        r_apertures_jax,
+        n_cell,
+        batch_size=batch_size,
+        res_increase=res_increase,
+        rank=rank
+    )
+    
+    if rank == 0:
+        print(f"Rank {rank}: Completed processing")
+    
+    # Gather results on rank 0
+    if rank == 0:
+        all_signals = np.zeros((n_halos_total, len(R_comoving_mpc)))
+    else:
+        all_signals = None
+    
+    # Use Gatherv to collect variable-sized arrays
+    sendcounts = counts * len(R_comoving_mpc)
+    displacements_flat = displacements * len(R_comoving_mpc)
+    
+    comm.Gatherv(
+        sendbuf=my_signals.flatten(),
+        recvbuf=(all_signals, sendcounts, displacements_flat, MPI.DOUBLE) if rank == 0 else None,
+        root=0
+    )
+    
+    # Save results on rank 0
+    if rank == 0:
+        print("\nSaving results...")
+        
+        output_file = paths['output_file']
+        output_file = paths['output_file']
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+        print("Aperture radii (cMpc/h):", R_comoving_mpc)
+        
+        np.savez(
+            output_file,
+            tau_signals=all_signals,
+            inds_sub=halo_indices,
+            r_comoving_mpc_h=R_comoving_mpc,
+        )
+        
+        print(f"Results saved to: {output_file}")
+        print(f"Shape: {all_signals.shape}")
+        print(f"Min signal: {all_signals.min():.3e}")
+        print(f"Max signal: {all_signals.max():.3e}")
+
+
+def main():
+    """Main function for standalone execution using default config."""
+    config = {
+        'gas_type': 'strongest_AGN_reconstructed',
+        'tau_method': 'fullFT_tau_reconstruction',
+        'n_cell': 2048,
+        'z_real': 0.74,
+        'n_gal_density': 1e-4,
+        'halo_mass_range': 0,
+        'beam_smoothing': True,
+        'account_for_miscentering': False
+    }
+    get_AP_simple(config)
+
+
+if __name__ == "__main__":
+    main()
