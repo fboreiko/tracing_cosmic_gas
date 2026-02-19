@@ -1,5 +1,6 @@
 import numpy as np
 from tqdm import tqdm
+import deepdish as dd
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 from astropy.cosmology import FlatLambdaCDM
@@ -30,6 +31,8 @@ X_He = 0.24
 
 PLOT_DATA = True
 
+SELECTION_REGIME = 'mgal_sel'  # 'mhalo_sel' or 'mgal_sel'
+
 # Multiple profiles to plot
 PROFILES = [
     {
@@ -38,11 +41,11 @@ PROFILES = [
         "smoothed": True,
         "gas_type": "fiducial",  # 'fiducial_reconstructed', 'strongest_AGN_reconstructed', 'fiducial', 'strongest_AGN'
         "halo_mass_range": None,  # int (0 to N-1) for mass bin index, or None to use n_gal_density
+        "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
-        "n_gal_density": 87e-5, #87e-5,  # cMpc/h^-3
-        "account_for_miscentering": False,
+        "n_gal_density": 2e-2, #2e-2 - for mgal_sel, 87e-5 - for mhalo_sel,  # cMpc/h^-3
         "A": 0.00
     },
     {
@@ -50,12 +53,12 @@ PROFILES = [
         "tau_method": "2D_FT_upgrade",
         "smoothed": True,
         "gas_type": "fiducial_reconstructed",
+        "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
         "halo_mass_range": None,
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
-        "n_gal_density": 87e-5, #87e-5,
-        "account_for_miscentering": False,
+        "n_gal_density": 2e-2, #87e-5,
         "A": 0.00
     },
     {
@@ -63,12 +66,12 @@ PROFILES = [
         "tau_method": "fullFT",
         "smoothed": True,
         "gas_type": "strongest_AGN",
+        "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
         "halo_mass_range": None,
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
-        "n_gal_density": 87e-5, #87e-5,
-        "account_for_miscentering": False,
+        "n_gal_density": 2e-2, #87e-5,
         "A": 0.00
     },
     {
@@ -76,12 +79,12 @@ PROFILES = [
         "tau_method": "2D_FT_upgrade",
         "smoothed": True,
         "gas_type": "strongest_AGN_reconstructed",
+        "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
         "halo_mass_range": None,
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
-        "n_gal_density": 87e-5, #87e-5,
-        "account_for_miscentering": False,
+        "n_gal_density": 2e-2, #87e-5,
         "A": 0.00
     },
 ]
@@ -116,58 +119,60 @@ def M200c_to_M200m(M200c, z):
 
 def get_halo_data_for_dataset(config):
     """
-    Load halo data based on configuration.
+    Load halo data from unified HDF5 source based on configuration.
     
     Parameters:
     -----------
     config : dict
         Configuration dictionary with keys:
         - gas_type: str
-        - n_gal_density: float (galaxy number density in cMpc/h^-3)
-        - halo_mass_range: int or None (mass bin index)
-        - account_for_miscentering: bool
+        - selection_regime: str ('mhalo_sel' or 'mgal_sel', default 'mhalo_sel')
+    
+    Returns:
+    --------
+    halo_mass : ndarray
+        Halo masses (M200c for mhalo_sel, m200b for mgal_sel)
+    halo_vels : ndarray
+        Halo velocities
+    is_m200m : bool
+        True if masses are m200b (m200m), False if M200c
     """
     
     # Extract config values
-    ACCOUNT_FOR_MISCENTERING = config.get('account_for_miscentering', False)
     GAS_TYPE = config['gas_type']
-
-    if ACCOUNT_FOR_MISCENTERING:
-        # With miscentering: use DMO for reconstructed, hydro for actual
-        if GAS_TYPE in ['fiducial', 'strongest_AGN']:
-            data_type = 'hydro'
-            variant = GAS_TYPE
-        else:
-            data_type = 'dmo'
-            variant = None
+    SELECTION_REGIME = config.get('selection_regime', 'mhalo_sel')
+    
+    # Determine variant from gas_type
+    if GAS_TYPE in ['fiducial_reconstructed', 'fiducial']:
+        variant = 'fiducial'
     else:
-        # Without miscentering: always use hydro
-        data_type = 'hydro'
-        if GAS_TYPE in ['fiducial_reconstructed', 'fiducial']:
-            variant = 'fiducial'
-        else:
-            variant = 'strongest_AGN'
+        variant = 'strongest_AGN'
     
-    # Set halo mass and position paths
-    if data_type == 'dmo':
-        HALO_M200C_PATH = "/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_dmo/halo_mass.npy"  # Msun/h
-        HALO_POS_PATH = "/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_dmo/halo_pos.npy"  # cMpc/h
-    else:  # hydro
-        HALO_M200C_PATH = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_hydro/halo_mass_{variant}.npy"  # Msun/h
-        HALO_POS_PATH = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_hydro/halo_pos_{variant}.npy"  # cMpc/h
+    # Load data from unified HDF5 source
+    halo_galaxy_data_path = f"/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO_ext_L1000N1800_HYDRO_{variant.upper()}_snap_77.hdf5"
     
-    # Velocity paths: always use hydro catalog matching gas_type (keep original logic)
-    if GAS_TYPE in ['fiducial', 'fiducial_reconstructed']:
-        HALO_VELS_PATH = "/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_hydro/halo_vels_fiducial.npy"   # km/s
-    else:
-        HALO_VELS_PATH = "/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_hydro/halo_vels_strongest_AGN.npy"   # km/s
+    # Load only needed fields using deepdish selective loading
+    all_mstell = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell')
+    all_centrals = dd.io.load(halo_galaxy_data_path, '/galaxies/centrals')
+    all_m200b = dd.io.load(halo_galaxy_data_path, '/galaxies/m200b')  # m200b is already m200m
+    all_m200c = dd.io.load(halo_galaxy_data_path, '/galaxies/m200c')
+    all_pos = dd.io.load(halo_galaxy_data_path, '/galaxies/pos')
+    all_vels = dd.io.load(halo_galaxy_data_path, '/galaxies/vel')
     
-    # Load data
-    halo_m200c = np.load(HALO_M200C_PATH)
-    halo_pos = np.load(HALO_POS_PATH)
-    halo_vels = np.load(HALO_VELS_PATH)
-    
-    return halo_m200c, halo_vels
+    # Filter based on selection regime
+    if SELECTION_REGIME == 'mhalo_sel':
+        # Use only central galaxies
+        central_mask = all_centrals.astype(bool)
+        halo_m200b = all_m200b[central_mask]
+        halo_m200c = all_m200c[central_mask]
+        halo_vels = all_vels[central_mask]
+        return halo_m200b, halo_m200c, halo_vels
+    else:  # mgal_sel
+        # Use all galaxies - return m200b (already m200m)
+        halo_m200b = all_m200b
+        halo_m200c = all_m200c
+        halo_vels = all_vels
+        return halo_m200b, halo_m200c, halo_vels 
 
 #### I BUTCHER THE CODE HERE 
 def compute_temperature_signal_pixell(tau_xy_inner, tau_xy_outer, vel_los, v_rms=300):
@@ -246,8 +251,6 @@ def compute_distances(cosmo, z):
 
 
 def compute_profile_errors(T_signals, N_halos):
-    #plt.hist(T_signals[:, 0].flatten(), bins=50)
-    #plt.savefig("test_hist.png")
     std_per_aperture = np.std(T_signals, axis=0)
     errors = std_per_aperture / np.sqrt(N_halos)
     return errors
@@ -270,7 +273,7 @@ def get_kSZ_profile(config):
         - JAX: bool
         - z: float
         - n_gal_density: float
-        - account_for_miscentering: bool
+        - selection_regime: str ('mhalo_sel' or 'mgal_sel')
     """
     # Determine base directory and tau method directory
     if config['projection_type'] == 'pixell':
@@ -292,16 +295,16 @@ def get_kSZ_profile(config):
     if config.get('smoothed', False):
         tau_method_dir += "_smoothed"
     
-    # Construct subdir and filename based on halo_mass_range and JAX
-    misc_str = "_acc_for_misc" if config.get('account_for_miscentering', False) else ""
+    # Add selection regime suffix only for mgal_sel
+    regime_str = "_mgal_sel" if config.get('selection_regime') == 'mgal_sel' else ""
     
     # Add A parameter to filename ONLY if using mass-dependent reconstruction
     A_str = f"_A_{config['A']:.5f}" if config.get('tau_method') == '2D_FT_massdep' and 'A' in config else ""
     
     if config.get('halo_mass_range') is not None:
-        subdir = f"tau_apertures_{config['gas_type']}{A_str}_massbin_{config['halo_mass_range']}_ngrid_{config['ngrid']}{misc_str}"
+        subdir = f"tau_apertures_{config['gas_type']}{A_str}_massbin_{config['halo_mass_range']}_ngrid_{config['ngrid']}{regime_str}"
     else:
-        subdir = f"tau_apertures_{config['gas_type']}{A_str}_ngrid_{config['ngrid']}{misc_str}"
+        subdir = f"tau_apertures_{config['gas_type']}{A_str}_ngrid_{config['ngrid']}{regime_str}"
     
     # Add JAX suffix if using JAX implementation
     if config.get('JAX', False):
@@ -328,9 +331,10 @@ def get_kSZ_profile(config):
         inds_sub = data['inds_sub']
         aperture_radii = data.get('r_comoving_mpc_h', np.linspace(0.1, 3.0, 9))  # cMpc/h
 
-        halo_m200c, halo_vels = get_halo_data_for_dataset(config)
+        halo_m200b, halo_m200c, halo_vels = get_halo_data_for_dataset(config)
 
         halo_vels = halo_vels[inds_sub]
+        halo_m200b = halo_m200b[inds_sub]
         halo_m200c = halo_m200c[inds_sub]
         los_vels = halo_vels[:, 2]  # km/s
         
@@ -338,7 +342,8 @@ def get_kSZ_profile(config):
         stacked_kSZ_signal = weighted_stacking(T_signals, los_vels)
 
         one_halo_signal, mean_r200c_mpc_comoving = get_one_halo_term(halo_m200c, halo_vels, config['z'])
-        mean_halo_mass = np.mean(halo_m200c)  # Msun/h
+        
+        mean_halo_m200b = np.mean(halo_m200b)  # Msun/h
         N_halos = len(inds_sub)
 
     else:
@@ -346,9 +351,10 @@ def get_kSZ_profile(config):
         inds_sub = data['inds_sub']
         aperture_radii = data.get('r_comoving_mpc_h')
 
-        halo_m200c, halo_vels = get_halo_data_for_dataset(config)
+        halo_m200b, halo_m200c, halo_vels = get_halo_data_for_dataset(config)
 
         halo_vels = halo_vels[inds_sub]
+        halo_m200b = halo_m200b[inds_sub]
         halo_m200c = halo_m200c[inds_sub]
         los_vels = halo_vels[:, 2]  # km/s
 
@@ -356,16 +362,18 @@ def get_kSZ_profile(config):
         stacked_kSZ_signal = weighted_stacking(T_signals, los_vels)
 
         one_halo_signal, mean_r200c_mpc_comoving = get_one_halo_term(halo_m200c, halo_vels, config['z'])
-        mean_halo_mass = np.mean(halo_m200c)  # Msun/h
+        
+        mean_halo_m200b = np.mean(halo_m200b)  # Msun/h
         N_halos = len(inds_sub)
 
-    return aperture_radii, stacked_kSZ_signal, one_halo_signal, mean_r200c_mpc_comoving, mean_halo_mass, N_halos, T_signals
+    return aperture_radii, stacked_kSZ_signal, one_halo_signal, mean_r200c_mpc_comoving, mean_halo_m200b, N_halos, T_signals
 
 def get_one_halo_term(halo_m200c, halo_vels, z):
 
     mean_halo_m200c = np.mean(halo_m200c) / h # Msun
-    print(np.log10(mean_halo_m200c))
     vel_rms = np.std(halo_vels[:, 2])   # km/s 
+
+    print(f"Mean m200c: {np.log10(mean_halo_m200c):.2e} Msun, Velocity RMS: {vel_rms:.2f} km/s")
 
     cosmo = FlatLambdaCDM(H0=h*100, Om0=OM_M, Tcmb0=2.725)
     rho_crit_z = cosmo.critical_density(z).to(u.Msun / u.Mpc**3).value  # Msun/Mpc^3 at redshift z
@@ -402,7 +410,7 @@ def generate_comparison_filename(profiles):
     is_single_profile = len(profiles) == 1
     
     # Define all possible keys
-    keys = ['projection_type', 'tau_method', 'smoothed', 'gas_type', 'halo_mass_range', 'ngrid', 'z', 'JAX', 'account_for_miscentering', 'A']
+    keys = ['projection_type', 'tau_method', 'smoothed', 'gas_type', 'halo_mass_range', 'ngrid', 'z', 'JAX', 'selection_regime', 'A']
     
     # Find common and varying parameters
     common_params = {}
@@ -425,7 +433,7 @@ def generate_comparison_filename(profiles):
     
     # Determine comparison subject (what's varying)
     # Priority order for naming when multiple params vary
-    comparison_priority = ['ngrid', 'halo_mass_range', 'gas_type', 'tau_method', 'smoothed', 'projection_type', 'z', 'JAX', 'account_for_miscentering', 'A']
+    comparison_priority = ['ngrid', 'halo_mass_range', 'gas_type', 'tau_method', 'smoothed', 'projection_type', 'z', 'JAX', 'selection_regime', 'A']
     comparison_subjects = [key for key in comparison_priority if key in varying_params]
     
     if len(comparison_subjects) == 0:
@@ -440,7 +448,7 @@ def generate_comparison_filename(profiles):
     
     # For single profile, include all relevant parameters
     if is_single_profile:
-        param_order = ['projection_type', 'tau_method', 'gas_type', 'smoothed', 'z', 'halo_mass_range', 'ngrid', 'JAX', 'account_for_miscentering', 'A']
+        param_order = ['projection_type', 'tau_method', 'gas_type', 'smoothed', 'z', 'halo_mass_range', 'ngrid', 'JAX', 'selection_regime', 'A']
         for key in param_order:
             value = common_params.get(key)
             if value is None:
@@ -453,17 +461,17 @@ def generate_comparison_filename(profiles):
                 filename_parts.append('smoothed')
             elif key == 'JAX' and value == 'True':
                 filename_parts.append('JAX')
-            elif key == 'account_for_miscentering' and value == 'True':
-                filename_parts.append('acc_for_misc')
+            elif key == 'selection_regime' and value == 'mgal_sel':
+                filename_parts.append('mgal_sel')
             elif key == 'A':
                 filename_parts.append(f"A{value}")
             elif key == 'ngrid':
                 filename_parts.append(f"ngrid{value}")
-            elif key != 'halo_mass_range' and key != 'smoothed' and key != 'JAX' and key != 'account_for_miscentering':
+            elif key != 'halo_mass_range' and key != 'smoothed' and key != 'JAX' and key != 'selection_regime':
                 filename_parts.append(value)
     else:
         # For multiple profiles, add common parameters
-        param_order = ['projection_type', 'tau_method', 'smoothed', 'gas_type', 'z', 'halo_mass_range', 'JAX', 'account_for_miscentering', 'A']
+        param_order = ['projection_type', 'tau_method', 'smoothed', 'gas_type', 'z', 'halo_mass_range', 'JAX', 'selection_regime', 'A']
         for key in param_order:
             if key in common_params:
                 value = common_params[key]
@@ -475,15 +483,15 @@ def generate_comparison_filename(profiles):
                     filename_parts.append('smoothed')
                 elif key == 'JAX' and value == 'True':
                     filename_parts.append('JAX')
-                elif key == 'account_for_miscentering' and value == 'True':
-                    filename_parts.append('acc_for_misc')
+                elif key == 'selection_regime' and value == 'mgal_sel':
+                    filename_parts.append('mgal_sel')
                 elif key == 'A':
                     filename_parts.append(f"A{value}")
-                elif key != 'halo_mass_range' and key != 'smoothed' and key != 'JAX' and key != 'account_for_miscentering':
+                elif key != 'halo_mass_range' and key != 'smoothed' and key != 'JAX' and key != 'selection_regime':
                     filename_parts.append(value)
         
         # Add varying parameters with their values
-        for key in ['ngrid', 'projection_type', 'tau_method', 'smoothed', 'gas_type', 'z', 'halo_mass_range', 'JAX', 'account_for_miscentering', 'A']:
+        for key in ['ngrid', 'projection_type', 'tau_method', 'smoothed', 'gas_type', 'z', 'halo_mass_range', 'JAX', 'selection_regime', 'A']:
             if key in varying_params:
                 values_str = '-'.join(varying_params[key])
                 if key == 'z':
@@ -496,10 +504,10 @@ def generate_comparison_filename(profiles):
                     # Only add if contains 'True'
                     if 'True' in varying_params[key]:
                         filename_parts.append(f"JAX_{values_str}")
-                elif key == 'account_for_miscentering':
-                    # Only add if contains 'True'
-                    if 'True' in varying_params[key]:
-                        filename_parts.append(f"acc_for_misc_{values_str}")
+                elif key == 'selection_regime':
+                    # Only add if contains 'mgal_sel'
+                    if 'mgal_sel' in varying_params[key]:
+                        filename_parts.append(f"selection_regime_{values_str}")
                 elif key == 'A':
                     filename_parts.append(f"A_{values_str}")
                 else:
@@ -546,15 +554,13 @@ def main():
 
     # Get mean mass from first profile
     first_profile_data = get_kSZ_profile(PROFILES[2])
-    mean_mass_m200c_msun_h = first_profile_data[4]  # Msun/h
-    z_profile = PROFILES[2]['z']
-    
-    # Convert M200c to M200m
-    mean_mass_m200m_msun_h = M200c_to_M200m(mean_mass_m200c_msun_h, z_profile)
-    mean_mass_log = np.log10(mean_mass_m200m_msun_h)
+    mean_mass_m200b_msun_h = first_profile_data[4]  # Msun/h
+    mean_mass_log = np.log10(mean_mass_m200b_msun_h)
 
     for profile in PROFILES:
-        radii, kSZ_signal, one_halo_signal, mean_r200c_mpc_comoving, _, N_halos, T_signals = get_kSZ_profile(profile)
+        radii, kSZ_signal, one_halo_signal, mean_r200c_mpc_comoving, mean_halo_m200b, N_halos, T_signals = get_kSZ_profile(profile)
+
+        print(f"Mean m200b: {np.log10(mean_halo_m200b)} log10(Msun/h)")
 
         # Build label based on whether it's a single profile or comparison
         if is_single_profile:
@@ -577,13 +583,9 @@ def main():
             # Single varying parameter
             label = f"{comparison_subject}={profile[comparison_subject]}"
         
-        if PLOT_DATA:
-            # Use noise from data as error bars
-            ax.errorbar(radii, kSZ_signal, yerr=noise_converted, fmt='-', label=label)
-        else:
-            # Compute error bars from profile measurements
-            profile_errors = compute_profile_errors(T_signals, N_halos)
-            ax.errorbar(radii, kSZ_signal, yerr=profile_errors, fmt='-', label=label)
+        # Use noise from data as error bars
+        #profile_errors = compute_profile_errors(T_signals, N_halos)
+        ax.errorbar(radii, kSZ_signal, yerr=noise_converted, fmt='-', label=label)
     
     # Add mean mass as a legend entry
     ax.plot([], [], ' ', label=f"$\\langle M_{{200m}} \\rangle = 10^{{{mean_mass_log:.2f}}}$ M$_\\odot$/h")

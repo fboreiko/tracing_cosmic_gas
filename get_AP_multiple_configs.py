@@ -22,57 +22,65 @@ import get_AP_pixell_jax_batched as pixell_module
 # Configuration Profiles
 # --------------------
 
+SELECTION_REGIME = 'mgal_sel'
+
+# n_gal_density not None but halo_mass_range is None: use n_gal_density selection
+# n_gal_density is None but halo_mass_range not None: use halo_mass_range selection
+# both n_gal_density and halo_mass_range are None: use all halos mode (look at utils for details)
+
 # Base configurations (without mass bin specification)
 PROFILES = [
     {
-        "projection_type": "simple",
-        "tau_method": "2D_FT_upgrade_tau_reconstruction",
-        "smoothed": True,
-        "gas_type": "strongest_AGN_reconstructed",
-        "halo_mass_range": None,
+        "projection_type": "simple",  # 'pixell', 'pixell_cea', or 'simple'
+        "tau_method": "2D_FT_upgrade_tau_reconstruction", # 'fullFT' or 'histmethod', or '2D_FT', or '2D_FT_massdep'
+        "gas_type": "strongest_AGN_reconstructed", # 'fiducial_reconstructed', 'strongest_AGN_reconstructed', 'fiducial', 'strongest_AGN'
+        "selection_regime": SELECTION_REGIME, # 'mhalo_sel' or 'mgal_sel'
+        "n_gal_density": None, #2e-2 - for mgal_sel, 87e-5 - for mhalo_sel
+        "halo_mass_range": None, # int (0 to N-1) for mass bin index
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
-        "n_gal_density": 87e-5, #87e-5,
-        "account_for_miscentering": False
+        "smoothed": True,
     },
     {
         "projection_type": "simple",
         "tau_method": "fullFT_tau_reconstruction",
-        "smoothed": True,
         "gas_type": "strongest_AGN",
+        "selection_regime": SELECTION_REGIME,
+        "n_gal_density": None,
         "halo_mass_range": None,
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
-        "n_gal_density": 87e-5, #87e-5,
-        "account_for_miscentering": False,
+        "smoothed": True,
     },
     {
         "projection_type": "simple",
         "tau_method": "2D_FT_upgrade_tau_reconstruction",
-        "smoothed": True,
         "gas_type": "fiducial_reconstructed",
+        "selection_regime": SELECTION_REGIME,
+        "n_gal_density": None,
         "halo_mass_range": None,  
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
-        "n_gal_density": 87e-5, #87e-5,
-        "account_for_miscentering": False
+        "smoothed": True,
     },
     {
-        "projection_type": "simple",  # 'pixell', 'pixell_cea', or 'simple'
-        "tau_method": "fullFT_tau_reconstruction",  # 'fullFT' or 'histmethod', or '2D_FT', or '2D_FT_massdep'
-        "smoothed": True,
-        "gas_type": "fiducial",  # 'fiducial_reconstructed', 'strongest_AGN_reconstructed', 'fiducial', 'strongest_AGN'
-        "halo_mass_range": None,  # int (0 to N-1) for mass bin index, or None to use n_gal_density
+        "projection_type": "simple",
+        "tau_method": "fullFT_tau_reconstruction",
+        "gas_type": "fiducial",
+        "selection_regime": SELECTION_REGIME,
+        "n_gal_density": None,
+        "halo_mass_range": None,  
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
-        "n_gal_density": 87e-5, #87e-5,
-        "account_for_miscentering": False,
+        "smoothed": True,
     }
 ]
+
+""""""
 
 
 def run_configuration(profile, config_num, total_configs):
@@ -82,12 +90,12 @@ def run_configuration(profile, config_num, total_configs):
         config = {
             'gas_type': profile['gas_type'],
             'tau_method': profile['tau_method'],
+            'selection_regime': profile['selection_regime'],
             'n_cell': profile['ngrid'],
             'z_real': profile['z'],
             'n_gal_density': profile['n_gal_density'],
             'halo_mass_range': profile['halo_mass_range'],
             'beam_smoothing': profile['smoothed'],
-            'account_for_miscentering': profile['account_for_miscentering']
         }
         
         # Add A parameter if present in profile

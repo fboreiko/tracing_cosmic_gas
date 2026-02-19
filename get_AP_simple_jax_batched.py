@@ -49,12 +49,51 @@ def get_cutout_dims(r_max, dx):
     return cutout_size
 
 
-def load_data(tau_map_path, halo_mstar_path, halo_pos_path):
-    """Load tau map and halo catalog data."""
+def load_data(tau_map_path, halo_galaxy_data_path, selection_regime):
+    """Load tau map and catalog data from unified HDF5 source.
+    
+    Args:
+        tau_map_path: Path to tau map
+        halo_galaxy_data_path: Path to HDF5 file with all galaxy/halo data
+        selection_regime: 'mhalo_sel' or 'mgal_sel'
+    
+    Returns:
+        tau_map: Tau map array
+        filtered_data: Dict with filtered mstell, m200b, pos based on regime
+    """
+    import deepdish as dd
+    
     tau_map = np.load(tau_map_path)
-    halo_mstar = np.load(halo_mstar_path)  # Msun/h
-    halo_pos = np.load(halo_pos_path)      # cMpc/h
-    return tau_map, halo_mstar, halo_pos
+    
+    # Load all data from HDF5 using deepdish selective loading
+    all_mstell = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell')
+    all_centrals = dd.io.load(halo_galaxy_data_path, '/galaxies/centrals')
+    all_m200b = dd.io.load(halo_galaxy_data_path, '/galaxies/m200b')  # m200b is already m200m
+    all_pos = dd.io.load(halo_galaxy_data_path, '/galaxies/pos')
+    
+    # Filter based on selection regime
+    if selection_regime == 'mhalo_sel':
+        # Use only central galaxies
+        central_mask = all_centrals.astype(bool)
+        filtered_mstell = all_mstell[central_mask]
+        filtered_m200b = all_m200b[central_mask]
+        filtered_pos = all_pos[central_mask]
+        filtered_centrals = None  # Not needed for mhalo_sel
+    else:  # mgal_sel
+        # Use all galaxies
+        filtered_mstell = all_mstell
+        filtered_m200b = all_m200b
+        filtered_pos = all_pos
+        filtered_centrals = all_centrals  # Keep centrals for further filtering
+    
+    filtered_data = {
+        'mstell': filtered_mstell,
+        'm200b': filtered_m200b,
+        'pos': filtered_pos,
+        'centrals': filtered_centrals
+    }
+    
+    return tau_map, filtered_data
 
 
 @partial(jit, static_argnums=(1,))
@@ -351,60 +390,55 @@ def get_paths_from_config(config):
     """Derive file paths from configuration."""
     gas_type = config['gas_type']
     tau_method = config['tau_method']
-    account_for_miscentering = config['account_for_miscentering']
     beam_smoothing = config.get('beam_smoothing', True)
+    selection_regime = config.get('selection_regime', 'mhalo_sel')  # Default to halo mass selection
+    
+    # Determine variant from gas_type
+    if gas_type in ['fiducial_reconstructed', 'fiducial']:
+        variant = 'fiducial'
+    else:
+        variant = 'strongest_AGN'
+    
+    # Determine tau map filename based on selection regime
+    # Don't add regime_suffix for fullFT_tau_reconstruction
+    if tau_method == 'fullFT_tau_reconstruction':
+        regime_suffix = ''
+    else:
+        regime_suffix = '_mgal_sel' if selection_regime == 'mgal_sel' else ''
     
     # Handle mass-dependent tau reconstruction
     if tau_method == '2D_FT_massdep_tau_reconstruction':
         if 'A' not in config:
             raise ValueError(f"tau_method '{tau_method}' requires parameter 'A' to be specified in config")
         A = config['A']
-        tau_map_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/tau_maps/{tau_method}/tau_map_{gas_type}_A_{A:.5f}.npy"
+        tau_map_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/tau_maps/{tau_method}/tau_map_{gas_type}_A_{A:.5f}{regime_suffix}.npy"
     else:
         # Tau map path for standard methods
-        tau_map_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/tau_maps/{tau_method}/tau_map_{gas_type}.npy"
+        tau_map_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/tau_maps/{tau_method}/tau_map_{gas_type}{regime_suffix}.npy"
     
-    # Determine halo catalog paths
-    if account_for_miscentering:
-        if gas_type in ['fiducial', 'strongest_AGN']:
-            data_type = 'hydro'
-            variant = gas_type
-        else:
-            data_type = 'dmo'
-            variant = None
-    else:
-        data_type = 'hydro'
-        if gas_type in ['fiducial_reconstructed', 'fiducial']:
-            variant = 'fiducial'
-        else:
-            variant = 'strongest_AGN'
-    
-    if data_type == 'dmo':
-        halo_mstar_path = "/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_dmo/halo_mass.npy"
-        halo_pos_path = "/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_dmo/halo_pos.npy"
-    else:
-        halo_mstar_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_hydro/halo_mass_{variant}.npy"
-        halo_pos_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/halo_data/halo_data_hydro/halo_pos_{variant}.npy"
+    # Single HDF5 data source
+    halo_galaxy_data_path = f"/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO_ext_L1000N1800_HYDRO_{variant.upper()}_snap_77.hdf5"
     
     # Output path
     base_dir = "simple_CAP_code"
     tau_method_dir = f"{tau_method}_smoothed" if beam_smoothing else tau_method
-    misc_str = "_acc_for_misc" if account_for_miscentering else ""
     
     # Add A parameter to filename if using mass-dependent reconstruction
     A_str = f"_A_{config['A']:.5f}" if tau_method == '2D_FT_massdep_tau_reconstruction' else ""
     
+    # Add selection regime suffix only for mgal_sel
+    regime_str = "_mgal_sel" if selection_regime == 'mgal_sel' else ""
+    
     if config.get('halo_mass_range') is not None:
-        subdir = f"tau_apertures_{gas_type}{A_str}_massbin_{config['halo_mass_range']}_ngrid_{config['n_cell']}{misc_str}_JAX_MPI"
+        subdir = f"tau_apertures_{gas_type}{A_str}_massbin_{config['halo_mass_range']}_ngrid_{config['n_cell']}{regime_str}_JAX_MPI"
     else:
-        subdir = f"tau_apertures_{gas_type}{A_str}_ngrid_{config['n_cell']}{misc_str}_JAX_MPI"
+        subdir = f"tau_apertures_{gas_type}{A_str}_ngrid_{config['n_cell']}{regime_str}_JAX_MPI"
     
     output_file = f"data/{base_dir}/{tau_method_dir}/{subdir}/tau_apertures.npz"
     
     return {
         'tau_map_path': tau_map_path,
-        'halo_mstar_path': halo_mstar_path,
-        'halo_pos_path': halo_pos_path,
+        'halo_galaxy_data_path': halo_galaxy_data_path,
         'output_file': output_file
     }
 
@@ -423,7 +457,7 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
         - n_gal_density: float (galaxy number density in cMpc/h^-3, e.g., 87e-5 or 1e-4) - only used when halo_mass_range is None
         - halo_mass_range: int or None (mass bin index 0 to N-1, where N bins are created with ~5000 halos per bin between 10^13 and max mass)
         - beam_smoothing: bool (whether to apply beam smoothing, default True)
-        - account_for_miscentering: bool (whether to account for miscentering, default True)
+        - selection_regime: str ('mhalo_sel' or 'mgal_sel', default 'mhalo_sel')
     fwhm_beam_arcmin : float, optional
         Beam FWHM in arcminutes (default 1.6)
     batch_size : int, optional
@@ -440,7 +474,7 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
     n_gal_density = config['n_gal_density']
     halo_mass_range = config.get('halo_mass_range', None)
     beam_smoothing = config.get('beam_smoothing', True)
-    account_for_miscentering = config.get('account_for_miscentering', True)
+    selection_regime = config.get('selection_regime', 'mhalo_sel')  # Default to halo mass selection
     
     # Get paths from config
     paths = get_paths_from_config(config)
@@ -452,33 +486,64 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
         print(f"Tau method: {tau_method}")
         print(f"N_cell: {n_cell}")
         print(f"Redshift: {z}")
+        print(f"Selection regime: {selection_regime}")
     
-    tau_map, halo_mstar, halo_pos = load_data(
+    tau_map, filtered_data = load_data(
         paths['tau_map_path'],
-        paths['halo_mstar_path'],
-        paths['halo_pos_path']
+        paths['halo_galaxy_data_path'],
+        selection_regime
     )
 
     if beam_smoothing:
         _, Lbox_deg_real, cell_size_deg_real = translate_grid_params_to_degrees(z, n_cell)
         tau_map = get_smooth_density(tau_map, fwhm_beam_arcmin, cell_size_deg_real, Lbox_deg_real, n_cell)
-        
+    
+    # Extract filtered data
+    filtered_mstell = filtered_data['mstell']
+    filtered_m200b = filtered_data['m200b']
+    filtered_pos = filtered_data['pos']
+    filtered_centrals = filtered_data['centrals']
+    
+    if rank == 0:
+        if selection_regime == 'mhalo_sel':
+            print(f"Using halo mass selection (mhalo_sel) - centrals only")
+            print(f"  {len(filtered_pos)} centrals found")
+        else:
+            print(f"Using galaxy stellar mass selection (mgal_sel) - all galaxies")
+            print(f"  {len(filtered_pos)} galaxies found")
+    
+    # Select halos/galaxies based on selection criteria
+    if selection_regime == 'mgal_sel':
+        # For mgal_sel, select by stellar mass
+        selection_masses = filtered_mstell
+    else:
+        # For mhalo_sel, select by m200b (halo mass)
+        selection_masses = filtered_m200b
+    
     halo_pos_selected, halo_indices = select_halos(
-        halo_mstar, halo_pos, 
+        selection_masses, filtered_pos, 
         n_gal_density=n_gal_density, 
         halo_mass_range=halo_mass_range, 
-        rank=rank
+        rank=rank,
+        select_positive_mass=(selection_regime == 'mgal_sel'),  # For mgal_sel, select galaxies with mstell > 0
+        is_central_flag=filtered_centrals  # Pass centrals array for mgal_sel filtering
     )
-
-    params = {'flat': True, 'H0': H*100, 'Om0': 0.306, 'Ob0': 0.0486, 'sigma8': 0.807, 'ns': 0.967}
-    cosmology.setCosmology('myCosmo', params)
-    selected_masses = halo_mstar[halo_indices]
-    halo_m200m = M200c_to_M200m(selected_masses, z) # Msun/h
-
+    
+    # Get corresponding m200b values for selected objects
+    halo_m200b = filtered_m200b[halo_indices]
+    
     if rank == 0:
-        print(f"Total halos selected: {len(halo_pos_selected)}")
-        print(f"  Log10 mass range: [{np.log10(np.min(selected_masses)):.2f}, {np.log10(np.max(selected_masses)):.2f}]")
-        print(f"  Mean M200m: {np.log10(np.mean(halo_m200m)):.2f} Msun/h")
+        if selection_regime == 'mgal_sel':
+            print(f"Selected {len(halo_indices)} galaxies based on stellar mass")
+        else:
+            print(f"Selected {len(halo_indices)} centrals based on halo mass")
+        print(f"  Log10 m200b (m200m) range: [{np.log10(np.min(halo_m200b)):.2f}, {np.log10(np.max(halo_m200b)):.2f}]")
+        print(f"  Mean m200b (m200m): {np.log10(np.mean(halo_m200b)):.2f} Msun/h")
+    
+    # Clean up
+    del filtered_data, filtered_mstell, filtered_m200b, filtered_pos, selection_masses
+    
+    if rank == 0:
         print("Starting aperture photometry...")
     
     # Convert to JAX arrays
@@ -581,7 +646,7 @@ def main():
         'n_gal_density': 1e-4,
         'halo_mass_range': 0,
         'beam_smoothing': True,
-        'account_for_miscentering': False
+        'selection_regime': 'mhalo_sel'
     }
     get_AP_simple(config)
 
