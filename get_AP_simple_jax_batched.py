@@ -49,17 +49,16 @@ def get_cutout_dims(r_max, dx):
     return cutout_size
 
 
-def load_data(tau_map_path, halo_galaxy_data_path, selection_regime):
+def load_data(tau_map_path, halo_galaxy_data_path):
     """Load tau map and catalog data from unified HDF5 source.
     
     Args:
         tau_map_path: Path to tau map
         halo_galaxy_data_path: Path to HDF5 file with all galaxy/halo data
-        selection_regime: 'mhalo_sel' or 'mgal_sel'
     
     Returns:
         tau_map: Tau map array
-        filtered_data: Dict with filtered mstell, m200b, pos based on regime
+        all_data: Dict with all mstell, m200b, m200c, pos, centrals
     """
     import deepdish as dd
     
@@ -69,31 +68,18 @@ def load_data(tau_map_path, halo_galaxy_data_path, selection_regime):
     all_mstell = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell')
     all_centrals = dd.io.load(halo_galaxy_data_path, '/galaxies/centrals')
     all_m200b = dd.io.load(halo_galaxy_data_path, '/galaxies/m200b')  # m200b is already m200m
+    all_m200c = dd.io.load(halo_galaxy_data_path, '/galaxies/m200c')
     all_pos = dd.io.load(halo_galaxy_data_path, '/galaxies/pos')
     
-    # Filter based on selection regime
-    if selection_regime == 'mhalo_sel':
-        # Use only central galaxies
-        central_mask = all_centrals.astype(bool)
-        filtered_mstell = all_mstell[central_mask]
-        filtered_m200b = all_m200b[central_mask]
-        filtered_pos = all_pos[central_mask]
-        filtered_centrals = None  # Not needed for mhalo_sel
-    else:  # mgal_sel
-        # Use all galaxies
-        filtered_mstell = all_mstell
-        filtered_m200b = all_m200b
-        filtered_pos = all_pos
-        filtered_centrals = all_centrals  # Keep centrals for further filtering
-    
-    filtered_data = {
-        'mstell': filtered_mstell,
-        'm200b': filtered_m200b,
-        'pos': filtered_pos,
-        'centrals': filtered_centrals
+    all_data = {
+        'mstell': all_mstell,
+        'm200b': all_m200b,
+        'm200c': all_m200c,
+        'pos': all_pos,
+        'centrals': all_centrals
     }
     
-    return tau_map, filtered_data
+    return tau_map, all_data
 
 
 @partial(jit, static_argnums=(1,))
@@ -474,7 +460,19 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
     n_gal_density = config['n_gal_density']
     halo_mass_range = config.get('halo_mass_range', None)
     beam_smoothing = config.get('beam_smoothing', True)
-    selection_regime = config.get('selection_regime', 'mhalo_sel')  # Default to halo mass selection
+    selection_regime = config.get('selection_regime', 'mhalo_sel')
+    
+    # Determine selection parameters based on regime
+    if selection_regime == 'mhalo_sel':
+        selection_mode = 'cen'
+        selection_mass_def = 'm200c'
+        select_nonzero_masses = False
+    elif selection_regime == 'mgal_sel':
+        selection_mode = 'sat'
+        selection_mass_def = 'm200b'
+        select_nonzero_masses = False
+    else:
+        raise ValueError(f"Unknown selection_regime: {selection_regime}. Must be 'mhalo_sel' or 'mgal_sel'.")
     
     # Get paths from config
     paths = get_paths_from_config(config)
@@ -487,61 +485,56 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
         print(f"N_cell: {n_cell}")
         print(f"Redshift: {z}")
         print(f"Selection regime: {selection_regime}")
+        print(f"Selection mode: {selection_mode}")
+        print(f"Selection mass def: {selection_mass_def}")
     
-    tau_map, filtered_data = load_data(
+    tau_map, all_data = load_data(
         paths['tau_map_path'],
-        paths['halo_galaxy_data_path'],
-        selection_regime
+        paths['halo_galaxy_data_path']
     )
 
     if beam_smoothing:
         _, Lbox_deg_real, cell_size_deg_real = translate_grid_params_to_degrees(z, n_cell)
         tau_map = get_smooth_density(tau_map, fwhm_beam_arcmin, cell_size_deg_real, Lbox_deg_real, n_cell)
     
-    # Extract filtered data
-    filtered_mstell = filtered_data['mstell']
-    filtered_m200b = filtered_data['m200b']
-    filtered_pos = filtered_data['pos']
-    filtered_centrals = filtered_data['centrals']
+    # Map selection_mass_def to actual mass array
+    mass_options = {
+        'm200c': all_data['m200c'],
+        'm200b': all_data['m200b'],
+        'mstell': all_data['mstell']
+    }
+    
+    selection_masses = mass_options[selection_mass_def]
     
     if rank == 0:
-        if selection_regime == 'mhalo_sel':
-            print(f"Using halo mass selection (mhalo_sel) - centrals only")
-            print(f"  {len(filtered_pos)} centrals found")
-        else:
-            print(f"Using galaxy stellar mass selection (mgal_sel) - all galaxies")
-            print(f"  {len(filtered_pos)} galaxies found")
+        print(f"Using {selection_mass_def} for mass-based selection")
+        print(f"Total objects in catalog: {len(selection_masses)}")
     
     # Select halos/galaxies based on selection criteria
-    if selection_regime == 'mgal_sel':
-        # For mgal_sel, select by stellar mass
-        selection_masses = filtered_mstell
-    else:
-        # For mhalo_sel, select by m200b (halo mass)
-        selection_masses = filtered_m200b
-    
-    halo_pos_selected, halo_indices = select_halos(
-        selection_masses, filtered_pos, 
-        n_gal_density=n_gal_density, 
-        halo_mass_range=halo_mass_range, 
+    halo_indices = select_halos(
+        selection_masses,
+        all_data['centrals'],
+        n_gal_density=n_gal_density,
+        halo_mass_range=halo_mass_range,
         rank=rank,
-        select_positive_mass=(selection_regime == 'mgal_sel'),  # For mgal_sel, select galaxies with mstell > 0
-        is_central_flag=filtered_centrals  # Pass centrals array for mgal_sel filtering
+        min_mass=1e9 if selection_mode is None and selection_mass_def == 'mstell' else 1e13,
+        select_nonzero_masses=select_nonzero_masses,
+        selection_mode=selection_mode,
+        LBOX=LBOX,
+        upper_cut_mode=True
     )
     
-    # Get corresponding m200b values for selected objects
-    halo_m200b = filtered_m200b[halo_indices]
+    # Extract selected positions and masses
+    halo_pos_selected = all_data['pos'][halo_indices][:, :2]
+    halo_m200b = all_data['m200b'][halo_indices]
     
     if rank == 0:
-        if selection_regime == 'mgal_sel':
-            print(f"Selected {len(halo_indices)} galaxies based on stellar mass")
-        else:
-            print(f"Selected {len(halo_indices)} centrals based on halo mass")
+        print(f"Selected {len(halo_indices)} objects")
         print(f"  Log10 m200b (m200m) range: [{np.log10(np.min(halo_m200b)):.2f}, {np.log10(np.max(halo_m200b)):.2f}]")
         print(f"  Mean m200b (m200m): {np.log10(np.mean(halo_m200b)):.2f} Msun/h")
     
     # Clean up
-    del filtered_data, filtered_mstell, filtered_m200b, filtered_pos, selection_masses
+    del all_data, selection_masses
     
     if rank == 0:
         print("Starting aperture photometry...")

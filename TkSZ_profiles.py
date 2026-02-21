@@ -29,7 +29,7 @@ OM_B = 0.0486
 X_H = 0.76
 X_He = 0.24
 
-PLOT_DATA = True
+PLOT_DATA = False
 
 SELECTION_REGIME = 'mgal_sel'  # 'mhalo_sel' or 'mgal_sel'
 
@@ -39,8 +39,8 @@ PROFILES = [
         "projection_type": "simple",  # 'pixell', 'pixell_cea', or 'simple'
         "tau_method": "fullFT",  # 'fullFT' or 'histmethod', or '2D_FT', or '2D_FT_massdep'
         "smoothed": True,
-        "gas_type": "fiducial",  # 'fiducial_reconstructed', 'strongest_AGN_reconstructed', 'fiducial', 'strongest_AGN'
-        "halo_mass_range": None,  # int (0 to N-1) for mass bin index, or None to use n_gal_density
+        "gas_type": "strongest_AGN",  # 'fiducial_reconstructed', 'strongest_AGN_reconstructed', 'fiducial', 'strongest_AGN'
+        "halo_mass_range": 29,  # int (0 to N-1) for mass bin index, or None to use n_gal_density
         "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
         "ngrid": 2048,
         "JAX": True,
@@ -52,9 +52,9 @@ PROFILES = [
         "projection_type": "simple",
         "tau_method": "2D_FT_upgrade",
         "smoothed": True,
-        "gas_type": "fiducial_reconstructed",
+        "gas_type": "strongest_AGN_reconstructed",
         "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
-        "halo_mass_range": None,
+        "halo_mass_range": 29,
         "ngrid": 2048,
         "JAX": True,
         "z": 0.74,
@@ -152,27 +152,11 @@ def get_halo_data_for_dataset(config):
     halo_galaxy_data_path = f"/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO_ext_L1000N1800_HYDRO_{variant.upper()}_snap_77.hdf5"
     
     # Load only needed fields using deepdish selective loading
-    all_mstell = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell')
-    all_centrals = dd.io.load(halo_galaxy_data_path, '/galaxies/centrals')
     all_m200b = dd.io.load(halo_galaxy_data_path, '/galaxies/m200b')  # m200b is already m200m
     all_m200c = dd.io.load(halo_galaxy_data_path, '/galaxies/m200c')
-    all_pos = dd.io.load(halo_galaxy_data_path, '/galaxies/pos')
     all_vels = dd.io.load(halo_galaxy_data_path, '/galaxies/vel')
     
-    # Filter based on selection regime
-    if SELECTION_REGIME == 'mhalo_sel':
-        # Use only central galaxies
-        central_mask = all_centrals.astype(bool)
-        halo_m200b = all_m200b[central_mask]
-        halo_m200c = all_m200c[central_mask]
-        halo_vels = all_vels[central_mask]
-        return halo_m200b, halo_m200c, halo_vels
-    else:  # mgal_sel
-        # Use all galaxies - return m200b (already m200m)
-        halo_m200b = all_m200b
-        halo_m200c = all_m200c
-        halo_vels = all_vels
-        return halo_m200b, halo_m200c, halo_vels 
+    return all_m200b, all_m200c, all_vels
 
 #### I BUTCHER THE CODE HERE 
 def compute_temperature_signal_pixell(tau_xy_inner, tau_xy_outer, vel_los, v_rms=300):

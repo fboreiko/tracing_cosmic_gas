@@ -45,22 +45,45 @@ def compute_k_grid(ngrid, box):
     k_mag = np.sqrt(kx[:, np.newaxis]**2 + ky[np.newaxis, :]**2)
     return k_mag
 
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
 gas_type = 'fiducial'  # 'fiducial', 'strongest_AGN'
-box = 681  # cMpc/h
-ngrid = 2048
-nthread = 4
 
-# Selection regime: 'mhalo_sel' (select by halo mass) or 'mgal_sel' (select by galaxy stellar mass)
-selection_regime = 'mgal_sel'  # 'mhalo_sel', 'mgal_sel'
+# Regime: determines which mass to use for selection
+regime = 'mgal_sel'  # 'mhalo_sel' (halo mass) or 'mgal_sel' (stellar mass)
 
-# Halo selection method: 'mass_bin', 'number_density', or 'all_halos'
-selection_method = 'all_halos'  # 'mass_bin', 'number_density', 'all_halos'
-halo_mass_bin = 30  # Use only halos from mass bin 3
-n_gal_density = 87e-5 # 2e-2 - for mgal_sel, 87e-5 - for mhalo_sel -- Number density in (cMpc/h)^-3
+# Central/satellite mode: determines filtering by central/satellite status
+if regime == 'mhalo_sel':
+    cen_sat_mode = 'cen'          
+    mass_type = 'm200c'            # Use m200c for ranking
+    require_nonzero_mass = False
+    upper_cut_mode = False
+elif regime == 'mgal_sel':
+    cen_sat_mode = 'sat'     
+    mass_type = 'm200b'           # Use stellar mass for ranking
+    require_nonzero_mass = False
+    upper_cut_mode = True
+
+# Selection method: determines how to select from ranked objects
+halo_mass_bin = None   # select specific mass bin (0, 1, 2, ...), satellites test uncut - 20, satellites test with upper cut 14.2 - 29, satellites test with upper cut 13.8 - 16 (30000)
+n_gal_density = 4.4e-3   # (cMpc/h)^-3, mhalo_sel - 1.22e-3, mgal_sel - 2e-2, mixed - 5.5e-3, satellites test uncut - 5.8e-3, satellites test with upper cut 14.2 - 6.6e-3, satellites test with upper cut 13.8 - 4.4e-3
+
+# Determine selection method for file naming
+if halo_mass_bin is not None:
+    method = 'mass_bin'
+elif n_gal_density is not None:
+    method = 'number_density'
+else:
+    method = 'all_halos'
 
 # File paths
 particles_sim_file = f'/rds-d6/user/fb635/hpc-work/tracing_cosmic_gas/FLAMINGO_particles_L1000N1800_HYDRO_{gas_type.upper()}_snap_77_diluted_100.hdf5'
 haloes_sim_file = f'/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO_ext_L1000N1800_HYDRO_{gas_type.upper()}_snap_77.hdf5'
+
+box = 681  # cMpc/h
+ngrid = 2048
+nthread = 4
 
 # Cosmology parameters
 h = 0.681
@@ -75,13 +98,7 @@ delta_fields_dir.mkdir(parents=True, exist_ok=True)
 
 print("="*60)
 print("Loading/computing 2D projected fields")
-print(f"Selection regime: {selection_regime}")
-if selection_method == 'mass_bin':
-    print(f"Using halo mass bin {halo_mass_bin} for halo field")
-elif selection_method == 'number_density':
-    print(f"Using number density cut: n_gal = {n_gal_density:.2e} (cMpc/h)^-3")
-else:
-    print(f"Using ALL halos (no selection)")
+print(f"Regime: {regime} | Method: {method} | Mass type: {mass_type}")
 print("="*60)
 
 delta_2d_fields = {}
@@ -90,14 +107,14 @@ field_labels = ['dm', 'gas', 'halos']
 for label in field_labels:
     # Construct filename for stored delta_2d field
     if label == 'halos':
-        if selection_method == 'mass_bin':
+        if method == 'mass_bin':
             halo_suffix = f'_massbin{halo_mass_bin}'
-        elif selection_method == 'number_density':
+        elif method == 'number_density':
             halo_suffix = f'_ngal{n_gal_density:.0e}'.replace('+', '').replace('-', 'm')
         else:  # all_halos
             halo_suffix = '_allhalos'
         # Add regime suffix (only add if mgal_sel, keep unchanged for mhalo_sel)
-        if selection_regime == 'mgal_sel':
+        if regime == 'mgal_sel':
             halo_suffix += '_mgal_sel'
     else:
         halo_suffix = ''
@@ -127,103 +144,49 @@ for label in field_labels:
             all_mstell = dd.io.load(haloes_sim_file, '/galaxies/mstell')
             all_centrals = dd.io.load(haloes_sim_file, '/galaxies/centrals')
             all_m200b = dd.io.load(haloes_sim_file, '/galaxies/m200b')  # m200b is already m200m
+            all_m200c = dd.io.load(haloes_sim_file, '/galaxies/m200c')
             all_pos = dd.io.load(haloes_sim_file, '/galaxies/pos')
             
-            # Filter based on selection regime
-            if selection_regime == 'mhalo_sel':
-                # Use only central galaxies
-                print(f"  Filtering to central galaxies only...")
-                central_mask = all_centrals.astype(bool)
-                filtered_mstell = all_mstell[central_mask]
-                filtered_m200b = all_m200b[central_mask]
-                filtered_pos = all_pos[central_mask]
-                print(f"  {np.sum(central_mask)} centrals found")
-                
-                # For mhalo_sel, we use m200b (which needs conversion from M200c)
-                # Actually, in the HDF5 file, m200b is already m200m for centrals
-                selection_masses = filtered_m200b
-                
-            elif selection_regime == 'mgal_sel':
-                # Use all galaxies
-                print(f"  Using all galaxies...")
-                filtered_mstell = all_mstell
-                filtered_m200b = all_m200b
-                filtered_pos = all_pos
-                filtered_centrals = all_centrals  # Keep for all_halos filtering
-                print(f"  Total galaxies: {len(all_mstell)}")
-                
-                # For mgal_sel, we select by stellar mass
-                selection_masses = filtered_mstell
-                
-            else:
-                raise ValueError(f"Unknown selection_regime: {selection_regime}. Must be 'mhalo_sel' or 'mgal_sel'.")
+            # Map selection_mass_def to actual mass array
+            mass_options = {
+                'm200c': all_m200c,
+                'm200b': all_m200b,
+                'mstell': all_mstell
+            }
             
-            # Clean up full arrays
-            del all_mstell, all_centrals, all_m200b, all_pos
+            if mass_type not in mass_options:
+                raise ValueError(f"Unknown mass_type: {mass_type}. Must be 'm200c', 'm200b', or 'mstell'.")
+            
+            selection_masses = mass_options[mass_type]
+            
+            print(f"  Using {mass_type} for mass-based selection")
+            print(f"  Selection mode: {cen_sat_mode}")
             
             # Apply selection method
-            if selection_method == 'mass_bin':
-                if selection_regime == 'mhalo_sel':
-                    print(f"  Filtering halos to mass bin {halo_mass_bin}...")
-                else:
-                    print(f"  Filtering galaxies to stellar mass bin {halo_mass_bin}...")
-                
-                selected_pos, selected_indices = select_halos(
-                    selection_masses, filtered_pos, 
-                    halo_mass_range=halo_mass_bin,
-                    min_mass=1e9 if selection_regime == 'mgal_sel' else None,
-                    centrals=filtered_centrals if selection_regime == 'mgal_sel' else None
-                )
-                print(f"  Selected {len(selected_indices)} objects from bin {halo_mass_bin}")
-                
-            elif selection_method == 'number_density':
-                if selection_regime == 'mhalo_sel':
-                    print(f"  Filtering halos by number density: {n_gal_density:.2e} (cMpc/h)^-3...")
-                    selected_pos, selected_indices = select_halos(
-                        selection_masses, filtered_pos,
-                        n_gal_density=n_gal_density
-                    )
-                    print(f"  Selected {len(selected_indices)} halos (n_gal = {n_gal_density:.2e})")
-                else:  # mgal_sel
-                    print(f"  Filtering galaxies by number density: {n_gal_density:.2e} (cMpc/h)^-3...")
-                    selected_pos, selected_indices = select_halos(
-                        selection_masses, filtered_pos,
-                        n_gal_density=n_gal_density,
-                    )
-                    print(f"  Selected {len(selected_indices)} galaxies (n_gal = {n_gal_density:.2e})")
-                    
-            else:  # all_halos
-                if selection_regime == 'mhalo_sel':
-                    print(f"  Using ALL centrals (no additional filtering)...")
-                    selected_indices = np.arange(len(filtered_m200b))
-                else:  # mgal_sel
-                    # Use select_halos with no density/mass bin and centrals filtering
-                    print(f"  Selecting all galaxies with mstell > 0, then filtering to centrals...")
-                    selected_pos, selected_indices = select_halos(
-                        selection_masses, filtered_pos,
-                        n_gal_density=None,
-                        halo_mass_range=None,
-                        select_positive_mass=True,
-                        is_central_flag=filtered_centrals 
-                    )
-                print(f"  Total objects: {len(selected_indices)}")
+            selected_indices = select_halos(
+                selection_masses,
+                all_centrals,
+                n_gal_density,
+                halo_mass_bin,
+                min_mass=1e9 if cen_sat_mode is None and mass_type == 'mstell' else 1e13,
+                select_nonzero_masses=require_nonzero_mass,
+                selection_mode=cen_sat_mode,
+                LBOX=box,
+                upper_cut_mode=upper_cut_mode,
+            )
+        
+            print(f"  Total objects: {len(selected_indices)}")
             
             # Extract selected data
-            pos = filtered_pos[selected_indices]
-            masses = filtered_m200b[selected_indices]  # m200b values
+            pos = all_pos[selected_indices]
+            masses = all_m200b[selected_indices]  # m200b values
         
             print(f"  Log10 m200b (m200m) range: [{np.log10(np.min(masses)):.2f}, {np.log10(np.max(masses)):.2f}]")
             print(f"  Log10 Mean m200b (m200m): {np.log10(np.mean(masses)):.2f} Msun/h")
             
             # Clean up
-            del filtered_mstell, filtered_m200b, filtered_pos, selection_masses
-            if selection_regime == 'mgal_sel' and 'filtered_centrals' in locals():
-                del filtered_centrals
-            if selection_method != 'all_halos' and 'selected_pos' in locals():
-                del selected_pos
-            if 'selected_indices' in locals():
-                del selected_indices
-            file = None
+            del all_mstell, all_centrals, all_m200b, all_m200c, all_pos
+            del selection_masses, selected_indices
         
         if label == 'halos':
             weights = None
@@ -234,15 +197,13 @@ for label in field_labels:
         
         delta_3d = compute_delta(pos, box, ngrid, weights, nthread=nthread)
         delta_2d_fields[label] = compute_2d_projection(delta_3d)
-        
+
         # Save computed field
         np.save(delta_2d_path, delta_2d_fields[label])
         print(f"  Computed and saved to {delta_2d_path}")
         
         # Clean up
         del delta_3d, masses, pos, weights
-        if file is not None:
-            del file
         gc.collect()
 
 print("\nAll 2D fields loaded/computed and stored in memory.")
@@ -373,7 +334,7 @@ delta_gas_reconstructed_2d = np.fft.irfft2(delta_k_gas_recon) * (ngrid ** 2)
 tau_xy_map = prefactor * (1.0 + delta_gas_reconstructed_2d) * ngrid
 
 # Construct output filename with regime suffix
-regime_suffix = '_mgal_sel' if selection_regime == 'mgal_sel' else ''
+regime_suffix = '_mgal_sel' if regime == 'mgal_sel' else ''
 tau_out_path = tau_output_dir / f'tau_map_{gas_type}_reconstructed{regime_suffix}.npy'
 np.save(tau_out_path, tau_xy_map)
 
@@ -418,15 +379,15 @@ P_gas_halos_recon_binned = np.array(P_gas_halos_recon_binned) * box ** 2
 plot_output_dir = Path('/home/fb635/fedirfiles/tracing_cosmic_gas/plots')
 plot_output_dir.mkdir(parents=True, exist_ok=True)
 
-if selection_method == 'mass_bin':
+if method == 'mass_bin':
     plot_suffix = f'_massbin{halo_mass_bin}'
-elif selection_method == 'number_density':
+elif method == 'number_density':
     plot_suffix = f'_ngal{n_gal_density:.0e}'.replace('+', '').replace('-', 'm')
 else:  # all_halos
     plot_suffix = '_allhalos'
 
 # Add regime suffix
-if selection_regime == 'mgal_sel':
+if regime == 'mgal_sel':
     plot_suffix += '_mgal_sel'
 
 plt.figure(figsize=(6, 4), dpi=300)
@@ -618,15 +579,15 @@ if plot_comparison:
     # Save plot
     plot_output_dir = Path('/home/fb635/fedirfiles/tracing_cosmic_gas/plots')
     plot_output_dir.mkdir(parents=True, exist_ok=True)
-    if selection_method == 'mass_bin':
+    if method == 'mass_bin':
         plot_suffix_massdep = f'_massbin{halo_mass_bin}'
-    elif selection_method == 'number_density':
+    elif method == 'number_density':
         plot_suffix_massdep = f'_ngal{n_gal_density:.0e}'.replace('+', '').replace('-', 'm')
     else:  # all_halos
         plot_suffix_massdep = '_allhalos'
     
     # Add regime suffix
-    if selection_regime == 'mgal_sel':
+    if regime == 'mgal_sel':
         plot_suffix_massdep += '_mgal_sel'
     
     plot_path = plot_output_dir / f'T_new_vs_T_massdep_{gas_type}{plot_suffix_massdep}.png'
