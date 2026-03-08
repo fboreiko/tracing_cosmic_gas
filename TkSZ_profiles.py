@@ -1,5 +1,4 @@
 import numpy as np
-from tqdm import tqdm
 import deepdish as dd
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
@@ -7,7 +6,7 @@ from astropy.cosmology import FlatLambdaCDM
 from astropy.constants import m_p, sigma_T
 import astropy.units as u
 from datetime import datetime
-import os
+from utils import *
 from colossus.halo import concentration
 from colossus.halo import mass_defs
 from colossus.cosmology import cosmology
@@ -28,66 +27,96 @@ OM_M = 0.306
 OM_B = 0.0486
 X_H = 0.76
 X_He = 0.24
+Z_SIM = 0.74               # simulation snapshot redshift — never changes
 
-PLOT_DATA = False
+PLOT_DATA = True
+RATIO_MODE = False 
 
-SELECTION_REGIME = 'mgal_sel'  # 'mhalo_sel' or 'mgal_sel'
+SAT_FRACS = [0.01, 0.10, 0.20, 0.30]
 
-# Multiple profiles to plot
-PROFILES = [
+# Define profile configurations: each configuration specifies selection parameters,
+# convergence mode, and which tau methods/field types to include
+PROFILE_CONFIGS = [
     {
-        "projection_type": "simple",  # 'pixell', 'pixell_cea', or 'simple'
-        "tau_method": "fullFT",  # 'fullFT' or 'histmethod', or '2D_FT', or '2D_FT_massdep'
-        "smoothed": True,
-        "gas_type": "strongest_AGN",  # 'fiducial_reconstructed', 'strongest_AGN_reconstructed', 'fiducial', 'strongest_AGN'
-        "halo_mass_range": 29,  # int (0 to N-1) for mass bin index, or None to use n_gal_density
-        "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
-        "ngrid": 2048,
-        "JAX": True,
-        "z": 0.74,
-        "n_gal_density": 2e-2, #2e-2 - for mgal_sel, 87e-5 - for mhalo_sel,  # cMpc/h^-3
-        "A": 0.00
-    },
-    {
-        "projection_type": "simple",
-        "tau_method": "2D_FT_upgrade",
-        "smoothed": True,
-        "gas_type": "strongest_AGN_reconstructed",
-        "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
-        "halo_mass_range": 29,
-        "ngrid": 2048,
-        "JAX": True,
-        "z": 0.74,
-        "n_gal_density": 2e-2, #87e-5,
-        "A": 0.00
-    },
-    {
-        "projection_type": "simple",
-        "tau_method": "fullFT",
-        "smoothed": True,
-        "gas_type": "strongest_AGN",
-        "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
-        "halo_mass_range": None,
-        "ngrid": 2048,
-        "JAX": True,
-        "z": 0.74,
-        "n_gal_density": 2e-2, #87e-5,
-        "A": 0.00
-    },
-    {
-        "projection_type": "simple",
-        "tau_method": "2D_FT_upgrade",
-        "smoothed": True,
-        "gas_type": "strongest_AGN_reconstructed",
-        "selection_regime": SELECTION_REGIME,  # 'mhalo_sel' or 'mgal_sel'
-        "halo_mass_range": None,
-        "ngrid": 2048,
-        "JAX": True,
-        "z": 0.74,
-        "n_gal_density": 2e-2, #87e-5,
-        "A": 0.00
+        'name': 'mstell_mixed',
+        'selection_params': {
+            'selection_mode': 'mixed',
+            'selection_mass_def': 'mstell',
+            'select_nonzero_masses': True,
+            'upper_mass_cut': False,
+            'max_mass': 1e14,
+            'upper_radius_cut': False,
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+        },
+        'convergence_mode': 'ngal',
+        'sat_fracs': SAT_FRACS,
+        'tau_methods': [
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "strongest_AGN_reconstructed",
+                "field_type": "gas",
+            },
+        ],
     },
 ]
+
+"""{
+        'name': 'm200b_centrals',
+        'selection_params': {
+            'selection_mode': 'cen',
+            'selection_mass_def': 'm200b',
+            'select_nonzero_masses': False,
+            'upper_mass_cut': False,
+            'max_mass': 1e14,
+            'upper_radius_cut': False,
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+        },
+        'convergence_mode': 'massbin',
+        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
+        'tau_methods': [
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "strongest_AGN_reconstructed",
+                "field_type": "gas",
+            },
+        ],
+    },"""
+
+def build_profiles():
+    """Expand profile configurations over all sat_frac values and tau methods."""
+    profiles = []
+    
+    for config in PROFILE_CONFIGS:
+        sel_params = dict(config['selection_params'])
+        convergence_mode = config['convergence_mode']
+        
+        # Determine if we should iterate over sat_fracs
+        # Only iterate when sat_fracs is not None (typically for 'mixed' mode)
+        if config['sat_fracs'] is not None:
+            sat_frac_values = config['sat_fracs']
+        else:
+            # For non-mixed modes, use a single placeholder value
+            # (won't appear in filenames anyway)
+            sat_frac_values = [0.10]
+        
+        for sf in sat_frac_values:
+            for base in config['tau_methods']:
+                p = dict(base)
+                p.update(sel_params)
+                # Don't set values - let resolve_converged_param find the right files
+                # based on the specified convergence mode
+                p['n_gal_density']   = None
+                p['halo_mass_range'] = None
+                p['sat_frac']        = sf
+                p['name']            = config['name']  # Add name from config for simplified labels
+                p = resolve_converged_param(p, mode=convergence_mode)  # Finds and parses the converged parameters
+                profiles.append(p)
+    
+    return profiles
+
+PROFILES = build_profiles()
 
 
 def M200c_to_M200m(M200c, z):
@@ -126,39 +155,31 @@ def get_halo_data_for_dataset(config):
     config : dict
         Configuration dictionary with keys:
         - gas_type: str
-        - selection_regime: str ('mhalo_sel' or 'mgal_sel', default 'mhalo_sel')
     
     Returns:
     --------
-    halo_mass : ndarray
-        Halo masses (M200c for mhalo_sel, m200b for mgal_sel)
-    halo_vels : ndarray
+    all_m200b : ndarray
+        Halo masses in m200b (m200m) definition
+    all_m200c : ndarray
+        Halo masses in M200c definition
+    all_vels : ndarray
         Halo velocities
-    is_m200m : bool
-        True if masses are m200b (m200m), False if M200c
     """
     
     # Extract config values
     GAS_TYPE = config['gas_type']
-    SELECTION_REGIME = config.get('selection_regime', 'mhalo_sel')
     
-    # Determine variant from gas_type
-    if GAS_TYPE in ['fiducial_reconstructed', 'fiducial']:
-        variant = 'fiducial'
-    else:
-        variant = 'strongest_AGN'
-    
-    # Load data from unified HDF5 source
-    halo_galaxy_data_path = f"/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO_ext_L1000N1800_HYDRO_{variant.upper()}_snap_77.hdf5"
+    # Get halo data path using pipeline_paths
+    halo_galaxy_data_path = str(halo_galaxy_hdf5(GAS_TYPE))
     
     # Load only needed fields using deepdish selective loading
     all_m200b = dd.io.load(halo_galaxy_data_path, '/galaxies/m200b')  # m200b is already m200m
     all_m200c = dd.io.load(halo_galaxy_data_path, '/galaxies/m200c')
-    all_vels = dd.io.load(halo_galaxy_data_path, '/galaxies/vel')
+    all_vels = dd.io.load(halo_galaxy_data_path, '/galaxies/vel_fof')
     
     return all_m200b, all_m200c, all_vels
 
-#### I BUTCHER THE CODE HERE 
+
 def compute_temperature_signal_pixell(tau_xy_inner, tau_xy_outer, vel_los, v_rms=300):
     # kSZ temperature fluctuation formula
     delta_tau = tau_xy_inner - tau_xy_outer  # (cMpc/h)^2
@@ -240,70 +261,30 @@ def compute_profile_errors(T_signals, N_halos):
     return errors
 
 
-def get_kSZ_profile(config):
+def get_kSZ_profile(config, use_dm=False):
     """
     Get kSZ profile for a single configuration.
     
     Parameters:
     -----------
     config : dict
-        Configuration dictionary with keys:
-        - projection_type: str ('simple', 'pixell', or 'pixell_cea')
-        - tau_method: str (e.g., 'fullFT_tau_reconstruction')
-        - smoothed: bool
-        - gas_type: str
-        - halo_mass_range: int or None (mass bin index)
-        - ngrid: int
-        - JAX: bool
-        - z: float
-        - n_gal_density: float
-        - selection_regime: str ('mhalo_sel' or 'mgal_sel')
+        Configuration dictionary with keys required by pipeline_paths
+    use_dm : bool
+        If True, load DM-only profile (changes field_type to 'dm')
     """
-    # Determine base directory and tau method directory
-    if config['projection_type'] == 'pixell':
-        base_dir = "pixell_CAP_code"
-    elif config['projection_type'] == 'pixell_cea':
-        base_dir = "pixell_cea_CAP_code"
-    else:
-        base_dir = "simple_CAP_code"
+    # Prepare config for ap_output_path
+    load_config = dict(config)
     
-    # Parse tau_method
-    tau_method = config['tau_method']
-    # Remove _tau_reconstruction suffix if present for backwards compatibility
-    if not tau_method.endswith('_tau_reconstruction'):
-        tau_method_dir = f"{tau_method}_tau_reconstruction"
-    else:
-        tau_method_dir = tau_method
+    if use_dm:
+        load_config['field_type'] = 'dm'
+        load_config['tau_method'] = 'fullFT_tau_reconstruction'
+        # For DM, strip '_reconstructed' from gas_type
+        load_config['gas_type'] = config['gas_type'].replace('_reconstructed', '')
     
-    # Add _smoothed suffix if smoothing is enabled
-    if config.get('smoothed', False):
-        tau_method_dir += "_smoothed"
-    
-    # Add selection regime suffix only for mgal_sel
-    regime_str = "_mgal_sel" if config.get('selection_regime') == 'mgal_sel' else ""
-    
-    # Add A parameter to filename ONLY if using mass-dependent reconstruction
-    A_str = f"_A_{config['A']:.5f}" if config.get('tau_method') == '2D_FT_massdep' and 'A' in config else ""
-    
-    if config.get('halo_mass_range') is not None:
-        subdir = f"tau_apertures_{config['gas_type']}{A_str}_massbin_{config['halo_mass_range']}_ngrid_{config['ngrid']}{regime_str}"
-    else:
-        subdir = f"tau_apertures_{config['gas_type']}{A_str}_ngrid_{config['ngrid']}{regime_str}"
-    
-    # Add JAX suffix if using JAX implementation
-    if config.get('JAX', False):
-        subdir += "_JAX_MPI"
-    
-    # Add z specification for pixell projections
-    if config['projection_type'] in ['pixell', 'pixell_cea']:
-        filename = f"tau_apertures_z_{config['z']}.npz"
-    else:
-        filename = "tau_apertures.npz"
-    
-    tau_apertures_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/{base_dir}/{tau_method_dir}/{subdir}/{filename}"
-
+    # Get path using pipeline_paths
+    tau_apertures_path = str(ap_output_path(load_config))
     print(f"Loading tau data from: {tau_apertures_path}")
-      
+    
     try:
         data = np.load(tau_apertures_path)
     except FileNotFoundError:
@@ -325,7 +306,7 @@ def get_kSZ_profile(config):
         T_signals = compute_temperature_signal_pixell(tau_xy_inner, tau_xy_outer, los_vels) 
         stacked_kSZ_signal = weighted_stacking(T_signals, los_vels)
 
-        one_halo_signal, mean_r200c_mpc_comoving = get_one_halo_term(halo_m200c, halo_vels, config['z'])
+        one_halo_signal, mean_r200c_mpc_comoving = get_one_halo_term(halo_m200c, halo_vels, Z_SIM)
         
         mean_halo_m200b = np.mean(halo_m200b)  # Msun/h
         N_halos = len(inds_sub)
@@ -345,7 +326,7 @@ def get_kSZ_profile(config):
         T_signals = compute_temperature_signal_simple(tau_signals, los_vels)
         stacked_kSZ_signal = weighted_stacking(T_signals, los_vels)
 
-        one_halo_signal, mean_r200c_mpc_comoving = get_one_halo_term(halo_m200c, halo_vels, config['z'])
+        one_halo_signal, mean_r200c_mpc_comoving = get_one_halo_term(halo_m200c, halo_vels, Z_SIM)
         
         mean_halo_m200b = np.mean(halo_m200b)  # Msun/h
         N_halos = len(inds_sub)
@@ -393,8 +374,9 @@ def generate_comparison_filename(profiles):
     
     is_single_profile = len(profiles) == 1
     
-    # Define all possible keys
-    keys = ['projection_type', 'tau_method', 'smoothed', 'gas_type', 'halo_mass_range', 'ngrid', 'z', 'JAX', 'selection_regime', 'A']
+    # Define all possible keys (removed constants: ngrid, JAX, z, smoothed, selection_regime)
+    keys = ['projection_type', 'tau_method', 'gas_type', 'halo_mass_range', 'sat_frac', 'A', 
+            'selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']
     
     # Find common and varying parameters
     common_params = {}
@@ -417,7 +399,8 @@ def generate_comparison_filename(profiles):
     
     # Determine comparison subject (what's varying)
     # Priority order for naming when multiple params vary
-    comparison_priority = ['ngrid', 'halo_mass_range', 'gas_type', 'tau_method', 'smoothed', 'projection_type', 'z', 'JAX', 'selection_regime', 'A']
+    comparison_priority = ['sat_frac', 'halo_mass_range', 'gas_type', 'tau_method', 'projection_type', 
+                          'selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut', 'A']
     comparison_subjects = [key for key in comparison_priority if key in varying_params]
     
     if len(comparison_subjects) == 0:
@@ -428,72 +411,58 @@ def generate_comparison_filename(profiles):
         comparison_subject = "+".join(comparison_subjects)
     
     # Build filename parts
-    filename_parts = ['kSZ']
+    filename_parts = ['kSZ_over_DM'] if RATIO_MODE else ['kSZ']
     
     # For single profile, include all relevant parameters
     if is_single_profile:
-        param_order = ['projection_type', 'tau_method', 'gas_type', 'smoothed', 'z', 'halo_mass_range', 'ngrid', 'JAX', 'selection_regime', 'A']
+        param_order = ['projection_type', 'tau_method', 'gas_type', 'halo_mass_range', 'sat_frac', 'A',
+                      'selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']
         for key in param_order:
             value = common_params.get(key)
             if value is None:
                 continue
-            if key == 'z':
-                filename_parts.append(f"z{value}")
-            elif key == 'halo_mass_range' and value != 'None':
+            if key == 'halo_mass_range' and value != 'None':
                 filename_parts.append(f"massbin{value}")
-            elif key == 'smoothed' and value == 'True':
-                filename_parts.append('smoothed')
-            elif key == 'JAX' and value == 'True':
-                filename_parts.append('JAX')
-            elif key == 'selection_regime' and value == 'mgal_sel':
-                filename_parts.append('mgal_sel')
+            elif key == 'sat_frac':
+                filename_parts.append(f"sf{int(float(value)*100):02d}")
             elif key == 'A':
                 filename_parts.append(f"A{value}")
-            elif key == 'ngrid':
-                filename_parts.append(f"ngrid{value}")
-            elif key != 'halo_mass_range' and key != 'smoothed' and key != 'JAX' and key != 'selection_regime':
+            elif key in ['selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']:
+                # Skip internal selection parameters in filename (they're in the path)
+                continue
+            elif key not in ['halo_mass_range']:
                 filename_parts.append(value)
     else:
         # For multiple profiles, add common parameters
-        param_order = ['projection_type', 'tau_method', 'smoothed', 'gas_type', 'z', 'halo_mass_range', 'JAX', 'selection_regime', 'A']
+        param_order = ['projection_type', 'tau_method', 'gas_type', 'halo_mass_range', 'sat_frac', 'A']
         for key in param_order:
             if key in common_params:
                 value = common_params[key]
-                if key == 'z':
-                    filename_parts.append(f"z{value}")
-                elif key == 'halo_mass_range' and value != 'None':
+                if key == 'halo_mass_range' and value != 'None':
                     filename_parts.append(f"massbin{value}")
-                elif key == 'smoothed' and value == 'True':
-                    filename_parts.append('smoothed')
-                elif key == 'JAX' and value == 'True':
-                    filename_parts.append('JAX')
-                elif key == 'selection_regime' and value == 'mgal_sel':
-                    filename_parts.append('mgal_sel')
+                elif key == 'sat_frac':
+                    filename_parts.append(f"sf{int(float(value)*100):02d}")
                 elif key == 'A':
                     filename_parts.append(f"A{value}")
-                elif key != 'halo_mass_range' and key != 'smoothed' and key != 'JAX' and key != 'selection_regime':
+                elif key not in ['halo_mass_range']:
                     filename_parts.append(value)
         
         # Add varying parameters with their values
-        for key in ['ngrid', 'projection_type', 'tau_method', 'smoothed', 'gas_type', 'z', 'halo_mass_range', 'JAX', 'selection_regime', 'A']:
+        for key in ['sat_frac', 'projection_type', 'tau_method', 'gas_type', 'halo_mass_range', 'A',
+                   'selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']:
             if key in varying_params:
                 values_str = '-'.join(varying_params[key])
-                if key == 'z':
-                    filename_parts.append(f"z_{values_str}")
+                if key == 'sat_frac':
+                    # Convert to percentages: 0.10 -> 10, 0.20 -> 20
+                    pct_values = [f"{int(float(v)*100):02d}" for v in varying_params[key]]
+                    filename_parts.append(f"sf_{'_'.join(pct_values)}")
                 elif key == 'halo_mass_range':
                     filename_parts.append(f"massbin_{values_str}")
-                elif key == 'smoothed':
-                    filename_parts.append(f"smoothed_{values_str}")
-                elif key == 'JAX':
-                    # Only add if contains 'True'
-                    if 'True' in varying_params[key]:
-                        filename_parts.append(f"JAX_{values_str}")
-                elif key == 'selection_regime':
-                    # Only add if contains 'mgal_sel'
-                    if 'mgal_sel' in varying_params[key]:
-                        filename_parts.append(f"selection_regime_{values_str}")
                 elif key == 'A':
                     filename_parts.append(f"A_{values_str}")
+                elif key in ['selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']:
+                    # Skip internal selection parameters (they're in the path)
+                    continue
                 else:
                     filename_parts.append(f"{key}_{values_str}")
     
@@ -502,8 +471,27 @@ def generate_comparison_filename(profiles):
 
 
 def main():
-    OUTPUT_DIR = "/home/fb635/fedirfiles/tracing_cosmic_gas/plots"
-
+    # Print configuration summary
+    print("\n" + "=" * 70)
+    print("TkSZ PROFILES PLOTTER")
+    print("=" * 70)
+    print(f"Total profiles        : {len(PROFILES)}")
+    print(f"Ratio mode            : {RATIO_MODE}")
+    print(f"\nProfile configurations:")
+    for i, config in enumerate(PROFILE_CONFIGS, start=1):
+        print(f"\n  Config {i}: {config['name']}")
+        print(f"    Selection mode    : {config['selection_params']['selection_mode']}")
+        print(f"    Mass def          : {config['selection_params']['selection_mass_def']}")
+        print(f"    Target mass       : {config['selection_params'].get('target_mean_mass', 'N/A')}")
+        if config['sat_fracs'] is not None:
+            print(f"    Satellite fracs   : {[f'{s*100:.0f}%' for s in config['sat_fracs']]} (swept)")
+        else:
+            print(f"    Satellite fracs   : N/A (not swept; mode={config['selection_params']['selection_mode']})")
+        print(f"    Tau methods       : {len(config['tau_methods'])} (recon, fullFT gas, fullFT dm)")
+        print(f"    Convergence mode  : {config['convergence_mode']}")
+    print(f"\nStart time            : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 70 + "\n")
+    
     # Initialize colossus cosmology
     params = {'flat': True, 'H0': h*100, 'Om0': OM_M, 'Ob0': OM_B, 'sigma8': 0.807, 'ns': 0.967}
     cosmology.setCosmology('myCosmo', params)
@@ -519,7 +507,7 @@ def main():
     dm_tng = figure_content['dm_tng']
 
     cosmo = FlatLambdaCDM(H0=h*100, Om0=OM_M, Tcmb0=2.725)
-    _, d_C = compute_distances(cosmo, PROFILES[0]['z']) # cMpc/h
+    _, d_C = compute_distances(cosmo, Z_SIM)  # cMpc/h
     theta_rad = theta_arcmin * (np.pi / 180) / 60  # radians
     r_comoving_mpc = d_C * theta_rad # cMpc/h
 
@@ -545,49 +533,75 @@ def main():
         radii, kSZ_signal, one_halo_signal, mean_r200c_mpc_comoving, mean_halo_m200b, N_halos, T_signals = get_kSZ_profile(profile)
 
         print(f"Mean m200b: {np.log10(mean_halo_m200b)} log10(Msun/h)")
+        
+        # If RATIO_MODE is enabled, compute the ratio with DM profile
+        if RATIO_MODE:
+            radii_dm, kSZ_signal_dm, one_halo_signal_dm, _, _, _, T_signals_dm = get_kSZ_profile(profile, use_dm=True)
+            # Compute ratio: CAP kSZ / CAP DM
+            plot_signal = kSZ_signal / kSZ_signal_dm
+            one_halo_signal_plot = one_halo_signal / one_halo_signal_dm
+            # Propagate errors for ratio (using same observed errors scaled by ratio)
+            error_bars = noise_converted / np.abs(kSZ_signal_dm)
+        else:
+            plot_signal = kSZ_signal
+            one_halo_signal_plot = one_halo_signal
+            error_bars = noise_converted
 
         # Build label based on whether it's a single profile or comparison
-        if is_single_profile:
-            # For single profile, create a descriptive label with key parameters
-            label_parts = []
-            if profile['gas_type']:
-                label_parts.append(profile['gas_type'])
-            if profile['tau_method']:
-                label_parts.append(profile['tau_method'])
-            if profile['smoothed']:
-                label_parts.append('smoothed')
-            label_parts.append(f"ngrid={profile['ngrid']}")
-            label_parts.append(f"z={profile['z']}")
-            label = ", ".join(label_parts)
+        # For all cases, use the simple config name + sat_frac only if mixed mode
+        if comparison_subject == "sat_frac":
+            # When sat_frac is the varying parameter, use name + sat_frac (only for mixed mode)
+            label = profile.get('name', 'profile')
+            if profile.get('selection_mode') == 'mixed':
+                label += f" (sf={profile['sat_frac']:.2f})"
+        elif is_single_profile or comparison_subject in ["identical", "single"]:
+            # Single profile or identical profiles - use name
+            label = profile.get('name', 'profile')
+            if profile.get('selection_mode') == 'mixed':
+                label += f" (sf={profile['sat_frac']:.2f})"
         elif "+" in comparison_subject:
-            # Multiple varying parameters - show all
-            label_parts = [f"{key}={profile[key]}" for key in comparison_subject.split("+")]
-            label = ", ".join(label_parts)
+            # Multiple varying parameters - use name for simplicity
+            label = profile.get('name', 'profile')
+            if profile.get('selection_mode') == 'mixed':
+                label += f" (sf={profile['sat_frac']:.2f})"
         else:
-            # Single varying parameter
-            label = f"{comparison_subject}={profile[comparison_subject]}"
+            # Other single varying parameter - use name + parameter value
+            label = f"{profile.get('name', 'profile')} ({comparison_subject}={profile[comparison_subject]})"
         
         # Use noise from data as error bars
         #profile_errors = compute_profile_errors(T_signals, N_halos)
-        ax.errorbar(radii, kSZ_signal, yerr=noise_converted, fmt='-', label=label)
+        ax.errorbar(radii, plot_signal, yerr=error_bars, fmt='-', label=label)
     
     # Add mean mass as a legend entry
     ax.plot([], [], ' ', label=f"$\\langle M_{{200m}} \\rangle = 10^{{{mean_mass_log:.2f}}}$ M$_\\odot$/h")
     
-    ax.axhline(y=one_halo_signal, linestyle='--')
+    ax.axhline(y=one_halo_signal_plot, linestyle='--')
     ax.axvline(x=mean_r200c_mpc_comoving, linestyle=':', color='gray')
     
     ax.set_xlabel(r"Apperture Radius $R$ [cMpc/h]", fontsize=14)
-    ax.set_ylabel(r"$T_{\mathrm{kSZ}}$ ($\mu$K (cMpc/h)$^{2}$)", fontsize=14)
-    ax.legend(fontsize=4, loc="lower right")
-    ax.set_yscale('log')
+    if RATIO_MODE:
+        ax.set_ylabel(r"CAP kSZ / CAP DM", fontsize=14)
+    else:
+        ax.set_ylabel(r"$T_{\mathrm{kSZ}}$ ($\mu$K (cMpc/h)$^{2}$)", fontsize=14)
+    ax.legend(fontsize=6, loc="lower right")
+    if not RATIO_MODE:
+        ax.set_yscale('log')
     fig.tight_layout()
     
-    # Save with auto-generated filename
-    output_path = f"{OUTPUT_DIR}/{filename}.png"
+    # Determine gas_type and tau_method directory components
+    all_gas_types   = list(dict.fromkeys(p['gas_type']   for p in PROFILES))
+    all_tau_methods = list(dict.fromkeys(p['tau_method'] for p in PROFILES))
+    gas_dir    = all_gas_types[0]   if len(all_gas_types)   == 1 else 'multi'
+    method_dir = all_tau_methods[0] if len(all_tau_methods) == 1 else 'multi'
+    
+    category = 'ksz_profiles/cap_ksz_over_dm' if RATIO_MODE else 'ksz_profiles/cap_ksz'
+    output_path = plot_path(category, gas_dir, method_dir, stem=filename)
+    ensure_parents(output_path)
+    
     fig.savefig(output_path)
     print(f"Plot saved to: {output_path}")
 
 
 if __name__ == "__main__":
     main()
+

@@ -11,9 +11,11 @@ from functools import partial
 from mpi4py import MPI
 from tqdm import tqdm
 import os
+import sys
 from astropy.cosmology import FlatLambdaCDM
 from astropy import units as u
-from utils import select_halos
+sys.path.insert(0, '/home/fb635/fedirfiles/tracing_cosmic_gas/utils')
+from utils import *
 from colossus.cosmology import cosmology
 from colossus.halo import mass_defs, concentration
 
@@ -28,6 +30,9 @@ size = comm.Get_size()
 LBOX = 681     # cMpc/h
 H = 0.681
 OM_M = 0.306
+
+N_CELL        = 2048   # grid resolution — never changes
+BEAM_SMOOTHED = True   # beam smoothing always applied
 
 
 def M200c_to_M200m(M200c, z):
@@ -65,18 +70,30 @@ def load_data(tau_map_path, halo_galaxy_data_path):
     tau_map = np.load(tau_map_path)
     
     # Load all data from HDF5 using deepdish selective loading
-    all_mstell = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell')
+    all_mstell = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell_50kpc')
+    all_mstell_fof = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell_fof')
     all_centrals = dd.io.load(halo_galaxy_data_path, '/galaxies/centrals')
     all_m200b = dd.io.load(halo_galaxy_data_path, '/galaxies/m200b')  # m200b is already m200m
     all_m200c = dd.io.load(halo_galaxy_data_path, '/galaxies/m200c')
+    all_mfof = dd.io.load(halo_galaxy_data_path, '/galaxies/TotalMass_fof')
     all_pos = dd.io.load(halo_galaxy_data_path, '/galaxies/pos')
+    all_haloID = dd.io.load(halo_galaxy_data_path, '/galaxies/haloID')
+    all_r200b = dd.io.load(halo_galaxy_data_path, '/galaxies/r200b')
+
+    unique_haloIDs, inverse_indices = np.unique(all_haloID, return_inverse=True)
+    mfof_sums = np.bincount(inverse_indices, weights=all_mfof)
+    all_mfof = mfof_sums[inverse_indices]
     
     all_data = {
         'mstell': all_mstell,
+        'mstell_fof': all_mstell_fof,
         'm200b': all_m200b,
         'm200c': all_m200c,
+        'mfof': all_mfof,
         'pos': all_pos,
-        'centrals': all_centrals
+        'centrals': all_centrals,
+        'haloID': all_haloID,
+        'r200b': all_r200b
     }
     
     return tau_map, all_data
@@ -373,59 +390,11 @@ def match_aperture_radii(z):
 
 
 def get_paths_from_config(config):
-    """Derive file paths from configuration."""
-    gas_type = config['gas_type']
-    tau_method = config['tau_method']
-    beam_smoothing = config.get('beam_smoothing', True)
-    selection_regime = config.get('selection_regime', 'mhalo_sel')  # Default to halo mass selection
-    
-    # Determine variant from gas_type
-    if gas_type in ['fiducial_reconstructed', 'fiducial']:
-        variant = 'fiducial'
-    else:
-        variant = 'strongest_AGN'
-    
-    # Determine tau map filename based on selection regime
-    # Don't add regime_suffix for fullFT_tau_reconstruction
-    if tau_method == 'fullFT_tau_reconstruction':
-        regime_suffix = ''
-    else:
-        regime_suffix = '_mgal_sel' if selection_regime == 'mgal_sel' else ''
-    
-    # Handle mass-dependent tau reconstruction
-    if tau_method == '2D_FT_massdep_tau_reconstruction':
-        if 'A' not in config:
-            raise ValueError(f"tau_method '{tau_method}' requires parameter 'A' to be specified in config")
-        A = config['A']
-        tau_map_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/tau_maps/{tau_method}/tau_map_{gas_type}_A_{A:.5f}{regime_suffix}.npy"
-    else:
-        # Tau map path for standard methods
-        tau_map_path = f"/home/fb635/fedirfiles/tracing_cosmic_gas/data/tau_maps/{tau_method}/tau_map_{gas_type}{regime_suffix}.npy"
-    
-    # Single HDF5 data source
-    halo_galaxy_data_path = f"/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO_ext_L1000N1800_HYDRO_{variant.upper()}_snap_77.hdf5"
-    
-    # Output path
-    base_dir = "simple_CAP_code"
-    tau_method_dir = f"{tau_method}_smoothed" if beam_smoothing else tau_method
-    
-    # Add A parameter to filename if using mass-dependent reconstruction
-    A_str = f"_A_{config['A']:.5f}" if tau_method == '2D_FT_massdep_tau_reconstruction' else ""
-    
-    # Add selection regime suffix only for mgal_sel
-    regime_str = "_mgal_sel" if selection_regime == 'mgal_sel' else ""
-    
-    if config.get('halo_mass_range') is not None:
-        subdir = f"tau_apertures_{gas_type}{A_str}_massbin_{config['halo_mass_range']}_ngrid_{config['n_cell']}{regime_str}_JAX_MPI"
-    else:
-        subdir = f"tau_apertures_{gas_type}{A_str}_ngrid_{config['n_cell']}{regime_str}_JAX_MPI"
-    
-    output_file = f"data/{base_dir}/{tau_method_dir}/{subdir}/tau_apertures.npz"
-    
+    """Derive file paths from configuration using pipeline_paths."""
     return {
-        'tau_map_path': tau_map_path,
-        'halo_galaxy_data_path': halo_galaxy_data_path,
-        'output_file': output_file
+        'tau_map_path':          str(tau_map_path(config)),
+        'halo_galaxy_data_path': str(halo_galaxy_hdf5(config['gas_type'])),
+        'output_file':           str(ap_output_path(config)),
     }
 
 
@@ -438,6 +407,7 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
         Configuration dictionary with keys:
         - gas_type: str (e.g., 'fiducial', 'fiducial_reconstructed', 'strongest_AGN', 'strongest_AGN_reconstructed')
         - tau_method: str (e.g., 'fullFT_tau_reconstruction', 'histmethod_tau_reconstruction')
+        - field_type: str ('gas' or 'dm', default 'gas') - use 'dm' for dark matter fictitious tau maps
         - n_cell: int (grid resolution, cells per side)
         - z_real: float (redshift)
         - n_gal_density: float (galaxy number density in cMpc/h^-3, e.g., 87e-5 or 1e-4) - only used when halo_mass_range is None
@@ -455,24 +425,25 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
     # Extract config values with defaults
     gas_type = config['gas_type']
     tau_method = config['tau_method']
-    n_cell = config['n_cell']
+    field_type = config.get('field_type', 'gas')  # 'gas' or 'dm'
+    n_cell = N_CELL
     z = config['z_real']
     n_gal_density = config['n_gal_density']
     halo_mass_range = config.get('halo_mass_range', None)
-    beam_smoothing = config.get('beam_smoothing', True)
-    selection_regime = config.get('selection_regime', 'mhalo_sel')
+    beam_smoothing = BEAM_SMOOTHED
     
-    # Determine selection parameters based on regime
-    if selection_regime == 'mhalo_sel':
-        selection_mode = 'cen'
-        selection_mass_def = 'm200c'
-        select_nonzero_masses = False
-    elif selection_regime == 'mgal_sel':
-        selection_mode = 'sat'
-        selection_mass_def = 'm200b'
-        select_nonzero_masses = False
-    else:
-        raise ValueError(f"Unknown selection_regime: {selection_regime}. Must be 'mhalo_sel' or 'mgal_sel'.")
+    # Read explicit selection parameters from config (no more regime-based expansion)
+    selection_mode = config.get('selection_mode', 'mixed')
+    selection_mass_def = config.get('selection_mass_def', 'mstell')
+    select_nonzero_masses = config.get('select_nonzero_masses', True)
+    upper_mass_cut = config.get('upper_mass_cut', True)
+    upper_radius_cut = config.get('upper_radius_cut', False)
+    sat_frac = config.get('sat_frac', 0.10)
+    
+    # For backwards compatibility: if selection_regime is specified, issue a warning
+    if 'selection_regime' in config:
+        if rank == 0:
+            print(f"WARNING: 'selection_regime' is deprecated. Use explicit selection parameters instead.")
     
     # Get paths from config
     paths = get_paths_from_config(config)
@@ -481,12 +452,15 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
     if rank == 0:
         print("Loading data...")
         print(f"Gas type: {gas_type}")
+        print(f"Field type: {field_type}")
         print(f"Tau method: {tau_method}")
         print(f"N_cell: {n_cell}")
         print(f"Redshift: {z}")
-        print(f"Selection regime: {selection_regime}")
         print(f"Selection mode: {selection_mode}")
         print(f"Selection mass def: {selection_mass_def}")
+        print(f"Satellite fraction: {sat_frac}")
+        print(f"Upper mass cut: {upper_mass_cut}")
+        print(f"Upper radius cut: {upper_radius_cut}")
     
     tau_map, all_data = load_data(
         paths['tau_map_path'],
@@ -501,7 +475,9 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
     mass_options = {
         'm200c': all_data['m200c'],
         'm200b': all_data['m200b'],
-        'mstell': all_data['mstell']
+        'mstell': all_data['mstell'],
+        'mstell_fof': all_data['mstell_fof'],
+        'mfof': all_data['mfof']
     }
     
     selection_masses = mass_options[selection_mass_def]
@@ -517,18 +493,29 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
         n_gal_density=n_gal_density,
         halo_mass_range=halo_mass_range,
         rank=rank,
-        min_mass=1e9 if selection_mode is None and selection_mass_def == 'mstell' else 1e13,
+        min_mass=1e9 if (selection_mass_def == 'mstell' or selection_mass_def == 'mstell_fof') else 1e13,
         select_nonzero_masses=select_nonzero_masses,
         selection_mode=selection_mode,
+        sat_frac=sat_frac,
         LBOX=LBOX,
-        upper_cut_mode=True
+        upper_mass_cut=upper_mass_cut,
+        m200b=all_data['m200b'],
+        upper_radius_cut=upper_radius_cut,
+        pos=all_data['pos'],
+        haloID=all_data['haloID'],
+        r200=all_data['r200b'],
     )
     
     # Extract selected positions and masses
     halo_pos_selected = all_data['pos'][halo_indices][:, :2]
     halo_m200b = all_data['m200b'][halo_indices]
+    halo_mfof = all_data['mfof'][halo_indices]
     
-    if rank == 0:
+    if rank == 0 and (selection_mass_def == 'mstell_fof' or selection_mass_def == 'mfof'):
+        print(f"Selected {len(halo_indices)} objects")
+        print(f"  Log10 Mfof range: [{np.log10(np.min(halo_mfof)):.2f}, {np.log10(np.max(halo_mfof)):.2f}]")
+        print(f"  Mean Mfof: {np.log10(np.mean(halo_mfof)):.2f} Msun/h")
+    elif rank == 0:
         print(f"Selected {len(halo_indices)} objects")
         print(f"  Log10 m200b (m200m) range: [{np.log10(np.min(halo_m200b)):.2f}, {np.log10(np.max(halo_m200b)):.2f}]")
         print(f"  Mean m200b (m200m): {np.log10(np.mean(halo_m200b)):.2f} Msun/h")
@@ -631,15 +618,14 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
 
 def main():
     """Main function for standalone execution using default config."""
+    
     config = {
         'gas_type': 'strongest_AGN_reconstructed',
         'tau_method': 'fullFT_tau_reconstruction',
-        'n_cell': 2048,
         'z_real': 0.74,
         'n_gal_density': 1e-4,
         'halo_mass_range': 0,
-        'beam_smoothing': True,
-        'selection_regime': 'mhalo_sel'
+        **selection_defaults('mgal_sel'),  # Use explicit parameters
     }
     get_AP_simple(config)
 
