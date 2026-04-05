@@ -4,6 +4,7 @@ Processes galaxy catalogs in batches with MPI parallelization.
 """
 
 import numpy as np
+import gc
 import jax
 import jax.numpy as jnp
 from jax import jit, vmap
@@ -14,24 +15,26 @@ import os
 import sys
 from astropy.cosmology import FlatLambdaCDM
 from astropy import units as u
-sys.path.insert(0, '/home/fb635/fedirfiles/tracing_cosmic_gas/utils')
-from utils import *
-from colossus.cosmology import cosmology
+sys.path.insert(0, '/home/fb635/fedirfiles/tracing_cosmic_gas')
+from utils.catalog_loaders import load_halo_properties
+from utils.pipeline_paths import (
+    get_halo_file_path,
+    tau_map_path as _tau_map_path,
+    ap_output_path,
+    halo_indices_path as _halo_indices_path,
+    resolve_halo_indices,
+    halo_props_cache_path as _halo_props_cache_path,
+    is_massbin_config,
+)
 from colossus.halo import mass_defs, concentration
+from utils.sim_params import get_sim_params, require_sim_param
+import matplotlib.pyplot as plt
 
 # Initialize MPI
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
-# --------------------
-# Simulation Constants (never change)
-# --------------------
-LBOX = 681     # cMpc/h
-H = 0.681
-OM_M = 0.306
-
-N_CELL        = 2048   # grid resolution — never changes
 BEAM_SMOOTHED = True   # beam smoothing always applied
 
 
@@ -54,49 +57,66 @@ def get_cutout_dims(r_max, dx):
     return cutout_size
 
 
-def load_data(tau_map_path, halo_galaxy_data_path):
+def load_data(tau_map_path, halo_galaxy_data_path, sim='flamingo', halo_indices=None):
     """Load tau map and catalog data from unified HDF5 source.
     
     Args:
         tau_map_path: Path to tau map
         halo_galaxy_data_path: Path to HDF5 file with all galaxy/halo data
+        sim: Simulation name ('flamingo' or 'abacus')
+        halo_indices: Optional array of halo indices to load. If None, loads all halos.
     
     Returns:
         tau_map: Tau map array
         all_data: Dict with all mstell, m200b, m200c, pos, centrals
     """
-    import deepdish as dd
-    
     tau_map = np.load(tau_map_path)
-    
-    # Load all data from HDF5 using deepdish selective loading
-    all_mstell = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell_50kpc')
-    all_mstell_fof = dd.io.load(halo_galaxy_data_path, '/galaxies/mstell_fof')
-    all_centrals = dd.io.load(halo_galaxy_data_path, '/galaxies/centrals')
-    all_m200b = dd.io.load(halo_galaxy_data_path, '/galaxies/m200b')  # m200b is already m200m
-    all_m200c = dd.io.load(halo_galaxy_data_path, '/galaxies/m200c')
-    all_mfof = dd.io.load(halo_galaxy_data_path, '/galaxies/TotalMass_fof')
-    all_pos = dd.io.load(halo_galaxy_data_path, '/galaxies/pos')
-    all_haloID = dd.io.load(halo_galaxy_data_path, '/galaxies/haloID')
-    all_r200b = dd.io.load(halo_galaxy_data_path, '/galaxies/r200b')
 
-    unique_haloIDs, inverse_indices = np.unique(all_haloID, return_inverse=True)
-    mfof_sums = np.bincount(inverse_indices, weights=all_mfof)
-    all_mfof = mfof_sums[inverse_indices]
+    if sim == 'abacus':
+        requested_props = ['m200b', 'x_L2com', 'v_L2com']
+        halo_props = load_halo_properties(halo_galaxy_data_path, requested_props, sim_name=sim, halo_indices=halo_indices)
+        if halo_props is None:
+            raise RuntimeError('Failed to load halo properties')
+        all_data = {
+            'm200b': halo_props['m200b'],
+            'pos': halo_props['x_L2com'],
+            'm200c': None,
+            'mfof': None,
+        }
+        return tau_map, all_data
+
+    requested_props = ['m200b', 'm200c', 'pos', 'mfof']
+
+    halo_props = load_halo_properties(halo_galaxy_data_path, requested_props, sim_name=sim, halo_indices=halo_indices)
+    if halo_props is None:
+        raise RuntimeError('Failed to load halo properties')
     
     all_data = {
-        'mstell': all_mstell,
-        'mstell_fof': all_mstell_fof,
-        'm200b': all_m200b,
-        'm200c': all_m200c,
-        'mfof': all_mfof,
-        'pos': all_pos,
-        'centrals': all_centrals,
-        'haloID': all_haloID,
-        'r200b': all_r200b
+        'm200b': halo_props['m200b'],
+        'm200c': halo_props['m200c'],
+        'mfof': halo_props.get('mfof'),
+        'pos': halo_props['pos'],
     }
     
     return tau_map, all_data
+
+
+def load_halo_data_from_cache(cache_path):
+    """
+    Load halo properties directly from the massbin props cache.
+
+    Returns a dict with keys: pos, vel, m200b, r200b.
+    All arrays are already the selected subset — no index subsetting needed.
+    """
+    cached = np.load(cache_path)
+    return {
+        'pos':   cached['pos'],    # (N, 3) float32
+        'vel':   cached['vel'],    # (N, 3) float32 — velocities
+        'm200b': cached['m200b'],  # (N,)   float32
+        'r200b': cached['r200b'],  # (N,)   float32
+        'm200c': None,             # not stored in cache
+        'mfof':  None,
+    }
 
 
 @partial(jit, static_argnums=(1,))
@@ -333,20 +353,25 @@ def split_workload(n_total, n_ranks):
     return counts, displacements
 
 
-def compute_distances(cosmo, z):
+def compute_distances(cosmo, z, h):
     d_L = cosmo.luminosity_distance(z).to(u.Mpc).value
     d_C = d_L / (1.0 + z)                      # Mpc
     d_A = d_L / (1.0 + z) ** 2                 # Mpc
-    d_C *= H                                   # Mpc/h
-    d_A *= H                                   # Mpc/h
+    d_C *= h                                   # Mpc/h
+    d_A *= h                                   # Mpc/h
     return d_A, d_C
 
 
-def translate_grid_params_to_degrees(z, n_cell):
+def translate_grid_params_to_degrees(z, n_cell, sim_params):
+    h = sim_params['h']
+    om_m = sim_params['omega_m']
+    tcmb0 = sim_params['tcmb0']
+    lbox = sim_params['box_size_cMpc_h']
+
     a = 1.0 / (1.0 + z)
-    cosmo = FlatLambdaCDM(H0=H * 100.0, Om0=OM_M, Tcmb0=2.725)
-    d_A, _ = compute_distances(cosmo, z)
-    Lbox_rad = (a * LBOX) / d_A                     # rad
+    cosmo = FlatLambdaCDM(H0=h * 100.0, Om0=om_m, Tcmb0=tcmb0)
+    d_A, _ = compute_distances(cosmo, z, h)
+    Lbox_rad = (a * lbox) / d_A                     # rad
     Lbox_deg = Lbox_rad * 180.0 / np.pi          # degrees
     cell_size_deg = Lbox_deg / n_cell
 
@@ -378,12 +403,15 @@ def get_smooth_density(D, fwhm, pixsizedeg, Lboxdeg, N_dim):
 
     return drsmo
 
-def match_aperture_radii(z):
+def match_aperture_radii(z, sim_params):
     """Get aperture radii matching the observational data."""
     figure_content = np.load("/home/fb635/fedirfiles/tracing_cosmic_gas/data/Fig2_sim.npz")
     theta_arcmin = figure_content['theta_arcmins']
-    cosmo = FlatLambdaCDM(H0=H*100, Om0=OM_M, Tcmb0=2.725)
-    _, d_C = compute_distances(cosmo, z)
+    h = sim_params['h']
+    om_m = sim_params['omega_m']
+    tcmb0 = sim_params['tcmb0']
+    cosmo = FlatLambdaCDM(H0=h * 100, Om0=om_m, Tcmb0=tcmb0)
+    _, d_C = compute_distances(cosmo, z, h)
     theta_rad = theta_arcmin * (np.pi / 180) / 60  # radians
     r_comoving_mpc = d_C * theta_rad  # cMpc/h
     return r_comoving_mpc
@@ -391,10 +419,11 @@ def match_aperture_radii(z):
 
 def get_paths_from_config(config):
     """Derive file paths from configuration using pipeline_paths."""
+    sim = config.get('sim_name', 'flamingo')
     return {
-        'tau_map_path':          str(tau_map_path(config)),
-        'halo_galaxy_data_path': str(halo_galaxy_hdf5(config['gas_type'])),
-        'output_file':           str(ap_output_path(config)),
+        'tau_map_path':          str(_tau_map_path(config)),
+        'halo_galaxy_data_path': str(get_halo_file_path(config['gas_type'], sim_name=sim)),
+        'output_file':           str(ap_output_path(config, method='simple')),
     }
 
 
@@ -422,117 +451,80 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
         Resolution increase factor for upsampling (default 8)
     """
     
-    # Extract config values with defaults
-    gas_type = config['gas_type']
-    tau_method = config['tau_method']
-    field_type = config.get('field_type', 'gas')  # 'gas' or 'dm'
-    n_cell = N_CELL
-    z = config['z_real']
-    n_gal_density = config['n_gal_density']
-    halo_mass_range = config.get('halo_mass_range', None)
+    config = dict(config)
+    sim_name = config.get('sim_name', 'flamingo')
+    sim_params = get_sim_params(sim_name)
+    L_box = require_sim_param(sim_name, 'box_size_cMpc_h')
+    n_cell = require_sim_param(sim_name, 'ngrid_default')
+    z = config.get('z_real', 0.74)
     beam_smoothing = BEAM_SMOOTHED
-    
-    # Read explicit selection parameters from config (no more regime-based expansion)
-    selection_mode = config.get('selection_mode', 'mixed')
-    selection_mass_def = config.get('selection_mass_def', 'mstell')
-    select_nonzero_masses = config.get('select_nonzero_masses', True)
-    upper_mass_cut = config.get('upper_mass_cut', True)
-    upper_radius_cut = config.get('upper_radius_cut', False)
-    sat_frac = config.get('sat_frac', 0.10)
-    
-    # For backwards compatibility: if selection_regime is specified, issue a warning
-    if 'selection_regime' in config:
-        if rank == 0:
-            print(f"WARNING: 'selection_regime' is deprecated. Use explicit selection parameters instead.")
     
     # Get paths from config
     paths = get_paths_from_config(config)
     
-    # Load data on all ranks
-    if rank == 0:
-        print("Loading data...")
-        print(f"Gas type: {gas_type}")
-        print(f"Field type: {field_type}")
-        print(f"Tau method: {tau_method}")
-        print(f"N_cell: {n_cell}")
-        print(f"Redshift: {z}")
-        print(f"Selection mode: {selection_mode}")
-        print(f"Selection mass def: {selection_mass_def}")
-        print(f"Satellite fraction: {sat_frac}")
-        print(f"Upper mass cut: {upper_mass_cut}")
-        print(f"Upper radius cut: {upper_radius_cut}")
-    
-    tau_map, all_data = load_data(
-        paths['tau_map_path'],
-        paths['halo_galaxy_data_path']
-    )
+    # Determine convergence mode from config
+    use_cache = is_massbin_config(config)
+    cache_path = _halo_props_cache_path(config)
+
+    if use_cache and cache_path.exists():
+        if rank == 0:
+            print(f"Massbin mode: loading halo data from cache {cache_path}")
+        all_data = load_halo_data_from_cache(cache_path)
+        if rank == 0:
+            print(f"✓ Successfully loaded {len(all_data['m200b'])} halo properties from cache")
+            print(f"  - pos shape: {all_data['pos'].shape}")
+            print(f"  - vel shape: {all_data['vel'].shape}")
+            print(f"  - m200b range: [{np.log10(np.min(all_data['m200b'])):.2f}, {np.log10(np.max(all_data['m200b'])):.2f}]")
+        
+        halo_indices = resolve_halo_indices(config)
+        
+        gc.collect()
+        if rank == 0:
+            print(f"Loading tau map from {paths['tau_map_path']}")
+        tau_map = np.load(paths['tau_map_path'])
+    else:
+        # ngal path (or massbin cache missing — fallback)
+        halo_indices = resolve_halo_indices(config)
+        if rank == 0:
+            print(f"Loaded {len(halo_indices)} halo indices from halo_indices file.")
+        
+        # Load data on all ranks, subsetting to selected halo indices
+        if rank == 0:
+            print("\nLoading data...")
+
+        tau_map, all_data = load_data(
+            paths['tau_map_path'],
+            paths['halo_galaxy_data_path'],
+            sim=sim_name,
+            halo_indices=halo_indices,
+        )
 
     if beam_smoothing:
-        _, Lbox_deg_real, cell_size_deg_real = translate_grid_params_to_degrees(z, n_cell)
+        _, Lbox_deg_real, cell_size_deg_real = translate_grid_params_to_degrees(z, n_cell, sim_params)
         tau_map = get_smooth_density(tau_map, fwhm_beam_arcmin, cell_size_deg_real, Lbox_deg_real, n_cell)
     
-    # Map selection_mass_def to actual mass array
-    mass_options = {
-        'm200c': all_data['m200c'],
-        'm200b': all_data['m200b'],
-        'mstell': all_data['mstell'],
-        'mstell_fof': all_data['mstell_fof'],
-        'mfof': all_data['mfof']
-    }
-    
-    selection_masses = mass_options[selection_mass_def]
-    
-    if rank == 0:
-        print(f"Using {selection_mass_def} for mass-based selection")
-        print(f"Total objects in catalog: {len(selection_masses)}")
-    
-    # Select halos/galaxies based on selection criteria
-    halo_indices = select_halos(
-        selection_masses,
-        all_data['centrals'],
-        n_gal_density=n_gal_density,
-        halo_mass_range=halo_mass_range,
-        rank=rank,
-        min_mass=1e9 if (selection_mass_def == 'mstell' or selection_mass_def == 'mstell_fof') else 1e13,
-        select_nonzero_masses=select_nonzero_masses,
-        selection_mode=selection_mode,
-        sat_frac=sat_frac,
-        LBOX=LBOX,
-        upper_mass_cut=upper_mass_cut,
-        m200b=all_data['m200b'],
-        upper_radius_cut=upper_radius_cut,
-        pos=all_data['pos'],
-        haloID=all_data['haloID'],
-        r200=all_data['r200b'],
-    )
-    
     # Extract selected positions and masses
-    halo_pos_selected = all_data['pos'][halo_indices][:, :2]
-    halo_m200b = all_data['m200b'][halo_indices]
-    halo_mfof = all_data['mfof'][halo_indices]
-    
-    if rank == 0 and (selection_mass_def == 'mstell_fof' or selection_mass_def == 'mfof'):
-        print(f"Selected {len(halo_indices)} objects")
-        print(f"  Log10 Mfof range: [{np.log10(np.min(halo_mfof)):.2f}, {np.log10(np.max(halo_mfof)):.2f}]")
-        print(f"  Mean Mfof: {np.log10(np.mean(halo_mfof)):.2f} Msun/h")
-    elif rank == 0:
+    halo_pos_selected = all_data['pos'][:, :2]
+
+    halo_m200b = all_data['m200b']
+    if rank == 0:
         print(f"Selected {len(halo_indices)} objects")
         print(f"  Log10 m200b (m200m) range: [{np.log10(np.min(halo_m200b)):.2f}, {np.log10(np.max(halo_m200b)):.2f}]")
         print(f"  Mean m200b (m200m): {np.log10(np.mean(halo_m200b)):.2f} Msun/h")
     
     # Clean up
-    del all_data, selection_masses
+    del all_data
     
     if rank == 0:
         print("Starting aperture photometry...")
     
     # Convert to JAX arrays
     tau_map_jax = jnp.array(tau_map)
-    R_comoving_mpc = match_aperture_radii(z)
+    R_comoving_mpc = match_aperture_radii(z, sim_params)
     r_apertures_jax = jnp.array(R_comoving_mpc)
     
     # Calculate cutout parameters
-    dx = LBOX / n_cell
+    dx = L_box / n_cell
     cutout_size = get_cutout_dims(np.max(R_comoving_mpc), dx)
     half_size = cutout_size // 2
     
@@ -591,12 +583,16 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
         root=0
     )
     
+    # Free large arrays to avoid memory issues
+    del tau_map_jax
+    gc.collect()
+    
     # Save results on rank 0
     if rank == 0:
         print("\nSaving results...")
         
         output_file = paths['output_file']
-        output_file = paths['output_file']
+        assert all_signals is not None
         
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -618,11 +614,12 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
 
 def main():
     """Main function for standalone execution using default config."""
+    from utils.pipeline_paths import selection_defaults
     
     config = {
+        'sim': 'flamingo',
         'gas_type': 'strongest_AGN_reconstructed',
         'tau_method': 'fullFT_tau_reconstruction',
-        'z_real': 0.74,
         'n_gal_density': 1e-4,
         'halo_mass_range': 0,
         **selection_defaults('mgal_sel'),  # Use explicit parameters

@@ -11,6 +11,8 @@
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=fb635@cam.ac.uk
 
+set -euo pipefail
+
 # Activate your virtual environment
 source /home/fb635/fedirfiles/venv/bin/activate
 
@@ -34,9 +36,7 @@ echo "Start time: $(date)"
 free -h
 
 # Run the tau xy field script
-echo "Starting tau xy field computation with threading (8 CPUs)..."
-echo "This will compute the optical depth map from the reconstructed gas field..."
-python -u tau_xy_field.py
+srun --ntasks=1 --cpus-per-task=$SLURM_CPUS_PER_TASK python -u tau_xy_field.py
 
 # Print completion info
 echo "Job completed at: $(date)"

@@ -1,6 +1,7 @@
 import numpy as np
 import sys
 from scipy.fft import rfftn, rfftfreq, fftfreq, rfft2
+from scipy.ndimage import zoom
 from abacusnbody.analysis.tsc import tsc_parallel
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
@@ -25,21 +26,101 @@ def compute_delta(pos, box, ngrid, weights, nthread=4):
     return delta
 
 
-@jit
+def compute_2d_fft(delta_2d, ngrid):
+    """Compute a normalized 2D FFT of a projected overdensity field."""
+    delta_fft = rfft2(delta_2d)
+    delta_fft *= (1.0 / ngrid ** 2)
+    return delta_fft
+
+
+def compute_k_grid_2d(ngrid, box):
+    """Compute the 2D k-magnitude grid for an rfft2 output."""
+    kx = fftfreq(ngrid, d=box / ngrid) * 2 * np.pi
+    ky = rfftfreq(ngrid, d=box / ngrid) * 2 * np.pi
+    return np.sqrt(kx[:, np.newaxis] ** 2 + ky[np.newaxis, :] ** 2)
+
+
+def bin_power_spectrum_2d(P_k_2d, k_mag, ngrid, box, nkbins=None, k_min=None, k_max=None):
+    """Bin a 2D power spectrum into a 1D spectrum as a function of |k|."""
+    if nkbins is None:
+        nkbins = max(32, ngrid // 10)
+    if k_min is None:
+        k_min = 2 * np.pi / box
+    if k_max is None:
+        k_max = float(np.max(k_mag))
+
+    k_bins = np.linspace(k_min, k_max, nkbins)
+    k_center = 0.5 * (k_bins[:-1] + k_bins[1:])
+
+    P_binned = np.full(len(k_center), np.nan, dtype=np.float64)
+    for i in range(len(k_center)):
+        mask = (k_mag >= k_bins[i]) & (k_mag < k_bins[i + 1])
+        vals = P_k_2d[mask]
+        if vals.size > 0:
+            P_binned[i] = np.mean(vals)
+        else:
+            P_binned[i] = 0
+    
+    """
+    finite = np.isfinite(P_binned)
+    if np.count_nonzero(finite) < 2:
+        raise RuntimeError("Insufficient finite bins in 1D power spectrum.")
+
+    first = np.argmax(finite) # index of first finite bin
+    last = len(P_binned) - 1 - np.argmax(finite[::-1]) # index of last finite bin
+    P_binned[:first] = P_binned[first]
+    P_binned[last + 1:] = P_binned[last]
+    if np.any(~finite[first:last + 1]):
+        P_binned[first:last + 1] = np.interp(
+            k_center[first:last + 1],
+            k_center[finite],
+            P_binned[finite],
+        )"""
+
+    return k_bins, k_center, P_binned
+
+
+def interp_extrapolate_loglog(k_src, y_src, k_tgt):
+    """Log-log interpolate/extrapolate a positive spectrum onto a target k grid."""
+    positive = (k_src > 0) & (y_src > 0) & np.isfinite(k_src) & np.isfinite(y_src)
+    if np.count_nonzero(positive) < 2:
+        raise RuntimeError("Need at least two positive finite points for log-log extrapolation.")
+
+    x = np.log(k_src[positive])
+    y = np.log(y_src[positive])
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+
+    x_tgt = np.log(np.asarray(k_tgt))
+    y_tgt = np.interp(x_tgt, x, y)
+
+    low = x_tgt < x[0]
+    high = x_tgt > x[-1]
+    slope_lo = (y[1] - y[0]) / (x[1] - x[0])
+    slope_hi = (y[-1] - y[-2]) / (x[-1] - x[-2])
+
+    y_tgt[low] = y[0] + slope_lo * (x_tgt[low] - x[0])
+    y_tgt[high] = y[-1] + slope_hi * (x_tgt[high] - x[-1])
+
+    return np.exp(y_tgt)
+
+
+"""@jit
 def compute_k_mag_slice_jax(kx_val, ky, kz):
-    """JIT-compiled function to compute k magnitude for a slice."""
+    #JIT-compiled function to compute k magnitude for a slice.
     return jnp.sqrt(kx_val**2 + ky[:, jnp.newaxis]**2 + kz[jnp.newaxis, :]**2)
 
 
 @jit
 def compute_power_slice_jax(delta_fft_slice):
-    """JIT-compiled function to compute power for a slice."""
+    #JIT-compiled function to compute power for a slice.
     return (delta_fft_slice * jnp.conj(delta_fft_slice)).real
 
 
 @jit
 def bin_power_slice_jax(k_mag_slice, P_slice, k_bins):
-    """JIT-compiled function to bin power spectrum for a single slice."""
+    #JIT-compiled function to bin power spectrum for a single slice.
     nkbins = len(k_bins) - 1
     power_binned = jnp.zeros(nkbins)
     counts_binned = jnp.zeros(nkbins)
@@ -125,43 +206,27 @@ def compute_power_spectrum(delta, box, ngrid, plotting=False, label='gas', worke
         ax.legend()
         fig.savefig(f'plots/{label}_power_spectrum.png', bbox_inches='tight')
 
-    return delta_fft, k_center, k_Nyquist, Power_spectrum
+    return delta_fft, k_center, k_Nyquist, Power_spectrum"""
 
 
 def compute_2d_power_spectrum(delta_2d, box, ngrid, nkbins):
     """
     Computes the 2D power spectrum of a projected field.
     """
-    # 2D FFT: Returns (ngrid, ngrid//2 + 1)
-    delta_fft = rfft2(delta_2d)
-    delta_fft *= (1.0 / ngrid ** 2) # Normalise for 2D
-
-    # Compute k-space grid for 2D
-    kx = fftfreq(ngrid, d=box/ngrid) * 2 * np.pi
-    ky = rfftfreq(ngrid, d=box/ngrid) * 2 * np.pi
+    delta_fft = compute_2d_fft(delta_2d, ngrid)
+    k_mag = compute_k_grid_2d(ngrid, box)
     k_Nyquist = np.pi * ngrid / box
 
-    # Create k_magnitude grid
-    k_mag = np.sqrt(kx[:, np.newaxis]**2 + ky[np.newaxis, :]**2)
-    
-    k_max = np.max(k_mag)
-    k_bins = np.linspace(0, k_max, nkbins)
-    k_center = 0.5 * (k_bins[:-1] + k_bins[1:])
-
-    power_spectrum = np.zeros(len(k_bins)-1)
-    mode_counts = np.zeros(len(k_bins)-1)
-
-    # Compute power magnitude
     P_2d_field = (delta_fft * np.conj(delta_fft)).real
+    _, k_center, power_spectrum = bin_power_spectrum_2d(
+        P_2d_field,
+        k_mag,
+        ngrid,
+        box,
+        nkbins=nkbins,
+        k_min=0,
+        k_max=float(np.max(k_mag)),
+    )
 
-    # Binning the 2D modes
-    for i in range(len(k_bins)-1):
-        mask = (k_mag >= k_bins[i]) & (k_mag < k_bins[i+1])
-        P_bin = P_2d_field[mask]
-        if P_bin.size > 0:
-            power_spectrum[i] = np.mean(P_bin)
-    
-    # Normalise by "Area" (Box^2) for 2D power spectrum
-    power_spectrum *= box ** 2 
-
+    power_spectrum *= box ** 2
     return delta_fft, k_mag, k_center, k_Nyquist, power_spectrum

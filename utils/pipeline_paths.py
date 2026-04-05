@@ -4,29 +4,47 @@ Single source of truth for all file paths in the kSZ pipeline.
 
 import numpy as np
 from pathlib import Path
-import re
 
 # Root paths — edit once here if directories change
 DATA_ROOT = Path("/home/fb635/fedirfiles/tracing_cosmic_gas/data")
 PLOT_ROOT = Path("/home/fb635/fedirfiles/tracing_cosmic_gas/plots")
-HPC_ROOT  = Path("/home/fb635/rds/hpc-work/tracing_cosmic_gas")
+FLAMINGO_ROOT = Path("/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO")
+ABACUS_ROOT = Path("/home/fb635/rds/hpc-work/tracing_cosmic_gas/abacus")
 
-SNAPSHOT = 63 # 63, 77
+SNAPSHOT = 63 # 63, 77 -- different FLAMINGO snapshots
+
+def _sim_data_root(sim_name: str) -> Path:
+    return DATA_ROOT / (sim_name)
 
 # Simulation data (read-only)
-def halo_galaxy_hdf5(gas_type: str) -> Path:
-    """HDF5 catalogue for halos/galaxies."""
-    gt = gas_type.replace("_reconstructed", "").upper()
-    return HPC_ROOT / f"FLAMINGO_ext_L1000N1800_HYDRO_{gt}_snap_{SNAPSHOT}.hdf5"
+def get_halo_file_path(
+    gas_type: str,
+    sim_name: str = "flamingo",
+    ) -> Path:
+    
+    if sim_name == "flamingo":
+        gt = gas_type.replace("_reconstructed", "").upper()
+        return FLAMINGO_ROOT / f"FLAMINGO_ext_L1000N1800_HYDRO_{gt}_snap_{SNAPSHOT}.hdf5"
+
+    elif sim_name == "abacus":
+        return ABACUS_ROOT / f"AbacusSummit_base_c000_ph000/halos/z0.800/halo_info"
+    else:
+        raise ValueError(f"Unsupported sim_name: {sim_name}")
 
 
-def particles_hdf5(gas_type: str) -> Path:
-    """Diluted particle HDF5 file."""
-    gt = gas_type.replace("_reconstructed", "").upper()
-    return Path(
-        f"/rds-d6/user/fb635/hpc-work/tracing_cosmic_gas/"
-        f"FLAMINGO_particles_L1000N1800_HYDRO_{gt}_snap_{SNAPSHOT}_diluted_100.hdf5"
-    )
+def get_particle_file_path(
+    gas_type: str,
+    sim_name: str = "flamingo",
+) -> Path:
+
+    if sim_name == "flamingo":
+        gt = gas_type.replace("_reconstructed", "").upper()
+        return FLAMINGO_ROOT / f"FLAMINGO_particles_L1000N1800_HYDRO_{gt}_snap_{SNAPSHOT}_diluted_100.hdf5"
+
+    elif sim_name == "abacus":
+        return ABACUS_ROOT / f"AbacusSummit_base_c000_ph000/halos/z0.800"
+    else:
+        raise ValueError(f"Unsupported sim_name: {sim_name}")
 
 
 # Selection parameter initialiser
@@ -70,8 +88,20 @@ def selection_defaults(regime: str) -> dict:
 # Selection tag — the single place that encodes selection parameters in filenames
 def _selection_tag(config: dict) -> str:
     """
-    Build a comprehensive filename token encoding ALL parameters that affect
-    which objects are selected into the sample.
+    Build a filename token encoding the selection INTENT — the parameters a
+    user sets in a PROFILE_CONFIG — not the converged numeric outcome.
+
+    Tokens emitted (in order):
+        mode_<mode>
+        mass_<mdef>
+        nzmass | allm
+        umc1e<exp> | noumc
+        urc | nourc
+        sf<nn>          (mixed mode only)
+        tm<v>           (when target_mean_mass is set, e.g. tm13p2)
+
+    Numeric convergence results (ngal, massbin window) are intentionally
+    NOT included — those live in the halo_indices file, not in filenames.
     """
     parts = []
 
@@ -99,146 +129,42 @@ def _selection_tag(config: dict) -> str:
         sf = config.get('sat_frac', 0.10)
         parts.append(f"sf{int(round(sf * 100)):02d}")
 
-    # Target mean mass (emit if not None; HATF stage only)
-    # Check this BEFORE ngal/massbin to conditionally skip them
     tm = config.get('target_mean_mass')
-    ngal = config.get('n_gal_density')
-    mbin = config.get('halo_mass_range')
-    
     if tm is not None:
-        # Target mass mode: include which parameter is being adjusted
-        # Either massbin or ngal should be non-None to indicate the adjustment variable
-        if mbin is not None:
-            parts.append("adjmb")  # adjusting massbin
-        elif ngal is not None:
-            parts.append("adjngal")  # adjusting ngal
-        else:
-            raise ValueError("When target_mean_mass is set, either halo_mass_range or n_gal_density must be non-None")
         parts.append(f"tm{tm:.1f}".replace('.', 'p'))
-    else:
-        # Fixed selection mode: include the actual ngal and massbin values
-        if ngal is not None:
-            raw = f"{ngal:.2e}".replace("e-0", "em0").replace("e+0", "ep0") \
-                               .replace("e-",  "em" ).replace("e+",  "ep" )
-            parts.append(f"ngal{raw}")
-        else:
-            parts.append("ngal_none")
-
-        if mbin is not None:
-            if isinstance(mbin, (list, tuple)) and len(mbin) == 2:
-                parts.append(f"massbin_start{mbin[0]}_size{mbin[1]}")
-            else:
-                raise ValueError("halo_mass_range must be a list or tuple of [start, size]")
-        else:
-            parts.append("massbin_none")
 
     return "_" + "_".join(parts)
 
 
-# Converged parameter resolution
-def resolve_converged_param(config: dict, mode: str = None) -> dict:
+def resolve_halo_indices(config: dict) -> np.ndarray:
     """
-    Scan tau_maps/ for the matching reconstructed tau map file and parse the
-    converged n_gal_density (mode='ngal') or halo_mass_range (mode='massbin')
-    directly from the filename using regex anchored on the known key strings.
+    Load the saved halo index array for the given selection config.
 
-    For non-reconstructed gas types (fullFT, dm field_type) this looks up the
-    corresponding _reconstructed run's file so all methods share the same selection.
+    This is the replacement for resolve_converged_param. Instead of parsing
+    tau-map filenames to recover converged numeric parameters and then
+    re-running select_halos, callers simply load the pre-computed indices
+    produced by HATF.
 
     Args:
-        config : configuration dict with selection parameters.
-                 If config['convergence_mode'] is set it is used as the default
-                 for `mode`, so callers that stored the mode in the profile dict
-                 don't need to pass it explicitly.
-        mode   : 'ngal' or 'massbin'.  Falls back to config['convergence_mode']
-                 when not supplied.  Raises if neither is available.
+        config : selection config dict (as used throughout the pipeline).
+                 Must include 'sim_name' and all _selection_tag keys.
+                 'target_mean_mass' should be set to the intended target so
+                 the tag matches what HATF wrote.
 
-    Returns a copy of config with the converged value filled in.
-    When target_mean_mass is None, returns config unchanged.
+    Returns:
+        np.ndarray of integer halo indices into the full catalog.
+
+    Raises:
+        FileNotFoundError if the indices file does not exist (run HATF first).
     """
-    import re
-
-    if config.get('target_mean_mass') is None:
-        return config  # fixed-selection path — caller already has explicit values
-
-    # Resolve mode from argument or from the profile dict
-    if mode is None:
-        mode = config.get('convergence_mode')
-    if mode not in ('massbin', 'ngal'):
-        raise ValueError(f"mode must be 'massbin' or 'ngal', got: {mode!r}")
-
-    # Always search the _reconstructed tau files — that is where HATF writes
-    # the converged parameters regardless of which downstream method uses them.
-    gas_type_raw = config['gas_type']
-    if not gas_type_raw.endswith('_reconstructed'):
-        gas_type = gas_type_raw + '_reconstructed'
-    else:
-        gas_type = gas_type_raw
-
-    tau_method_dir = DATA_ROOT / "tau_maps" / "2D_FT_upgrade_tau_reconstruction"
-
-    # Build a prefix anchor: _mass_<def>_<nzmass|allm>_<umc|noumc>_
-    # These three tokens are always adjacent in the filename, so we concatenate
-    # them without wildcards to uniquely identify the selection (handles e.g.
-    # mstell_fof vs mstell, and umc1e14 vs noumc).
-    mdef      = config.get('selection_mass_def', 'mstell')
-    zm_token  = "nzmass" if config.get('select_nonzero_masses', True) else "allm"
-    umc       = config.get('upper_mass_cut', True)
-    umc_token = f"umc1e{int(round(np.log10(config.get('max_mass', 1e14)))):02d}" if umc else "noumc"
-    prefix_anchor = f"_mass_{mdef}_{zm_token}_{umc_token}_"
-
-    if mode == 'ngal':
-        sf = config.get('sat_frac')
-        sf_token = f"_sf{int(round(sf * 100)):02d}_" if (sf is not None and config.get('selection_mode') == 'mixed') else "_"
-        # e.g. …_mass_mstell_fof_nzmass_umc1e14_…_sf01_ngal1.31em03_massbin_none.npy
-        pattern = f"tau_map_{gas_type}_*{prefix_anchor}*{sf_token}ngal[!_]*_massbin_none.npy"
-    else:
-        # e.g. …_mass_mfof_allm_noumc_…_ngal_none_massbin_start62090_size6500.npy
-        pattern = f"tau_map_{gas_type}_*{prefix_anchor}*_ngal_none_massbin_start*.npy"
-
-    matches = sorted(tau_method_dir.glob(pattern))
-
-    if len(matches) == 0:
+    path = halo_indices_path(config)
+    if not path.exists():
         raise FileNotFoundError(
-            f"resolve_converged_param: no tau map file found for mode='{mode}':\n"
-            f"  Pattern : {tau_method_dir / pattern}\n"
-            f"Run HATF first to generate the converged tau map."
+            f"resolve_halo_indices: halo indices file not found:\n"
+            f"  {path}\n"
+            f"Run HATF first to generate the halo sample for this selection config."
         )
-    if len(matches) > 1:
-        raise ValueError(
-            f"resolve_converged_param: ambiguous — {len(matches)} files match for mode='{mode}':\n"
-            + "\n".join(f"  {m}" for m in matches)
-        )
-
-    stem = matches[0].stem  # filename without .npy
-
-    result = dict(config)
-
-    if mode == 'ngal':
-        # Extract the encoded float between '_ngal' and '_massbin'
-        m = re.search(r'_ngal([^_]+(?:_[^_]+)?)_massbin_none$', stem)
-        if not m:
-            raise ValueError(
-                f"resolve_converged_param: could not find '_ngal..._massbin_none' in:\n  {stem}"
-            )
-        raw = m.group(1).replace('p', '.').replace('em', 'e-').replace('ep', 'e+')
-        result['n_gal_density']   = float(raw)
-        result['halo_mass_range'] = None
-
-    else:  # massbin
-        m = re.search(r'_massbin_start(\d+)_size(\d+)$', stem)
-        if not m:
-            raise ValueError(
-                f"resolve_converged_param: could not find '_massbin_start..._size...' in:\n  {stem}"
-            )
-        result['halo_mass_range'] = [int(m.group(1)), int(m.group(2))]
-        result['n_gal_density']   = None
-
-    # Clear target_mean_mass so _selection_tag uses the real converged values
-    # (not the adjngal/adjmb/tm tokens) when building any downstream file paths.
-    result['target_mean_mass'] = None
-
-    return result
+    return np.load(path)
 
 
 # Stage 1 — HATF / tau-map paths
@@ -250,9 +176,80 @@ def delta_2d_path(config: dict, label: str) -> Path:
     For 'halos': includes comprehensive selection tag with ALL parameters for maximum specificity
                  to prevent different selection configs from colliding
     """
+    sim_name = config.get('sim_name', 'flamingo')
     gas_type = config["gas_type"].replace("_reconstructed", "")
     sel_tag  = _selection_tag(config) if label == "halos" else ""
-    return DATA_ROOT / "delta_fields" / f"delta_2d_{label}_{gas_type}{sel_tag}.npy"
+    return _sim_data_root(sim_name) / "delta_fields" / f"delta_2d_{label}_{gas_type}{sel_tag}.npy"
+
+
+def halo_indices_path(config: dict) -> Path:
+    """
+    Path for the saved halo index array (.npy) produced by HATF and consumed
+    by get_AP and TkSZ.
+
+    The file sits next to the halo delta field:
+        data/<sim>/halo_indices/halo_indices_<gas_type><sel_tag>.npy
+
+    'gas_type' here is the raw physics label (no _reconstructed suffix), matching
+    the convention used by delta_2d_path for the 'halos' label.
+    """
+    sim_name = config.get('sim_name', 'flamingo')
+    gas_type = config["gas_type"].replace("_reconstructed", "")
+    sel_tag  = _selection_tag(config)
+    return _sim_data_root(sim_name) / "halo_indices" / f"halo_indices_{gas_type}{sel_tag}.npy"
+
+
+def is_massbin_config(config: dict) -> bool:
+    """
+    Return True iff this config was produced by massbin convergence.
+
+    Massbin mode is identified by either:
+    1. halo_mass_range being set (not None) and n_gal_density being absent or None, OR
+    2. convergence_mode being explicitly set to 'massbin'
+
+    This mirrors the logic in HATF_reconstruction.py where `method == 'massbin'`.
+    
+    Args:
+        config: Configuration dictionary
+        convergence_mode: Optional convergence mode (if None, will be read from config)
+    """
+    
+    try: 
+        convergence_mode = config.get('convergence_mode')
+    except:
+        convergence_mode = None
+
+    return (
+        convergence_mode == 'massbin'
+        or (config.get('halo_mass_range') is not None
+            and config.get('n_gal_density') is None)
+    )
+
+
+def halo_props_cache_path(config: dict) -> Path:
+    """
+    Path for the companion halo properties cache (.npz) saved alongside
+    halo_indices when convergence_mode is 'massbin'.
+
+    File layout (same directory as halo_indices):
+        data/<sim>/halo_indices/halo_props_<gas_type><sel_tag>.npz
+
+    Arrays stored inside the npz:
+        pos    : (N, 3) float32  — 3-D positions (cMpc/h)
+        vel    : (N, 3) float32  — 3-D velocities (km/s)
+        m200b  : (N,)   float32  — halo mass M200b (Msun/h)
+        r200b  : (N,)   float32  — halo radius R200b (cMpc/h)
+
+    Notes
+    -----
+    * For Abacus, 'vel' contains v_L2com and 'r200b' contains r95_L2com
+      (the closest available proxy).
+    * This file is only written/read when is_massbin_config(config) is True.
+    """
+    sim_name = config.get('sim_name', 'flamingo')
+    gas_type = config["gas_type"].replace("_reconstructed", "")
+    sel_tag  = _selection_tag(config)
+    return _sim_data_root(sim_name) / "halo_indices" / f"halo_props_{gas_type}{sel_tag}.npz"
 
 
 def tau_prefactor_path(config: dict) -> Path:
@@ -260,8 +257,9 @@ def tau_prefactor_path(config: dict) -> Path:
     Path for the τ-map prefactor.
     Depends only on gas physics and grid resolution, not on selection.
     """
+    sim_name = config.get('sim_name', 'flamingo')
     gas_type = config["gas_type"].replace("_reconstructed", "")
-    return DATA_ROOT / "tau_map_prefactors" / f"tau_prefactor_{gas_type}.npy"
+    return _sim_data_root(sim_name) / "tau_map_prefactors" / f"tau_prefactor_{gas_type}.npy"
 
 
 def tau_map_path(config: dict) -> Path:
@@ -273,10 +271,11 @@ def tau_map_path(config: dict) -> Path:
     2D_FT methods: comprehensive selection tag included so different selection 
                    configs produce different files (prevents collisions).
     """
+    sim_name   = config.get('sim_name', 'flamingo')
     gas_type   = config["gas_type"]
     tau_method = config.get("tau_method", "fullFT_tau_reconstruction")
     field_type = config.get("field_type", "gas")
-    method_dir = DATA_ROOT / "tau_maps" / tau_method
+    method_dir = _sim_data_root(sim_name) / "tau_maps" / tau_method
     prefix     = "tau_map_dm_" if field_type == "dm" else "tau_map_"
 
     if tau_method == "fullFT_tau_reconstruction":
@@ -293,24 +292,32 @@ def tau_map_path(config: dict) -> Path:
     return method_dir / fname
 
 # aperture-photometry output
-def ap_output_path(config: dict) -> Path:
+def ap_output_path(config: dict, method: str = "simple") -> Path:
     """
-    Path for the .npz written by get_AP_simple_jax_batched.
+    Unified path for aperture photometry outputs from both simple and pixell methods.
 
     Directory tree:
-        simple_CAP_code/
+        <method>_CAP_code/        ('simple' or 'pixell')
           <gas_type>/
             <tau_method>/
-              <field_type>/          ('gas' or 'dm')
-                <selection_tag>/     (from _selection_tag, leading '_' stripped)
+              <field_type>/        ('gas' or 'dm')
+                <selection_tag>/   (from _selection_tag, leading '_' stripped)
                   tau_apertures.npz
 
     For 2D_FT_massdep the tau_method directory gains an _A_<value> suffix.
+    
+    Args:
+        config: Configuration dictionary
+        method: 'simple' (get_AP_simple_jax_batched) or 'pixell' (get_AP_pixell_jax_batched)
     """
+    sim_name   = config.get('sim_name', 'flamingo')
     gas_type   = config["gas_type"]
     tau_method = config.get("tau_method", "fullFT_tau_reconstruction")
     field_type = config.get("field_type", "gas")
-    sel_tag    = _selection_tag(config).lstrip("_")   # strip leading underscore for dir name
+    sel_tag    = _selection_tag(config).lstrip("_")
+
+    # Base directory depends on method
+    base_dir = f"{method}_CAP_code"
 
     # Optional A-parameter suffix (massdep method only)
     if tau_method == "2D_FT_massdep_tau_reconstruction":
@@ -319,7 +326,7 @@ def ap_output_path(config: dict) -> Path:
         method_dir = tau_method
 
     return (
-        DATA_ROOT / "simple_CAP_code"
+        _sim_data_root(sim_name) / base_dir
         / gas_type
         / method_dir
         / field_type

@@ -11,6 +11,8 @@
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=fb635@cam.ac.uk
 
+set -euo pipefail
+
 # Activate your virtual environment
 source /home/fb635/fedirfiles/venv/bin/activate
 
@@ -27,6 +29,7 @@ export FFTW_NUM_THREADS=$SLURM_CPUS_PER_TASK
 # Disable MPI initialization to avoid PMI errors
 export HDF5_USE_FILE_LOCKING=FALSE
 export OMPI_MCA_mpi_warn_on_fork=0
+export MPI4PY_RC_INITIALIZE=0
 
 # Print job information
 echo "Job ID: $SLURM_JOB_ID"
@@ -42,7 +45,7 @@ free -h
 
 # Run the field manipulation script
 echo "Starting 2D reconstruction (8 CPUs)..."
-python -u Tk_upgrade_reconstruction.py
+srun --ntasks=${SLURM_NTASKS:-1} --cpus-per-task=${SLURM_CPUS_PER_TASK:-1} python -u HATF_reconstruction.py
 
 # Print completion info
 echo "Job completed at: $(date)"

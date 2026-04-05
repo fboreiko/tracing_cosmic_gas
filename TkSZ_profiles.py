@@ -1,15 +1,21 @@
 import numpy as np
-import deepdish as dd
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 from astropy.cosmology import FlatLambdaCDM
-from astropy.constants import m_p, sigma_T
+from astropy.constants import codata2018 as const
 import astropy.units as u
 from datetime import datetime
-from utils import *
+from utils.pipeline_paths import (
+    ap_output_path, plot_path, ensure_parents, get_halo_file_path,
+    halo_props_cache_path as _halo_props_cache_path,
+    is_massbin_config,
+)
+from utils.catalog_loaders import load_halo_properties
 from colossus.halo import concentration
 from colossus.halo import mass_defs
 from colossus.cosmology import cosmology
+from utils.sim_params import get_sim_params, require_sim_param
 
 rcParams['font.family'] = 'serif'
 rcParams['font.serif'] = ['Computer Modern']
@@ -18,25 +24,98 @@ rcParams['text.usetex'] = False  # Disable LaTeX rendering (requires system TeX 
 # --------------------
 # Configuration
 # --------------------
-# Simulation / cosmology
-LBOX = 681                 # cMpc/h
 C = 2.99792e5 # km/s
-T_CMB = 2.726e6 # microK
-h = 0.681
-OM_M = 0.306
-OM_B = 0.0486
-X_H = 0.76
-X_He = 0.24
-Z_SIM = 0.74               # simulation snapshot redshift — never changes
 
-PLOT_DATA = True
-RATIO_MODE = False 
+PLOT_DATA = False
+RATIO_MODE = True
 
 SAT_FRACS = [0.01, 0.10, 0.20, 0.30]
 
 # Define profile configurations: each configuration specifies selection parameters,
 # convergence mode, and which tau methods/field types to include
 PROFILE_CONFIGS = [
+    {
+        'name': 'flamingo_m200b_cen_massbin',
+        'sim_name': 'flamingo',
+        'selection_params': {
+            'selection_mode': 'cen',
+            'selection_mass_def': 'm200b',
+            'select_nonzero_masses': True,
+            'upper_mass_cut': False,
+            'max_mass': 1e14,
+            'upper_radius_cut': False,
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+        },
+        'convergence_mode': 'massbin',
+        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
+        'tau_methods': [
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "strongest_AGN",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
+                "field_type": "gas",
+            },
+        ],
+    },
+    {
+        'name': 'abacus_m200b_cen_massbin',
+        'sim_name': 'abacus',
+        'selection_params': {
+            'selection_mode': 'cen',
+            'selection_mass_def': 'm200b',
+            'select_nonzero_masses': True,
+            'upper_mass_cut': False,
+            'max_mass': 1e14,
+            'upper_radius_cut': False,
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+        },
+        'convergence_mode': 'massbin',
+        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
+        'tau_methods': [
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "strongest_AGN_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "fiducial_reconstructed",
+                "field_type": "gas",
+            },
+        ],
+    },
+]
+
+"""{
+        'name': 'm200b_massbin',
+        'selection_params': {
+            'selection_mode': 'cen',
+            'selection_mass_def': 'm200b',
+            'select_nonzero_masses': True,
+            'upper_mass_cut': False,
+            'max_mass': 1e14,
+            'upper_radius_cut': False,
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+        },
+        'convergence_mode': 'massbin',
+        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
+        'tau_methods': [
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "strongest_AGN_reconstructed",
+                "field_type": "gas",
+            },
+        ],
+    },
     {
         'name': 'mstell_mixed',
         'selection_params': {
@@ -59,26 +138,42 @@ PROFILE_CONFIGS = [
             },
         ],
     },
-]
-
-"""{
-        'name': 'm200b_centrals',
+    {
+        'name': 'm200b_cen',
         'selection_params': {
             'selection_mode': 'cen',
             'selection_mass_def': 'm200b',
-            'select_nonzero_masses': False,
+            'select_nonzero_masses': True,
             'upper_mass_cut': False,
             'max_mass': 1e14,
             'upper_radius_cut': False,
             'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
         },
-        'convergence_mode': 'massbin',
+        'convergence_mode': 'ngal',
         'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
         'tau_methods': [
             {
                 "projection_type": "simple",
                 "tau_method": "2D_FT_upgrade_tau_reconstruction",
                 "gas_type": "strongest_AGN_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "strongest_AGN",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "fiducial_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
                 "field_type": "gas",
             },
         ],
@@ -90,7 +185,6 @@ def build_profiles():
     
     for config in PROFILE_CONFIGS:
         sel_params = dict(config['selection_params'])
-        convergence_mode = config['convergence_mode']
         
         # Determine if we should iterate over sat_fracs
         # Only iterate when sat_fracs is not None (typically for 'mixed' mode)
@@ -105,13 +199,19 @@ def build_profiles():
             for base in config['tau_methods']:
                 p = dict(base)
                 p.update(sel_params)
-                # Don't set values - let resolve_converged_param find the right files
-                # based on the specified convergence mode
-                p['n_gal_density']   = None
-                p['halo_mass_range'] = None
+                # Set convergence parameters based on convergence_mode
+                if config['convergence_mode'] == 'massbin':
+                    # For massbin mode: halo_mass_range must be non-None
+                    # Use placeholder [0, 1] since indices will be loaded from halo_indices file
+                    p['halo_mass_range'] = [0, 1]
+                    p['n_gal_density']   = None
+                else:
+                    # For ngal mode: both can be None (indices loaded from file)
+                    p['n_gal_density']   = None
+                    p['halo_mass_range'] = None
                 p['sat_frac']        = sf
                 p['name']            = config['name']  # Add name from config for simplified labels
-                p = resolve_converged_param(p, mode=convergence_mode)  # Finds and parses the converged parameters
+                p.setdefault('sim_name', config.get('sim_name', 'flamingo'))
                 profiles.append(p)
     
     return profiles
@@ -164,41 +264,80 @@ def get_halo_data_for_dataset(config):
         Halo masses in M200c definition
     all_vels : ndarray
         Halo velocities
+    all_mstell : ndarray
+        Stellar masses
+    all_r200b : ndarray
+        Halo r200b values from catalog
     """
     
     # Extract config values
     GAS_TYPE = config['gas_type']
+    sim_name = config.get('sim_name', 'flamingo')
     
     # Get halo data path using pipeline_paths
-    halo_galaxy_data_path = str(halo_galaxy_hdf5(GAS_TYPE))
+    halo_galaxy_data_path = str(get_halo_file_path(GAS_TYPE, sim_name=sim_name))
     
-    # Load only needed fields using deepdish selective loading
-    all_m200b = dd.io.load(halo_galaxy_data_path, '/galaxies/m200b')  # m200b is already m200m
-    all_m200c = dd.io.load(halo_galaxy_data_path, '/galaxies/m200c')
-    all_vels = dd.io.load(halo_galaxy_data_path, '/galaxies/vel_fof')
+    requested_props = ['m200b', 'm200c', 'hvel_200b', 'r200b']
+    try:
+        halo_props = load_halo_properties(
+            halo_galaxy_data_path,
+            requested_props + ['mstell_50kpc'],
+            sim_name=sim_name,
+        )
+    except KeyError:
+        halo_props = load_halo_properties(
+            halo_galaxy_data_path,
+            requested_props,
+            sim_name=sim_name,
+        )
+    if halo_props is None:
+        raise RuntimeError(f'Failed to load halo properties from {halo_galaxy_data_path}')
+    halo_props['mstell_50kpc'] = np.full_like(halo_props['m200b'], np.nan, dtype=float)
+    all_m200b = halo_props['m200b']
+    all_m200c = halo_props['m200c']
+    all_vels = halo_props['hvel_200b']
+    all_mstell = halo_props['mstell_50kpc']
+    all_r200b = halo_props['r200b']
     
-    return all_m200b, all_m200c, all_vels
+    return all_m200b, all_m200c, all_vels, all_mstell, all_r200b
 
 
-def compute_temperature_signal_pixell(tau_xy_inner, tau_xy_outer, vel_los, v_rms=300):
-    # kSZ temperature fluctuation formula
+def load_halo_data_for_massbin(config):
+    """
+    Load halo data from the massbin props cache (no catalog open).
+
+    Returns the same 5-tuple as get_halo_data_for_dataset:
+        all_m200b, all_m200c, all_vels, all_mstell, all_r200b
+
+    The arrays are already the selected subset.
+    all_m200c and all_mstell are set to NaN arrays (not stored in cache).
+    """
+    cache_path = _halo_props_cache_path(config)
+    if not cache_path.exists():
+        raise FileNotFoundError(
+            f"massbin halo props cache not found: {cache_path}\n"
+            f"Run HATF with convergence_mode='massbin' first."
+        )
+    cached = np.load(cache_path)
+    m200b  = cached['m200b']
+    vels   = cached['vel']
+    r200b  = cached['r200b']
+    m200c  = m200b
+    mstell = m200b
+    return m200b, m200c, vels, mstell, r200b
+
+def compute_temperature_signal_pixell(tau_xy_inner, tau_xy_outer, t_cmb_microK):
     delta_tau = tau_xy_inner - tau_xy_outer  # (cMpc/h)^2
-    T_signals = -T_CMB * (vel_los[:, np.newaxis] / C) * delta_tau  # microK (cMpc/h)^2
-    #T_signals = -T_CMB * (v_rms / C) * delta_tau  # microK (cMpc/h)^2
-    
-    return T_signals
+    return -t_cmb_microK * delta_tau
 
 
-def compute_temperature_signal_simple(tau_signals, vel_los, v_rms=300):
-    return -T_CMB * (vel_los[:, np.newaxis] / C) * tau_signals  # microK
-    #return -T_CMB * (v_rms / C) * tau_signals  # microK
+def compute_temperature_signal_simple(tau_signals, t_cmb_microK):
+    return -t_cmb_microK * tau_signals
 
 
 def weighted_stacking(t_signals, vel_los, sigma_i=1.0, r_v=1.0):
     # Constants
     v_rms = np.std(vel_los) # RMS of the velocity catalog
-
-    #sigma_i = np.random.normal(loc=1.0, scale=0.1, size=len(vel_los))
     
     # Weights w_i = 1 / sigma_i^2
     weights = 1.0 / (sigma_i**2)
@@ -206,7 +345,7 @@ def weighted_stacking(t_signals, vel_los, sigma_i=1.0, r_v=1.0):
     # Term: (v_i / c)
     v_term = vel_los / C
 
-    numerator = np.sum(t_signals * v_term[:, np.newaxis] * weights, axis=0)
+    numerator = np.sum(t_signals * weights, axis=0) * np.std((vel_los[:, np.newaxis] / C) * v_term[:, np.newaxis])
     denominator = np.sum((v_term**2) * weights, axis=0)
     
     if denominator == 0:
@@ -217,36 +356,7 @@ def weighted_stacking(t_signals, vel_los, sigma_i=1.0, r_v=1.0):
     return T_stacked
 
 
-def weighted_stacking_rms(t_signals, vel_los, sigma_i=1.0, r_v=1.0, v_rms=300):
-    """
-    Weighted stacking with RMS velocity instead of individual halo velocities.
-    Computes: <rho_gas> * v_rms
-    
-    If v_rms is None, it will be computed from the velocity catalog.
-    """
-    # If v_rms not provided, compute from velocity catalog
-    if v_rms is None:
-        v_rms = np.std(vel_los)  # km/s
-    
-    # Weights w_i = 1 / sigma_i^2
-    weights = 1.0 / (sigma_i**2)
-    
-    numerator = np.sum(t_signals * weights, axis=0)
-    denominator = np.sum(weights)
-    
-    if denominator == 0:
-        print("Denominator is zero in weighted_stacking_rms!")
-        return np.zeros_like(t_signals[0])
-    
-    T_avg = numerator / denominator
-    
-    # Multiply by v_rms: <rho_gas> * v_rms
-    T_stacked = - (1.0 / r_v) * (v_rms / C) * T_avg
-    
-    return T_stacked
-
-
-def compute_distances(cosmo, z):
+def compute_distances(cosmo, z, h):
     d_L = cosmo.luminosity_distance(z).to(u.Mpc).value
     d_C = d_L / (1.0 + z)                      # Mpc
     d_A = d_L / (1.0 + z) ** 2                 # Mpc
@@ -274,6 +384,27 @@ def get_kSZ_profile(config, use_dm=False):
     """
     # Prepare config for ap_output_path
     load_config = dict(config)
+
+    sim_name = config.get('sim_name', 'flamingo')
+    h = require_sim_param(sim_name, 'h')
+    om_m = require_sim_param(sim_name, 'omega_m')
+    om_b = require_sim_param(sim_name, 'omega_b')
+    sigma8 = require_sim_param(sim_name, 'sigma8')
+    n_s = require_sim_param(sim_name, 'n_s')
+    redshift = require_sim_param(sim_name, 'redshift')
+    x_h = require_sim_param(sim_name, 'X_H')
+    x_he = require_sim_param(sim_name, 'X_He')
+    t_cmb_microK = require_sim_param(sim_name, 'tcmb0') * 1e6
+
+    params = {
+        'flat': True,
+        'H0': h * 100,
+        'Om0': om_m,
+        'Ob0': om_b,
+        'sigma8': sigma8,
+        'ns': n_s,
+    }
+    cosmology.setCosmology('myCosmo', params)
     
     if use_dm:
         load_config['field_type'] = 'dm'
@@ -281,8 +412,12 @@ def get_kSZ_profile(config, use_dm=False):
         # For DM, strip '_reconstructed' from gas_type
         load_config['gas_type'] = config['gas_type'].replace('_reconstructed', '')
     
+    # Determine method based on projection_type
+    projection_type = config.get('projection_type', 'simple')
+    method = 'pixell' if projection_type in ['pixell', 'pixell_cea'] else 'simple'
+    
     # Get path using pipeline_paths
-    tau_apertures_path = str(ap_output_path(load_config))
+    tau_apertures_path = str(ap_output_path(load_config, method=method))
     print(f"Loading tau data from: {tau_apertures_path}")
     
     try:
@@ -296,17 +431,46 @@ def get_kSZ_profile(config, use_dm=False):
         inds_sub = data['inds_sub']
         aperture_radii = data.get('r_comoving_mpc_h', np.linspace(0.1, 3.0, 9))  # cMpc/h
 
-        halo_m200b, halo_m200c, halo_vels = get_halo_data_for_dataset(config)
-
-        halo_vels = halo_vels[inds_sub]
-        halo_m200b = halo_m200b[inds_sub]
-        halo_m200c = halo_m200c[inds_sub]
-        los_vels = halo_vels[:, 2]  # km/s
+        if is_massbin_config(config):
+            # Massbin mode: load from cache (already selected subset)
+            print("Loading halo data from massbin cache")
+            all_m200b_full, all_m200c_full, all_vels_full, all_mstell_full, all_r200b_full = \
+                load_halo_data_for_massbin(config)
+            # Cache arrays are already the selected subset, no indexing needed
+            halo_vels = all_vels_full.copy()
+            halo_m200b = all_m200b_full
+            halo_m200c = all_m200c_full
+            halo_mstell = all_mstell_full
+            halo_r200b = all_r200b_full
+        else:
+            # Ngal mode: load from full catalog and subset with inds_sub
+            all_m200b_full, all_m200c_full, all_vels_full, all_mstell_full, all_r200b_full = \
+                get_halo_data_for_dataset(config)
+            halo_vels = all_vels_full[inds_sub].copy()  # Copy to avoid modifying original array
+            halo_m200b = all_m200b_full[inds_sub]
+            halo_m200c = all_m200c_full[inds_sub]
+            halo_mstell = all_mstell_full[inds_sub]
+            halo_r200b = all_r200b_full[inds_sub]
         
-        T_signals = compute_temperature_signal_pixell(tau_xy_inner, tau_xy_outer, los_vels) 
+        los_vels = halo_vels[:, 2]  # km/s
+
+        print(f"Mean stellar mass: {np.log10(np.mean(halo_mstell)):.2e} log10(Msun/h)")
+        
+        T_signals = compute_temperature_signal_pixell(tau_xy_inner, tau_xy_outer, t_cmb_microK)
         stacked_kSZ_signal = weighted_stacking(T_signals, los_vels)
 
-        one_halo_signal, mean_r200c_mpc_comoving = get_one_halo_term(halo_m200c, halo_vels, Z_SIM)
+        one_halo_signal, mean_r200b_mpc_comoving = get_one_halo_term(
+            halo_m200c,
+            halo_vels,
+            halo_r200b,
+            redshift,
+            h,
+            om_m,
+            om_b,
+            x_h,
+            x_he,
+            t_cmb_microK,
+        )
         
         mean_halo_m200b = np.mean(halo_m200b)  # Msun/h
         N_halos = len(inds_sub)
@@ -316,43 +480,69 @@ def get_kSZ_profile(config, use_dm=False):
         inds_sub = data['inds_sub']
         aperture_radii = data.get('r_comoving_mpc_h')
 
-        halo_m200b, halo_m200c, halo_vels = get_halo_data_for_dataset(config)
-
-        halo_vels = halo_vels[inds_sub]
-        halo_m200b = halo_m200b[inds_sub]
-        halo_m200c = halo_m200c[inds_sub]
+        if is_massbin_config(config):
+            print("Loading halo data from massbin cache")
+            all_m200b_full, all_m200c_full, all_vels_full, all_mstell_full, all_r200b_full = \
+                load_halo_data_for_massbin(config)
+            # Cache arrays are already the selected subset, no indexing needed
+            halo_vels = all_vels_full.copy()
+            halo_m200b = all_m200b_full
+            halo_m200c = all_m200c_full
+            halo_mstell = all_mstell_full
+            halo_r200b = all_r200b_full
+        else:
+            # Ngal mode: load from full catalog and subset with inds_sub
+            all_m200b_full, all_m200c_full, all_vels_full, all_mstell_full, all_r200b_full = \
+                get_halo_data_for_dataset(config)
+            halo_vels = all_vels_full[inds_sub].copy()  # Copy to avoid modifying original array
+            halo_m200b = all_m200b_full[inds_sub]
+            halo_m200c = all_m200c_full[inds_sub]
+            halo_mstell = all_mstell_full[inds_sub]
+            halo_r200b = all_r200b_full[inds_sub]
+        
         los_vels = halo_vels[:, 2]  # km/s
 
-        T_signals = compute_temperature_signal_simple(tau_signals, los_vels)
+        print(f"Mean stellar mass: {np.log10(np.mean(halo_mstell)):.2e} log10(Msun/h)")
+
+        T_signals = compute_temperature_signal_simple(tau_signals, t_cmb_microK)
         stacked_kSZ_signal = weighted_stacking(T_signals, los_vels)
 
-        one_halo_signal, mean_r200c_mpc_comoving = get_one_halo_term(halo_m200c, halo_vels, Z_SIM)
+        one_halo_signal, mean_r200b_mpc_comoving = get_one_halo_term(
+            halo_m200c,
+            halo_vels,
+            halo_r200b,
+            redshift,
+            h,
+            om_m,
+            om_b,
+            x_h,
+            x_he,
+            t_cmb_microK,
+        )
         
         mean_halo_m200b = np.mean(halo_m200b)  # Msun/h
         N_halos = len(inds_sub)
 
-    return aperture_radii, stacked_kSZ_signal, one_halo_signal, mean_r200c_mpc_comoving, mean_halo_m200b, N_halos, T_signals
+    return aperture_radii, stacked_kSZ_signal, one_halo_signal, mean_r200b_mpc_comoving, mean_halo_m200b, N_halos, T_signals
 
-def get_one_halo_term(halo_m200c, halo_vels, z):
+def get_one_halo_term(halo_m200c, halo_vels, halo_r200b, z, h, om_m, om_b, x_h, x_he, t_cmb_microK):
 
     mean_halo_m200c = np.mean(halo_m200c) / h # Msun
     vel_rms = np.std(halo_vels[:, 2])   # km/s 
 
     print(f"Mean m200c: {np.log10(mean_halo_m200c):.2e} Msun, Velocity RMS: {vel_rms:.2f} km/s")
 
-    cosmo = FlatLambdaCDM(H0=h*100, Om0=OM_M, Tcmb0=2.725)
-    rho_crit_z = cosmo.critical_density(z).to(u.Msun / u.Mpc**3).value  # Msun/Mpc^3 at redshift z
-    mean_r200c = (3.0 * mean_halo_m200c / (4.0 * np.pi * 200.0 * rho_crit_z))**(1/3)  # Mpc
-    mean_r200c_mpc_comoving = mean_r200c * (1 + z) * h  # cMpc/h
+    mean_r200b_mpc_comoving = np.mean(halo_r200b)
+    print(f"Mean r200b from catalog: {mean_r200b_mpc_comoving:.3f} cMpc/h")
 
-    mean_gas_mass = (OM_B / OM_M) * mean_halo_m200c * u.Msun # Msun
-    f_e = (X_H + 0.5 * X_He) / m_p # 1/kg
+    mean_gas_mass = (om_b / om_m) * mean_halo_m200c * u.Msun # Msun
+    f_e = (x_h + 0.5 * x_he) / const.m_p # 1/kg
     N_e = (mean_gas_mass.to(u.kg) * f_e).to(u.dimensionless_unscaled).value
     v_factor = (vel_rms / C)
-    sigma_T_mpc2 = sigma_T.to(u.Mpc**2).value # Mpc^2
-    delta_T_halo = T_CMB * v_factor * sigma_T_mpc2 * N_e * ((1 + z) * h)**2 # microK (cMpc/h)^2
+    sigma_T_mpc2 = const.sigma_T.value / (u.Mpc.to(u.m) ** 2) # Mpc^2
+    delta_T_halo = t_cmb_microK * v_factor * sigma_T_mpc2 * N_e * ((1 + z) * h)**2 # microK (cMpc/h)^2
     
-    return delta_T_halo, mean_r200c_mpc_comoving
+    return delta_T_halo, mean_r200b_mpc_comoving
 
 
 def generate_comparison_filename(profiles):
@@ -470,6 +660,52 @@ def generate_comparison_filename(profiles):
     return filename, comparison_subject, is_single_profile
 
 
+def _format_sat_frac(sf_value):
+    if sf_value is None:
+        return '0'
+    sf_float = float(sf_value)
+    if np.isclose(sf_float, 0.0):
+        return '0'
+    return f"{sf_float:.2f}"
+
+
+def format_profile_label(profile, all_profiles):
+    """Build plot labels focused on selection type and satellite fraction."""
+    profile_name = profile.get('name', '')
+    selection_mode = profile.get('selection_mode')
+
+    if profile_name == 'm200b_massbin':
+        base_label = 'Mass bin selected sample, sf=0'
+    elif profile_name == 'mstell_cen':
+        base_label = 'Number density selected sample, sf = 0'
+    elif profile_name == 'mstell_mixed' or selection_mode == 'mixed':
+        sat_frac_label = _format_sat_frac(profile.get('sat_frac', 0.0))
+        base_label = f"Number density selected sample, sf = {sat_frac_label}"
+    else:
+        sat_frac_label = _format_sat_frac(profile.get('sat_frac', 0.0))
+        base_label = f"{profile_name.replace('_', ' ')} sample, sf={sat_frac_label}"
+
+    all_strongest_agn_reconstructed = (
+        len(all_profiles) > 0
+        and all(p.get('gas_type') == 'strongest_AGN_reconstructed' for p in all_profiles)
+    )
+
+    if all_strongest_agn_reconstructed:
+        return base_label
+
+    gas_type = profile.get('gas_type', 'profile')
+    gas_label_map = {
+        'fiducial': 'Fiducial',
+        'strongest_AGN': 'Strongest AGN',
+    }
+    is_reconstructed = gas_type.endswith('_reconstructed')
+    base_gas_type = gas_type.replace('_reconstructed', '')
+    gas_label = gas_label_map.get(base_gas_type, base_gas_type.replace('_', ' '))
+    state_label = 'reconstructed' if is_reconstructed else 'true'
+
+    return f"{base_label} ({gas_label}, {state_label})"
+
+
 def main():
     # Print configuration summary
     print("\n" + "=" * 70)
@@ -492,10 +728,6 @@ def main():
     print(f"\nStart time            : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70 + "\n")
     
-    # Initialize colossus cosmology
-    params = {'flat': True, 'H0': h*100, 'Om0': OM_M, 'Ob0': OM_B, 'sigma8': 0.807, 'ns': 0.967}
-    cosmology.setCosmology('myCosmo', params)
-
     fig, ax = plt.subplots(figsize=(6, 4), dpi=300)
 
     figure_content = np.load("/home/fb635/fedirfiles/tracing_cosmic_gas/data/Fig2_sim.npz")
@@ -506,8 +738,13 @@ def main():
     gas_illustris = figure_content['gas_illustris']
     dm_tng = figure_content['dm_tng']
 
-    cosmo = FlatLambdaCDM(H0=h*100, Om0=OM_M, Tcmb0=2.725)
-    _, d_C = compute_distances(cosmo, Z_SIM)  # cMpc/h
+    data_sim = PROFILES[0].get('sim', 'flamingo') if len(PROFILES) > 0 else 'flamingo'
+    data_h = require_sim_param(data_sim, 'h')
+    data_om_m = require_sim_param(data_sim, 'omega_m')
+    data_tcmb0 = require_sim_param(data_sim, 'tcmb0')
+    data_z_sim = require_sim_param(data_sim, 'redshift')
+    cosmo = FlatLambdaCDM(H0=data_h * 100, Om0=data_om_m, Tcmb0=data_tcmb0)
+    _, d_C = compute_distances(cosmo, data_z_sim, data_h)  # cMpc/h
     theta_rad = theta_arcmin * (np.pi / 180) / 60  # radians
     r_comoving_mpc = d_C * theta_rad # cMpc/h
 
@@ -525,12 +762,38 @@ def main():
     print(f"Detected comparison subject: {comparison_subject}")
 
     # Get mean mass from first profile
-    first_profile_data = get_kSZ_profile(PROFILES[2])
+    first_profile_data = get_kSZ_profile(PROFILES[0])
     mean_mass_m200b_msun_h = first_profile_data[4]  # Msun/h
     mean_mass_log = np.log10(mean_mass_m200b_msun_h)
 
-    for profile in PROFILES:
-        radii, kSZ_signal, one_halo_signal, mean_r200c_mpc_comoving, mean_halo_m200b, N_halos, T_signals = get_kSZ_profile(profile)
+    # Store one-halo terms and mean r200 for each profile
+    profile_one_halo_terms = []
+    profile_mean_r200b_values = []
+    profile_colors = []
+
+    # Strong, high-contrast color palette for profiles (exclude brown)
+    profile_palette_base = [
+        'tab:blue',
+        'tab:pink',
+        'tab:orange',
+        'tab:red',
+        'darkred',
+        'tab:cyan',
+        'tab:purple',
+        'tab:olive',
+        'tab:gray',
+    ]
+    if len(PROFILES) == 2:
+        profile_palette = ['tab:red', 'tab:blue']
+    else:
+        profile_palette = [
+            profile_palette_base[i % len(profile_palette_base)]
+            for i in range(len(PROFILES))
+        ]
+
+    for i, profile in enumerate(PROFILES):
+        print(f"Processing sim_name: {profile['sim_name']}")
+        radii, kSZ_signal, one_halo_signal, mean_r200b_mpc_comoving, mean_halo_m200b, N_halos, T_signals = get_kSZ_profile(profile)
 
         print(f"Mean m200b: {np.log10(mean_halo_m200b)} log10(Msun/h)")
         
@@ -547,40 +810,44 @@ def main():
             one_halo_signal_plot = one_halo_signal
             error_bars = noise_converted
 
-        # Build label based on whether it's a single profile or comparison
-        # For all cases, use the simple config name + sat_frac only if mixed mode
-        if comparison_subject == "sat_frac":
-            # When sat_frac is the varying parameter, use name + sat_frac (only for mixed mode)
-            label = profile.get('name', 'profile')
-            if profile.get('selection_mode') == 'mixed':
-                label += f" (sf={profile['sat_frac']:.2f})"
-        elif is_single_profile or comparison_subject in ["identical", "single"]:
-            # Single profile or identical profiles - use name
-            label = profile.get('name', 'profile')
-            if profile.get('selection_mode') == 'mixed':
-                label += f" (sf={profile['sat_frac']:.2f})"
-        elif "+" in comparison_subject:
-            # Multiple varying parameters - use name for simplicity
-            label = profile.get('name', 'profile')
-            if profile.get('selection_mode') == 'mixed':
-                label += f" (sf={profile['sat_frac']:.2f})"
-        else:
-            # Other single varying parameter - use name + parameter value
-            label = f"{profile.get('name', 'profile')} ({comparison_subject}={profile[comparison_subject]})"
+        label = format_profile_label(profile, PROFILES)
+        line_color = 'red' if is_single_profile else profile_palette[i]
         
         # Use noise from data as error bars
         #profile_errors = compute_profile_errors(T_signals, N_halos)
-        ax.errorbar(radii, plot_signal, yerr=error_bars, fmt='-', label=label)
+        line = ax.errorbar(
+            radii,
+            plot_signal,
+            yerr=error_bars,
+            fmt='-',
+            label=label,
+            color=line_color,
+            ecolor=line_color,
+            linewidth=2.3,
+            elinewidth=1.4,
+            alpha=1.0,
+        )
+        
+        # Store one-halo term and mean r200 with matching color
+        profile_one_halo_terms.append(one_halo_signal_plot)
+        profile_mean_r200b_values.append(mean_r200b_mpc_comoving)
+        profile_colors.append(line[0].get_color())
     
     # Add mean mass as a legend entry
     ax.plot([], [], ' ', label=f"$\\langle M_{{200m}} \\rangle = 10^{{{mean_mass_log:.2f}}}$ M$_\\odot$/h")
     
-    ax.axhline(y=one_halo_signal_plot, linestyle='--')
-    ax.axvline(x=mean_r200c_mpc_comoving, linestyle=':', color='gray')
+    # Plot one-halo term and mean r200b (only from first profile)
+    if len(profile_one_halo_terms) > 0:
+        if RATIO_MODE:
+            ax.axhline(y=1.0, linestyle='--', color='gray', alpha=0.7, linewidth=1.5)
+        else:
+            ax.axhline(y=profile_one_halo_terms[0], linestyle='--', color='gray', alpha=0.7, linewidth=1.5, label='One-halo term line')
+        ax.axvline(x=profile_mean_r200b_values[0], linestyle='--', color='gray', alpha=0.7, linewidth=1.5)
     
-    ax.set_xlabel(r"Apperture Radius $R$ [cMpc/h]", fontsize=14)
+    ax.set_xlabel(r"Aperture Radius $R$ [cMpc/h]", fontsize=14)
     if RATIO_MODE:
         ax.set_ylabel(r"CAP kSZ / CAP DM", fontsize=14)
+        ax.set_ylim(0, 2)
     else:
         ax.set_ylabel(r"$T_{\mathrm{kSZ}}$ ($\mu$K (cMpc/h)$^{2}$)", fontsize=14)
     ax.legend(fontsize=6, loc="lower right")
@@ -598,7 +865,7 @@ def main():
     output_path = plot_path(category, gas_dir, method_dir, stem=filename)
     ensure_parents(output_path)
     
-    fig.savefig(output_path)
+    fig.savefig(str(output_path))
     print(f"Plot saved to: {output_path}")
 
 

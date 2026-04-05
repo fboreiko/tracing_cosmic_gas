@@ -1,21 +1,120 @@
 from mpi4py import MPI
 from datetime import datetime
-from utils import *
+import gc
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
 size = comm.Get_size()
 
 import get_AP_simple_jax_batched as simple_module
+import get_AP_pixell_jax_batched as pixell_module
 
 # Simulation constants
-Z_SIM = 0.74   # simulation snapshot redshift — never changes
+Z_REAL = 0.74   # redshift of observed sample — never changes, this is independent of simulation intrinsic redshift
 
 SAT_FRACS = [0.01, 0.10, 0.20, 0.30]
 
 PROFILE_CONFIGS = [
     {
+        'name': 'flamingo_m200b_cen_massbin',
+        'sim_name': 'flamingo',
+        'selection_params': {
+            'selection_mode': 'cen',
+            'selection_mass_def': 'm200b',
+            'select_nonzero_masses': True,
+            'upper_mass_cut': False,
+            'max_mass': 1e14,
+            'upper_radius_cut': False,
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+        },
+        'convergence_mode': 'massbin',
+        'sat_fracs': None,
+        'tau_methods': [
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "strongest_AGN_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "strongest_AGN",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "strongest_AGN",
+                "field_type": "dm",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "fiducial_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
+                "field_type": "dm",
+            },
+        ],
+    },
+    {
+        'name': 'abacus_m200b_cen_massbin',
+        'sim_name': 'abacus',
+        'selection_params': {
+            'selection_mode': 'cen',
+            'selection_mass_def': 'm200b',
+            'select_nonzero_masses': True,
+            'upper_mass_cut': False,
+            'max_mass': 1e14,
+            'upper_radius_cut': False,
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+        },
+        'convergence_mode': 'massbin',
+        'sat_fracs': None,
+        'tau_methods': [
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "strongest_AGN_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "strongest_AGN",
+                "field_type": "dm",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "fiducial_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
+                "field_type": "dm",
+            },
+        ],
+    },
+    
+]
+
+""" {
         'name': 'mstell_mixed',
+        'sim': 'flamingo',
         'selection_params': {
             'selection_mode': 'mixed',
             'selection_mass_def': 'mstell',
@@ -48,20 +147,19 @@ PROFILE_CONFIGS = [
             },
         ],
     },
-]
-
-"""{
-        'name': 'm200b_centrals',
+    {
+        'name': 'mstell_cen',
+        'sim': 'flamingo',
         'selection_params': {
             'selection_mode': 'cen',
-            'selection_mass_def': 'm200b',
-            'select_nonzero_masses': False,
+            'selection_mass_def': 'mstell',
+            'select_nonzero_masses': True,
             'upper_mass_cut': False,
             'max_mass': 1e14,
             'upper_radius_cut': False,
-            'target_mean_mass': 13.5,  # Informational only; convergence done in HATF
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
         },
-        'convergence_mode': 'massbin',
+        'convergence_mode': 'ngal',
         'sat_fracs': None,
         'tau_methods': [
             {
@@ -82,8 +180,79 @@ PROFILE_CONFIGS = [
                 "gas_type": "strongest_AGN",
                 "field_type": "dm",
             },
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "fiducial_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
+                "field_type": "dm",
+            },
         ],
-    },"""
+    },
+    {
+        'name': 'm200b_cen',
+        'sim': 'flamingo',
+        'selection_params': {
+            'selection_mode': 'cen',
+            'selection_mass_def': 'm200b',
+            'select_nonzero_masses': True,
+            'upper_mass_cut': False,
+            'max_mass': 1e14,
+            'upper_radius_cut': False,
+            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+        },
+        'convergence_mode': 'ngal',
+        'sat_fracs': None,
+        'tau_methods': [
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "strongest_AGN_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "strongest_AGN",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "strongest_AGN",
+                "field_type": "dm",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "gas_type": "fiducial_reconstructed",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
+                "field_type": "gas",
+            },
+            {
+                "projection_type": "simple",
+                "tau_method": "fullFT_tau_reconstruction",
+                "gas_type": "fiducial",
+                "field_type": "dm",
+            },
+        ],
+    },  """
 
 def build_profiles():
     """Expand profile configurations over all sat_frac values and tau methods."""
@@ -91,9 +260,7 @@ def build_profiles():
     
     for config in PROFILE_CONFIGS:
         sel_params = dict(config['selection_params'])
-        convergence_mode = config['convergence_mode']
         
-        # Determine if we should iterate over sat_fracs
         if config['sat_fracs'] is not None:
             sat_frac_values = config['sat_fracs']
         else:
@@ -105,12 +272,15 @@ def build_profiles():
             for base in config['tau_methods']:
                 p = dict(base)
                 p.update(sel_params)
-                # Don't set values - let resolve_converged_param find the right files
-                # based on the specified convergence mode
-                p['n_gal_density']   = None
-                p['halo_mass_range'] = None
+                p['profile_name']    = config.get('name', 'unnamed_profile')
+                if config['convergence_mode'] == 'massbin':
+                    p['halo_mass_range'] = [0, 1] # placeholder
+                    p['n_gal_density']   = None
+                else:
+                    p['n_gal_density']   = None
+                    p['halo_mass_range'] = None
                 p['sat_frac']        = sf
-                p = resolve_converged_param(p, mode=convergence_mode)  # Finds and parses the converged parameters
+                p['sim_name']        = base.get('sim_name', config.get('sim_name', 'flamingo'))
                 profiles.append(p)
     
     return profiles
@@ -122,38 +292,44 @@ def run_configuration(profile, config_num, total_configs):
     if rank == 0:
         print(f"\n{'='*70}")
         print(f"Config {config_num}/{total_configs}")
+        print(f"  profile   : {profile.get('profile_name', 'N/A')}")
+        print(f"  sim_name  : {profile.get('sim_name', 'flamingo')}")
+        print(f"  projection: {profile.get('projection_type', 'N/A')}")
         print(f"  gas_type  : {profile['gas_type']}")
         print(f"  tau_method: {profile['tau_method']}")
         print(f"  field_type: {profile['field_type']}")
         print(f"  sel_mode  : {profile.get('selection_mode', 'N/A')}")
         print(f"  sel_mass  : {profile.get('selection_mass_def', 'N/A')}")
         print(f"  sat_frac  : {profile['sat_frac']*100:.0f}%")
-        if profile.get('n_gal_density') is not None:
-            print(f"  n_gal_dens: {profile['n_gal_density']:.3e} (converged)")
-        if profile.get('halo_mass_range') is not None:
-            if isinstance(profile['halo_mass_range'], list):
-                print(f"  mass_range: start={profile['halo_mass_range'][0]}, size={profile['halo_mass_range'][1]} (converged)")
-            else:
-                print(f"  mass_range: {profile['halo_mass_range']} (converged)")
         print(f"  Start     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     try:
         config = {
-            'gas_type':              profile['gas_type'],
-            'tau_method':            profile['tau_method'],
-            'field_type':            profile.get('field_type', 'gas'),
-            'z_real':                Z_SIM,
-            'n_gal_density':         profile['n_gal_density'],
-            'halo_mass_range':       profile['halo_mass_range'],
-            'selection_mode':        profile['selection_mode'],
-            'selection_mass_def':    profile['selection_mass_def'],
+            'sim_name': profile.get('sim_name', 'flamingo'),
+            'gas_type': profile['gas_type'],
+            'tau_method': profile['tau_method'],
+            'field_type': profile.get('field_type', 'gas'),
+            'z_real': Z_REAL,
+            'selection_mode': profile['selection_mode'],
+            'selection_mass_def': profile['selection_mass_def'],
             'select_nonzero_masses': profile['select_nonzero_masses'],
-            'upper_mass_cut':        profile['upper_mass_cut'],
-            'max_mass':              profile['max_mass'],
-            'upper_radius_cut':      profile['upper_radius_cut'],
-            'sat_frac':              profile['sat_frac'],
-            'target_mean_mass':      profile.get('target_mean_mass'),
+            'upper_mass_cut': profile['upper_mass_cut'],
+            'upper_radius_cut': profile['upper_radius_cut'],
         }
+
+        if profile.get('target_mean_mass') is not None:
+            config['target_mean_mass'] = profile['target_mean_mass']
+
+        if profile.get('upper_mass_cut'):
+            config['max_mass'] = profile['max_mass']
+
+        # Always include these for cache detection
+        config['n_gal_density'] = profile.get('n_gal_density')
+        if profile.get('halo_mass_range') is not None:
+            config['halo_mass_range'] = profile['halo_mass_range']
+
+        if profile.get('selection_mode') == 'mixed':
+            config['sat_frac'] = profile['sat_frac']
 
         if 'A' in profile:
             config['A'] = profile['A']
@@ -162,12 +338,20 @@ def run_configuration(profile, config_num, total_configs):
             if rank == 0:
                 print("  Running simple projection...")
             simple_module.get_AP_simple(config)
+        elif profile['projection_type'] == 'pixell':
+            if rank == 0:
+                print("  Running pixell projection...")
+            pixell_module.get_AP_pixell(config)
         else:
             raise ValueError(f"Unknown projection_type: {profile['projection_type']}")
 
         if rank == 0:
             print(f"✓ Config {config_num}/{total_configs} completed  "
                   f"[{datetime.now().strftime('%H:%M:%S')}]")
+        
+        # Explicit garbage collection and MPI barrier to sync all ranks
+        gc.collect()
+        comm.Barrier()
 
     except Exception as e:
         if rank == 0:
@@ -211,4 +395,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

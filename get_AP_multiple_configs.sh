@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=get_AP_mult_conf
 #SBATCH --partition=icelake-himem
-#SBATCH --nodes=10
-#SBATCH --ntasks-per-node=20
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=30G
+#SBATCH --nodes=5
+#SBATCH --ntasks-per-node=10
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=80G
 #SBATCH --time=2:00:00
 #SBATCH --output=get_AP_mult_conf_%j.out
 #SBATCH --error=get_AP_mult_conf_%j.err
