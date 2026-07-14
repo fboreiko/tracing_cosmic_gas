@@ -1,3 +1,14 @@
+"""
+   This script contains utility functions for computing gas/dm and halo 
+   overdensity fields (delta fields) from particle and halo catalogs. 
+
+   -- compute_delta_field_and_mass is called by the HATF reconstruction pipeline 
+      in case it hasn't been computed before.
+    
+   -- compute_selected_halo_delta_2d is called by the HATF reconstruction pipeline
+      and loads/computes the halo delta field based on the config parameters. 
+"""
+
 import numpy as np
 from abacusnbody.analysis.tsc import tsc_parallel
 from pathlib import Path
@@ -78,8 +89,7 @@ def compute_delta_field_and_mass(
             print(f"  Total gas mass: {total_gas_mass:.4e} (1e10 Msun/h)")
             print(f"  Rescale factor: {rescale_factor:.6f}")
 
-            masses_dm *= rescale_factor
-            total_mass_for_tau = np.sum(masses_dm)
+            total_mass_for_tau = np.sum(masses_dm * rescale_factor)
             weights = masses_dm / np.mean(masses_dm)
 
             del dm_particles, masses_dm
@@ -114,7 +124,7 @@ def compute_delta_field_and_mass(
                 #print(np.min(pos_dm), np.max(pos_dm))
 
                 num_particles = pos_dm.shape[0]
-                total_dm_mass += num_particles * 0.21
+                total_dm_mass += num_particles * 0.21 * 100/3 # 0.21 Msun/h per particle, 100/3 accounts for downsampling
 
                 dens_2d_chunk = tsc_parallel(pos_dm, (ngrid, ngrid), box, weights=None, nthread=nthread)
                 dens_2d += dens_2d_chunk
@@ -188,20 +198,33 @@ def save_halo_props_cache(
         vel  = np.array(halo_props_raw['v_L2com'][selected_indices], dtype=np.float32)
         m200b = np.array(halo_props_raw['m200b'][selected_indices],   dtype=np.float32)
         r200b = np.array(halo_props_raw['r95_L2com'][selected_indices], dtype=np.float32)
+        
+        ensure_parents(cache_path)
+        np.savez(
+            cache_path,
+            pos=pos,
+            vel=vel,
+            m200b=m200b,
+            r200b=r200b,
+        )
     else:  # flamingo
         pos  = np.array(halo_props_raw['pos'][selected_indices],      dtype=np.float32)
         vel  = np.array(halo_props_raw['hvel_200b'][selected_indices], dtype=np.float32)
         m200b = np.array(halo_props_raw['m200b'][selected_indices],   dtype=np.float32)
         r200b = np.array(halo_props_raw['r200b'][selected_indices],   dtype=np.float32)
-
-    ensure_parents(cache_path)
-    np.savez(
-        cache_path,
-        pos=pos,
-        vel=vel,
-        m200b=m200b,
-        r200b=r200b,
-    )
+        m200c = np.array(halo_props_raw['m200c'][selected_indices],   dtype=np.float32)
+        mstell = np.array(halo_props_raw['mstell_50kpc'][selected_indices], dtype=np.float32)
+        
+        ensure_parents(cache_path)
+        np.savez(
+            cache_path,
+            pos=pos,
+            vel=vel,
+            m200b=m200b,
+            r200b=r200b,
+            m200c=m200c,
+            mstell=mstell,
+        )
     print(f"  Halo props cache saved ({len(selected_indices)} halos) → {cache_path}")
 
 
@@ -215,7 +238,7 @@ def compute_selected_halo_delta_2d(
     save_path=None,
     halo_indices_save_path=None,
     halo_props_cache_save_path=None,
-    convergence_mode=None,
+    len_halos_flamingo=157910,
     nthread=4,
 ):
     """Compute a 2D overdensity field for a selected halo sample.
@@ -245,6 +268,7 @@ def compute_selected_halo_delta_2d(
 
     delta_2d_path_val = Path(save_path) if save_path is not None else None
     idx_path = Path(halo_indices_save_path) if halo_indices_save_path is not None else None
+    cache_path = Path(halo_props_cache_save_path) if halo_props_cache_save_path is not None else None
 
     # If we already have saved halo indices, load them and skip selection entirely
     if idx_path is not None and idx_path.exists():
@@ -252,15 +276,14 @@ def compute_selected_halo_delta_2d(
         selected_indices = np.load(idx_path)
         print(f"  Loaded {len(selected_indices)} indices. Skipping selection.")
 
-        # massbin fast path: load positions from the props cache (no full catalog open)
-        cache_path = Path(halo_props_cache_save_path) if halo_props_cache_save_path is not None else None
-        if convergence_mode == 'massbin' and cache_path is not None and cache_path.exists():
-            print(f"  massbin mode: loading pos from halo props cache {cache_path}...")
+        # Fast path: load positions from the props cache (no full catalog open)
+        if cache_path is not None and cache_path.exists():
+            print(f"  loading pos from halo props cache {cache_path}...")
             cached = np.load(cache_path)
             pos    = cached['pos']        # (N,3) already selected
             masses = cached['m200b']      # (N,)
         else:
-            # ngal mode (or no cache): still need to open the catalog
+            # no cache: open the catalog (this is very slow for Abacus, so we prefer to use the cache)
             if sim_for_halos == 'abacus':
                 halo_props = load_halo_properties(halo_file_path, ['x_L2com', 'm200b'], sim_name=sim_for_halos)
                 if halo_props is None:
@@ -279,6 +302,10 @@ def compute_selected_halo_delta_2d(
         print(f"\n  Total objects selected: {len(selected_indices)} (sim='{sim_for_halos}')")
         print(f"  Log10 mass range: [{np.log10(np.min(masses)):.2f}, {np.log10(np.max(masses)):.2f}]")
         print(f"  Log10 mean mass:  {np.log10(np.mean(masses)):.2f} Msun/h")
+        
+        # Calculate and print number density
+        number_density = len(selected_indices) / (box ** 3)
+        print(f"  Number density: {number_density:.3e} (cMpc/h)^-3")
 
         delta_2d_field = compute_delta_2d(pos, box, ngrid, None, nthread=nthread)
         if delta_2d_path_val is not None:
@@ -289,21 +316,21 @@ def compute_selected_halo_delta_2d(
 
     print(f"\nHalos for sim='{sim_for_halos}' not found. Computing...")
 
-    if sim_for_halos == 'abacus':
+    if sim_for_halos == 'abacus': 
+        # This will change drastically once we do HOD modeling for Abacus
         requested_props = ['x_L2com', 'm200b', 'r95_L2com']
-        if convergence_mode == 'massbin':
-            if 'v_L2com' not in requested_props:
-                requested_props.append('v_L2com')
+        if cache_path is not None and 'v_L2com' not in requested_props:
+            requested_props.append('v_L2com')
         halo_props = load_halo_properties(halo_file_path, requested_props, sim_name=sim_for_halos)
         if halo_props is None:
             raise RuntimeError('Failed to load Abacus halo properties')
 
         all_pos = halo_props['x_L2com']
-        all_centrals = np.ones(len(all_pos), dtype=int)
+        all_centrals = np.ones(len(all_pos), dtype=int) # this is crude
         all_m200b = halo_props['m200b']
-        all_m200c = all_m200b
-        all_r200b = halo_props['r95_L2com']
-        all_haloID = np.arange(len(all_pos), dtype=int)
+        all_m200c = all_m200b # this is crude
+        all_r200b = halo_props['r95_L2com'] # this is crude
+        all_haloID = np.arange(len(all_pos), dtype=int) # this is crude
         all_mstell = None
         all_mstell_fof = None
         all_mfof = None
@@ -311,7 +338,10 @@ def compute_selected_halo_delta_2d(
         requested_props = ['centrals', 'm200b', 'm200c', 'r200b', 'pos', 'haloID']
         if mass_type in ('mstell', 'mstell_fof'):
             requested_props.extend(['mstell_50kpc', 'mstell_fof'])
-        if convergence_mode == 'massbin':
+        # Always load mstell and m200c for Flamingo when cache is requested
+        if cache_path is not None:
+            if 'mstell_50kpc' not in requested_props:
+                requested_props.append('mstell_50kpc')
             if 'hvel_200b' not in requested_props:
                 requested_props.append('hvel_200b')
         need_mfof = mass_type in ('mstell_fof', 'mfof')
@@ -387,7 +417,7 @@ def compute_selected_halo_delta_2d(
             pool_masses = selection_masses[pool_indices]
             pool_log_masses = np.log10(pool_masses)
             N_pool = len(pool_indices)
-            win_size = min(4500, N_pool) if sim_for_halos == 'flamingo' else min(100000, N_pool)
+            win_size = min(1000, N_pool) if sim_for_halos == 'flamingo' else min(100000, N_pool)
             win_step = 100 if sim_for_halos == 'flamingo' else 1000
             win_size_step = 100 if sim_for_halos == 'flamingo' else 10000
 
@@ -435,13 +465,6 @@ def compute_selected_halo_delta_2d(
                 print(f"    ⚠ Max iterations reached, using: win_start={w_start}, win_size={win_size}")
 
             selected_indices = pool_indices[w_start:w_start + win_size]
-
-            # BUTCHERED HERE!!!!!
-            if sim_for_halos == 'abacus':
-                # random uniformly select 4900 halos from the window to match the number used in Flamingo selection
-                np.random.seed(42)
-                selected_indices = np.random.choice(selected_indices, size=4900, replace=False)
-                print(f"    Randomly downsampled to 4900 halos for consistency with Flamingo selection")
 
         elif n_gal_density is not None:
             current_param = n_gal_density
@@ -494,32 +517,36 @@ def compute_selected_halo_delta_2d(
             haloID=all_haloID, r200=all_r200b,
         )
 
+    # BUTCHERED HERE!!!!!
+    if sim_for_halos == 'abacus':
+        # random uniformly downsample the window to match the number of halos in Flamingo selection
+        np.random.seed(42)
+        selected_indices = np.random.choice(selected_indices, size=len_halos_flamingo, replace=False)
+        print(f"    Randomly downsampled to {len_halos_flamingo} halos for consistency with Flamingo selection")
+
     # Save halo indices for downstream stages
     if idx_path is not None:
         ensure_parents(idx_path)
         np.save(idx_path, selected_indices)
         print(f"  Halo indices saved: {len(selected_indices)} → {idx_path}")
 
-        # Save companion halo properties cache for massbin mode
-        if convergence_mode == 'massbin' and halo_props_cache_save_path is not None:
-            cache_path = Path(halo_props_cache_save_path)
-            # For Abacus we need v_L2com and r95_L2com too; extend requested_props
-            # to ensure they were loaded.  Check they are in halo_props before saving.
-            required_for_cache = {
-                'abacus':  ['x_L2com', 'v_L2com', 'm200b', 'r95_L2com'],
-                'flamingo': ['pos', 'hvel_200b', 'm200b', 'r200b'],
-            }[sim_for_halos]
-            missing = [k for k in required_for_cache if k not in halo_props]
-            if missing:
-                print(f"  WARNING: cannot save halo props cache — missing fields: {missing}")
-                print(f"  Add them to requested_props in compute_selected_halo_delta_2d.")
-            else:
-                save_halo_props_cache(
-                    selected_indices=selected_indices,
-                    halo_props_raw=halo_props,
-                    cache_path=cache_path,
-                    sim_for_halos=sim_for_halos,
-                )
+    # Save companion halo properties cache whenever a cache path is provided
+    if cache_path is not None:
+        required_for_cache = {
+            'abacus':  ['x_L2com', 'v_L2com', 'm200b', 'r95_L2com'],
+            'flamingo': ['pos', 'hvel_200b', 'm200b', 'r200b', 'mstell_50kpc', 'm200c'],
+        }[sim_for_halos]
+        missing = [k for k in required_for_cache if k not in halo_props]
+        if missing:
+            print(f"  WARNING: cannot save halo props cache — missing fields: {missing}")
+            print("  Ensure required velocity/radius fields are requested before saving cache.")
+        else:
+            save_halo_props_cache(
+                selected_indices=selected_indices,
+                halo_props_raw=halo_props,
+                cache_path=cache_path,
+                sim_for_halos=sim_for_halos,
+            )
 
     pos = all_pos[selected_indices]
     masses = mfof_masses[selected_indices] if mass_type in ('mstell_fof', 'mfof') else all_m200b[selected_indices]
@@ -527,6 +554,10 @@ def compute_selected_halo_delta_2d(
     print(f"\n  Total objects selected: {len(selected_indices)} (sim='{sim_for_halos}')")
     print(f"  Log10 mass range: [{np.log10(np.min(masses)):.2f}, {np.log10(np.max(masses)):.2f}]")
     print(f"  Log10 mean mass: {np.log10(np.mean(masses)):.2f} Msun/h")
+    
+    # Calculate and print number density
+    number_density = len(selected_indices) / (box ** 3)
+    print(f"  Number density: {number_density:.3e} (cMpc/h)^-3")
 
     delta_2d_field = compute_delta_2d(pos, box, ngrid, None, nthread=nthread)
 

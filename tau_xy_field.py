@@ -1,6 +1,11 @@
+"""
+This is an important script to run once and forever for every simulation and field 
+configuration. It computes the true tau maps and saves them for later use within 
+the get_AP scripts, specifically for the "fullFT_tau_reconstruction" method. 
+"""
+
 import numpy as np
 from pathlib import Path
-
 from utils.pipeline_paths import tau_map_path, get_particle_file_path
 from utils.delta_fields import compute_delta_field_and_mass
 from utils.tau_prefactor import compute_prefactor
@@ -9,14 +14,13 @@ from utils.sim_params import get_sim_params
 SIM_NAME = 'abacus'
 SIM_PARAMS = get_sim_params(SIM_NAME)
 
-FEEDBACK_MODE = 'strongest_AGN'  # 'fiducial', 'strongest_AGN'
+FEEDBACK_MODE = 'fiducial'  # 'fiducial', 'strongest_AGN'
 FIELD_TYPE = 'dm'  # 'gas' or 'dm'
 
 # Simulation/cosmology parameters
 box = SIM_PARAMS['box_size_cMpc_h']
 ngrid = SIM_PARAMS['ngrid_default']
 nthread = SIM_PARAMS['nthread_default']
-
 
 def main():
     # Get file paths using pipeline_paths
@@ -57,8 +61,6 @@ def main():
     
     # Compute prefactor
     print("\nComputing prefactor...")
-    if SIM_NAME == 'abacus':
-        total_mass_for_tau = None  # Use cosmological parameters for Abacus
     prefactor = compute_prefactor(total_mass_for_tau, SIM_PARAMS)
     print(f"Prefactor: {prefactor:.6e}")
     

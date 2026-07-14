@@ -1,3 +1,22 @@
+"""
+Conductor script for running multiple profile configurations of the get_AP 
+pipeline in sequence.
+
+Profile configs are essentially designed to compare HATF reconstructed and 
+true tau fields via computing their kSZ statistics for the same set of halos. 
+This set of halos has to be the same as the one used for HATF construction, 
+and the pipeline ensures this. 
+
+Somewhat confusingly, the HATF reconstructed profiles are referred to as 
+"2D_FT_upgrade_tau_reconstruction" with "strongest_AGN_reconstructed" or 
+"fiducial_reconstructed" gas specifications.
+
+The true profiles are referred to as "fullFT_tau_reconstruction" with 
+"strongest_AGN" or "fiducial" gas specifications.
+
+This naming convention is legacy and should be cleaned up in the future.
+"""
+
 from mpi4py import MPI
 from datetime import datetime
 import gc
@@ -12,11 +31,11 @@ import get_AP_pixell_jax_batched as pixell_module
 # Simulation constants
 Z_REAL = 0.74   # redshift of observed sample — never changes, this is independent of simulation intrinsic redshift
 
-SAT_FRACS = [0.01, 0.10, 0.20, 0.30]
+SAT_FRACS = [0.10, 0.20, 0.30]
 
 PROFILE_CONFIGS = [
     {
-        'name': 'flamingo_m200b_cen_massbin',
+        'name': 'flamingo_cen_massbin',
         'sim_name': 'flamingo',
         'selection_params': {
             'selection_mode': 'cen',
@@ -25,14 +44,14 @@ PROFILE_CONFIGS = [
             'upper_mass_cut': False,
             'max_mass': 1e14,
             'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+            'target_mean_mass': 12.2,
         },
         'convergence_mode': 'massbin',
         'sat_fracs': None,
         'tau_methods': [
             {
                 "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
+                "tau_method": "2D_FT_upgrade_tau_reconstruction", 
                 "gas_type": "strongest_AGN_reconstructed",
                 "field_type": "gas",
             },
@@ -48,29 +67,11 @@ PROFILE_CONFIGS = [
                 "gas_type": "strongest_AGN",
                 "field_type": "dm",
             },
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "fiducial_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "fiducial",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "fiducial",
-                "field_type": "dm",
-            },
         ],
     },
     {
-        'name': 'abacus_m200b_cen_massbin',
-        'sim_name': 'abacus',
+        'name': 'flamingo_cen_massbin',
+        'sim_name': 'flamingo',
         'selection_params': {
             'selection_mode': 'cen',
             'selection_mass_def': 'm200b',
@@ -78,7 +79,7 @@ PROFILE_CONFIGS = [
             'upper_mass_cut': False,
             'max_mass': 1e14,
             'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+            'target_mean_mass': 13.8,
         },
         'convergence_mode': 'massbin',
         'sat_fracs': None,
@@ -93,36 +94,30 @@ PROFILE_CONFIGS = [
                 "projection_type": "simple",
                 "tau_method": "fullFT_tau_reconstruction",
                 "gas_type": "strongest_AGN",
-                "field_type": "dm",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "fiducial_reconstructed",
                 "field_type": "gas",
             },
             {
                 "projection_type": "simple",
                 "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "fiducial",
+                "gas_type": "strongest_AGN",
                 "field_type": "dm",
             },
         ],
-    },
-    
+    },   
 ]
 
-""" {
-        'name': 'mstell_mixed',
-        'sim': 'flamingo',
+"""
+    {
+        'name': 'flamingo_mstell_sat',
+        'sim_name': 'flamingo',
         'selection_params': {
-            'selection_mode': 'mixed',
+            'selection_mode': 'sat',
             'selection_mass_def': 'mstell',
             'select_nonzero_masses': True,
             'upper_mass_cut': False,
             'max_mass': 1e14,
             'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+            'target_mean_mass': None,
         },
         'convergence_mode': 'ngal',
         'sat_fracs': SAT_FRACS,
@@ -148,61 +143,8 @@ PROFILE_CONFIGS = [
         ],
     },
     {
-        'name': 'mstell_cen',
-        'sim': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'mstell',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': None,
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "strongest_AGN_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "dm",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "fiducial_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "fiducial",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "fiducial",
-                "field_type": "dm",
-            },
-        ],
-    },
-    {
-        'name': 'm200b_cen',
-        'sim': 'flamingo',
+        'name': 'abacus_m200b_cen_ngal',
+        'sim_name': 'abacus',
         'selection_params': {
             'selection_mode': 'cen',
             'selection_mass_def': 'm200b',
@@ -210,7 +152,7 @@ PROFILE_CONFIGS = [
             'upper_mass_cut': False,
             'max_mass': 1e14,
             'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
+            'target_mean_mass': None,  # Informational only; convergence done in HATF
         },
         'convergence_mode': 'ngal',
         'sat_fracs': None,
@@ -219,12 +161,6 @@ PROFILE_CONFIGS = [
                 "projection_type": "simple",
                 "tau_method": "2D_FT_upgrade_tau_reconstruction",
                 "gas_type": "strongest_AGN_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
                 "field_type": "gas",
             },
             {
@@ -243,16 +179,10 @@ PROFILE_CONFIGS = [
                 "projection_type": "simple",
                 "tau_method": "fullFT_tau_reconstruction",
                 "gas_type": "fiducial",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "fiducial",
                 "field_type": "dm",
             },
         ],
-    },  """
+    }, """
 
 def build_profiles():
     """Expand profile configurations over all sat_frac values and tau methods."""
@@ -281,6 +211,7 @@ def build_profiles():
                     p['halo_mass_range'] = None
                 p['sat_frac']        = sf
                 p['sim_name']        = base.get('sim_name', config.get('sim_name', 'flamingo'))
+                p['convergence_mode'] = config.get('convergence_mode', 'ngal')
                 profiles.append(p)
     
     return profiles
@@ -328,8 +259,10 @@ def run_configuration(profile, config_num, total_configs):
         if profile.get('halo_mass_range') is not None:
             config['halo_mass_range'] = profile['halo_mass_range']
 
-        if profile.get('selection_mode') == 'mixed':
+        if profile.get('selection_mode') in ('mixed', 'sat'):
             config['sat_frac'] = profile['sat_frac']
+
+        config['convergence_mode'] = profile.get('convergence_mode', 'ngal')
 
         if 'A' in profile:
             config['A'] = profile['A']

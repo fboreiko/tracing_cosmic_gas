@@ -1,6 +1,7 @@
 """
-JAX + MPI implementation for aperture photometry on tau maps.
-Processes galaxy catalogs in batches with MPI parallelization.
+JAX + MPI implementation for aperture photometry on tau maps. Processes galaxy 
+catalogs in batches with MPI parallelization. This is a simple implementation, 
+with no geometric corrections accounting for the curvature of the sky.
 """
 
 import numpy as np
@@ -24,7 +25,6 @@ from utils.pipeline_paths import (
     halo_indices_path as _halo_indices_path,
     resolve_halo_indices,
     halo_props_cache_path as _halo_props_cache_path,
-    is_massbin_config,
 )
 from colossus.halo import mass_defs, concentration
 from utils.sim_params import get_sim_params, require_sim_param
@@ -462,13 +462,11 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
     # Get paths from config
     paths = get_paths_from_config(config)
     
-    # Determine convergence mode from config
-    use_cache = is_massbin_config(config)
     cache_path = _halo_props_cache_path(config)
 
-    if use_cache and cache_path.exists():
+    if cache_path.exists():
         if rank == 0:
-            print(f"Massbin mode: loading halo data from cache {cache_path}")
+            print(f"Loading halo data from cache {cache_path}")
         all_data = load_halo_data_from_cache(cache_path)
         if rank == 0:
             print(f"✓ Successfully loaded {len(all_data['m200b'])} halo properties from cache")
@@ -483,7 +481,7 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
             print(f"Loading tau map from {paths['tau_map_path']}")
         tau_map = np.load(paths['tau_map_path'])
     else:
-        # ngal path (or massbin cache missing — fallback)
+        # no cache: load selected subset from source catalog
         halo_indices = resolve_halo_indices(config)
         if rank == 0:
             print(f"Loaded {len(halo_indices)} halo indices from halo_indices file.")

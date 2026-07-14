@@ -1,3 +1,10 @@
+"""
+This is a self-contained script for reconstructing the gas field from the DM 
+field using the HATF method. It handles both the Abacus and Flamingo branches 
+of the pipeline, computing or loading the necessary 2D projected fields, 
+Fourier transforms, transfer functions, and tau maps.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
@@ -26,56 +33,56 @@ from utils.pipeline_paths import (
     get_particle_file_path,
 )
 from utils.sim_params import get_sim_params
+from utils.plot_data import save_plot_data
 
 rcParams['font.family'] = 'serif'
 rcParams['font.serif'] = ['Computer Modern']
 rcParams['text.usetex'] = False
 
-SIM_NAME = 'abacus'
-SIM_PARAMS = get_sim_params(SIM_NAME)
+SIM_NAME = 'flamingo' # this defines the "branch" of the pipeline to run: 'abacus' or 'flamingo'
+SIM_PARAMS = get_sim_params(SIM_NAME) # pull default sim parameters
 
-FEEDBACK_MODE = 'fiducial'  # 'fiducial', 'strongest_AGN'
+FEEDBACK_MODE = 'strongest_AGN'  # 'fiducial', 'strongest_AGN'
 
-# Regime: determines which mass to use for selection
-regime = 'mhalo_sel'  # 'mhalo_sel' (halo mass) or 'mgal_sel' (stellar mass)
+# Regime: determines which mass to use for halo (galaxy) selection
+regime = 'mgal_sel'  # 'mhalo_sel' (halo mass) or 'mgal_sel' (stellar mass)
 
-# Central/satellite mode: determines filtering by central/satellite status
 if regime == 'mhalo_sel':
     cen_sat_mode = 'cen'          
-    mass_type = 'm200b'            # Use m200b for ranking
+    mass_type = 'm200b'             # Use m200b for ranking
     require_nonzero_mass = True
     upper_mass_cut = False
     upper_radius_cut = False
 elif regime == 'mgal_sel':
-    cen_sat_mode = 'cen'    
-    mass_type = 'm200b'           # Use stellar mass for ranking
-    require_nonzero_mass = True
-    upper_mass_cut = False
+    cen_sat_mode = 'mixed'    
+    mass_type = 'mstell'            # Use stellar mass for ranking
+    require_nonzero_mass = True     # Require nonzero stellar mass for selection
+    upper_mass_cut = False          # Apply m200b mass cut for satellites
     upper_radius_cut = False        # Apply r200 radius cut for satellites
 else:
     raise ValueError(f"Unknown regime: {regime}. Use 'mhalo_sel' or 'mgal_sel'.")
 
 # Selection method: determines how to select from ranked objects
 # To run either, set the other to None.
-halo_mass_range = [0, 1000]   
-n_gal_density = None   # (cMpc/h)^-3, mhalo_sel - 1.22e-3, mgal_sel - 2e-2, 
-                       # mixed with nonzero filter and upper cut 14 - 1.42e-3, 
-                       # satellites test uncut - 5.8e-3, satellites test with upper cut 14.2 - 6.6e-3, 
-                       # satellites test with upper cut 13.8 - 4.4e-3, 
-                       # mixed with nonzero filter and r200 cut - 7e-3
-                       # mfof selection - 7e-3
+halo_mass_range = None #[0, 1000]   
+n_gal_density = 5e-4   # (cMpc/h)^-3, 
+                       # for "sat" mode (to get the satellites of "mixed" mode):
+                       #         sf=0.1: 7.501e-05
+                       #         sf=0.2: 2.346e-04
+                       #         sf=0.3: 6.97e-04
 
 _convergence_mode = 'massbin' if (halo_mass_range is not None and n_gal_density is None) else 'ngal'
 
-# Target mean mass mode: if set, iteratively adjust selection to match this target log10(mean mass)
-target_mean_mass = 13.2  # 13.2 to target log10(<M>) = 13.2, or None to use fixed n_gal_density/halo_mass_bin
+# Target mean mass mode: if set, iteratively adjusts selection to match this target log10(mean mass).
+# If None, the selection is based on the fixed halo_mass_range or n_gal_density defined above.
+target_mean_mass = 13.2 # 13.2 to target log10(<M>) = 13.2 
 target_mass_tolerance = 0.005  # tolerance for convergence (in log10 units)
 mass_bin_halfwidth = 0.02  # ±dex span target for convergence
 mass_bin_halfwidth_tol = 0.001
 max_iterations = 1000  # maximum iterations for target mass matching
 
-# Satellite fraction for 'mixed' mode
-sat_frac = 0.10  # 0.00, 0.10, 0.20, 0.30 for the sweep experiment
+# Satellite fraction to be achieved in the 'mixed' mode
+sat_frac = 0.3  # 0.01, 0.10, 0.20, 0.30
 
 # Determine selection method for file naming
 if target_mean_mass is not None:
@@ -93,11 +100,11 @@ if SIM_NAME == 'abacus':
         raise ValueError(
             f"For sim='abacus', mass_type must be 'm200b' (mass-only catalog). Got: {mass_type}"
         )
-if cen_sat_mode in ('sat', 'mixed', 'cens_sat'):
-    raise ValueError(
-        f"For sim='abacus', cen_sat_mode='{cen_sat_mode}' is unsupported (no satellite labels available). "
-        "Use cen_sat_mode='cen' or None."
-    )
+    if cen_sat_mode in ('sat', 'mixed', 'cens_sat'):
+        raise ValueError(
+            f"For sim='abacus', cen_sat_mode='{cen_sat_mode}' is unsupported (no satellite labels available). "
+            "Use cen_sat_mode='cen' or None."
+        )
 
 dm_particles_file_abacus = get_particle_file_path(
     FEEDBACK_MODE,
@@ -138,6 +145,7 @@ _config = dict(
     n_gal_density=n_gal_density,
     halo_mass_range=halo_mass_range,
     target_mean_mass=target_mean_mass,
+    convergence_mode=_convergence_mode,
 )
 
 # Output directories
@@ -149,14 +157,8 @@ delta_fields_dir.mkdir(parents=True, exist_ok=True)
 _halo_idx_path_flamingo = _halo_indices_path(dict(_config, sim_name='flamingo'))
 _halo_idx_path_abacus = _halo_indices_path(dict(_config, sim_name='abacus')) if SIM_NAME == 'abacus' else None
 
-_halo_props_cache_path_flamingo = (
-    _halo_props_cache_path(dict(_config, sim_name='flamingo'))
-    if _convergence_mode == 'massbin' else None
-)
-_halo_props_cache_path_abacus = (
-    _halo_props_cache_path(dict(_config, sim_name='abacus'))
-    if (_convergence_mode == 'massbin' and SIM_NAME == 'abacus') else None
-)
+_halo_props_cache_path_flamingo = _halo_props_cache_path(dict(_config, sim_name='flamingo'))
+_halo_props_cache_path_abacus = _halo_props_cache_path(dict(_config, sim_name='abacus')) if SIM_NAME == 'abacus' else None
 
 print("="*60)
 print("Loading/computing 2D projected fields")
@@ -164,9 +166,11 @@ print(f"Regime: {regime} | Method: {method} | Mass type: {mass_type}")
 print("="*60)
 
 delta_2d_fields = {}
+total_mass_for_tau = None
 
 print("\nPreparing projected fields...")
 
+# For either branch, we need the FLAMINGO gas field for the transfer function construction
 gas_config = dict(_config)
 gas_config['sim_name'] = 'flamingo'
 gas_path = _delta_2d_path(gas_config, 'gas')
@@ -177,7 +181,7 @@ if gas_path.exists():
     print(f"  Loaded successfully. Shape: {delta_2d_fields['gas'].shape}")
 else:
     print("Gas field not found. Computing FLAMINGO gas field...")
-    delta_2d_fields['gas'], _ = compute_delta_field_and_mass(
+    delta_2d_fields['gas'], total_mass_for_tau = compute_delta_field_and_mass(
         field_type='gas',
         sim_name='flamingo',
         dm_particles_file=None,
@@ -196,7 +200,7 @@ if SIM_NAME == 'abacus':
 
     # DM field for Abacus
     abacus_dm_config = dict(_config)
-    abacus_dm_config['gas_type'] = 'strongest_AGN'  # Use the same DM field for both feedback modes since it's identical
+    abacus_dm_config['gas_type'] = 'strongest_AGN'  # Use the same DM field for both feedback modes since it's identical in Abacus
     abacus_dm_path = _delta_2d_path(abacus_dm_config, 'dm')
 
     if abacus_dm_path.exists():
@@ -205,7 +209,7 @@ if SIM_NAME == 'abacus':
         print(f"  Loaded successfully. Shape: {delta_2d_fields['dm'].shape}")
     else:
         print("DM field not found. Computing Abacus DM field...")
-        delta_2d_fields['dm'], _ = compute_delta_field_and_mass(
+        delta_2d_fields['dm'], total_mass_for_tau = compute_delta_field_and_mass(
             field_type='dm',
             sim_name='abacus',
             dm_particles_file=dm_particles_file_abacus,
@@ -230,10 +234,11 @@ if SIM_NAME == 'abacus':
         save_path=_delta_2d_path(_config, 'halos'),
         halo_indices_save_path=_halo_idx_path_abacus,
         halo_props_cache_save_path=_halo_props_cache_path_abacus,
-        convergence_mode=_convergence_mode,
         nthread=nthread,
     )
 
+    # In the Abacus branch we also require the FLAMINGO halo field for the transfer 
+    # function construction
     _config_flamingo = dict(_config)
     _config_flamingo['sim_name'] = 'flamingo'
 
@@ -246,12 +251,11 @@ if SIM_NAME == 'abacus':
         save_path=_delta_2d_path(_config_flamingo, 'halos'),
         halo_indices_save_path=_halo_idx_path_flamingo,
         halo_props_cache_save_path=_halo_props_cache_path_flamingo,
-        convergence_mode=_convergence_mode,
         nthread=nthread,
     )
     delta_2d_fields['halos'] = delta_2d_fields['halos_abacus']
 
-    # FLAMINGO DM field used for the transfer-function construction
+    # We also need the FLAMINGO DM field for the transfer function construction
     flamingo_dm_path = _delta_2d_path(_config_flamingo, 'dm')
     if flamingo_dm_path.exists():
         print(f"Loading dm_flamingo field from {flamingo_dm_path}...")
@@ -309,7 +313,6 @@ else:
         save_path=_delta_2d_path(_config, 'halos'),
         halo_indices_save_path=_halo_idx_path_flamingo,
         halo_props_cache_save_path=_halo_props_cache_path_flamingo,
-        convergence_mode=_convergence_mode,
         nthread=nthread,
     )
 
@@ -379,6 +382,15 @@ if SIM_NAME == 'abacus':
     plt.savefig(p_ps_cmp, bbox_inches='tight', dpi=300)
     plt.close()
     print(f"Saved: {p_ps_cmp}")
+    # Save plot data bundle
+    save_plot_data(p_ps_cmp, {
+        'flamingo_k_center': flamingo_k_center,
+        'flamingo_T_k_1d': flamingo_T_k_1d,
+        'k_center': k_center,
+        'T_k_1d': T_k_1d,
+        'k_Nyquist_gas': k_Nyquist_gas,
+        'k_Nyquist_dm': k_Nyquist_dm,
+    }, description='Transfer Function: FLAMINGO to Abacus extrapolation')
 
     # Keep FFT intermediates in cache for diagnostics reuse.
     del flamingo_T_k_1d
@@ -442,33 +454,12 @@ if prefactor_path.exists():
 else:
     # Compute prefactor
     print(f"\nPrefactor not found. Computing from particle data...")
+
+    prefactor = compute_prefactor(
+            total_baryon_mass=total_mass_for_tau,
+            sim_params=SIM_PARAMS,
+        )
     
-    if SIM_NAME == 'flamingo':
-
-        gas_particles = load_particle_properties(
-            gas_particles_file_flamingo,
-            'gas',
-            requested=('mass',),
-            sim_name='flamingo',
-        )
-        if gas_particles is None:
-            raise RuntimeError('Failed to load gas particle properties for prefactor computation')
-        gas_masses = gas_particles['mass']
-
-        prefactor = compute_prefactor(
-            total_baryon_mass=np.sum(gas_masses),
-            sim_params=SIM_PARAMS,
-        )
-        
-        del gas_particles, gas_masses
-        gc.collect()
-
-    else:
-        prefactor = compute_prefactor(
-            total_baryon_mass=None,
-            sim_params=SIM_PARAMS,
-        )
-
     # Save prefactor
     np.save(prefactor_path, prefactor)
     print(f"  Prefactor computed and saved: {prefactor:.6e}")
@@ -525,40 +516,6 @@ if SIM_NAME == 'abacus':
     
     abacus_P_dm_halos_binned = np.array(abacus_P_dm_halos_binned) * box_dm ** 2
 
-    plt.figure(figsize=(6, 4), dpi=300)
-    plt.loglog(flamingo_k_center, flamingo_P_gas_halos_binned * box_gas, c='blue', alpha=0.7, linewidth=1,
-               label='FLAMINGO true $P^{gas,halo}$')
-    plt.loglog(k_center, abacus_P_gas_halos_binned * box_dm, c='red', alpha=0.7, linewidth=1,
-               label='Abacus reconstructed $P^{gas,halo}$')
-    plt.axvline(np.pi * ngrid_gas / box_gas, c='blue', linestyle='--', linewidth=1.0, label='$k_{Nyquist}^{gas}$')
-    plt.axvline(np.pi * ngrid_dm / box_dm, c='red', linestyle='--', linewidth=1.0, label='$k_{Nyquist}^{dm}$')
-    plt.xlabel('$k$ [h/cMpc]', fontsize=12)
-    plt.ylabel(r'$P^{gas,halo}(k)\,L_{\rm box}$', fontsize=12)
-    plt.title('Cross Power Spectrum: Gas-Halo (Abacus branch)', fontsize=14)
-    plt.legend(fontsize=8)
-    p1 = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_gas_halo_{sel_tag}_abacus_native')
-    ensure_parents(p1)
-    plt.savefig(p1, bbox_inches='tight', dpi=300)
-    plt.close()
-    print(f"Saved: {p1}")
-
-    plt.figure(figsize=(6, 4), dpi=300)
-    plt.loglog(flamingo_k_center, flamingo_P_dm_halos_binned * box_gas, c='blue', alpha=0.7, linewidth=1,
-               label='FLAMINGO $P^{dm,halo}$')
-    plt.loglog(k_center, abacus_P_dm_halos_binned * box_dm, c='red', alpha=0.7, linewidth=1,
-               label='Abacus $P^{dm,halo}$')
-    plt.axvline(np.pi * ngrid_gas / box_gas, c='blue', linestyle='--', linewidth=1.0, label='$k_{Nyquist}^{gas}$')
-    plt.axvline(np.pi * ngrid_dm / box_dm, c='red', linestyle='--', linewidth=1.0, label='$k_{Nyquist}^{dm}$')
-    plt.xlabel('$k$ [h/cMpc]', fontsize=12)
-    plt.ylabel(r'$P^{dm,halo}(k)\,L_{\rm box}$', fontsize=12)
-    plt.title('Cross Power Spectrum: DM-Halo (Abacus branch)', fontsize=14)
-    plt.legend(fontsize=8)
-    p1_dm = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_dm_halo_{sel_tag}_abacus_native')
-    ensure_parents(p1_dm)
-    plt.savefig(p1_dm, bbox_inches='tight', dpi=300)
-    plt.close()
-    print(f"Saved: {p1_dm}")
-
     _, _, P_gas_gas_target_binned = bin_power_spectrum_2d(
         (gas_field_fft_target * np.conj(gas_field_fft_target)).real, 
          k_grid_gas_target, 
@@ -589,33 +546,108 @@ if SIM_NAME == 'abacus':
     P_dm_dm_foundation_binned = np.array(P_dm_dm_foundation_binned) * box_dm ** 2
     flamingo_P_dm_dm_binned = np.array(flamingo_P_dm_dm_binned) * box_gas ** 2
 
-    plt.figure(figsize=(6, 4), dpi=300)
-    plt.loglog(flamingo_k_center, P_gas_gas_target_binned * box_gas, c='blue', alpha=0.7, linewidth=1, label='FLAMINGO $P^{gas,gas}$')
-    plt.loglog(k_center, P_gas_gas_reconstructed_binned * box_dm, c='red', alpha=0.7, linewidth=1, label='Reconstructed $P^{gas,gas}$')
-    plt.axvline(k_Nyquist, c='red', linestyle='--', label='$k_{Nyquist}^{dm}$')
-    plt.xlabel('$k$ [h/cMpc]', fontsize=12)
-    plt.ylabel(r'$P^{gas,gas}(k)\,L_{\rm box}$', fontsize=12)
-    plt.title('Auto Power Spectrum: Gas (Abacus branch)', fontsize=14)
-    plt.legend()
-    p2 = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_gas_auto_{sel_tag}_abacus')
-    ensure_parents(p2)
-    plt.savefig(p2, bbox_inches='tight', dpi=300)
+    # Publication-quality 1x2 plots for Gas
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), dpi=300)
+    
+    # Left: Cross Power Spectrum Gas-Halo
+    axes[0].loglog(flamingo_k_center, flamingo_P_gas_halos_binned * box_gas, c='blue', alpha=0.7, linewidth=2,
+                   label=r'True $C_{gas,\,halo}$')
+    axes[0].loglog(k_center, abacus_P_gas_halos_binned * box_dm, c='red', alpha=0.7, linewidth=2,
+                   label=r'Reconstructed $\tilde C_{gas,\,halo}$')
+    axes[0].axvline(np.pi * ngrid_gas / box_gas, c='blue', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[0].axvline(np.pi * ngrid_dm / box_dm, c='red', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[0].set_xlabel('$k$ [h/cMpc]', fontsize=13)
+    axes[0].set_ylabel(r'$\hat C_{gas,\,halo}(k)\,L_{\rm box}$', fontsize=13)
+    axes[0].legend(fontsize=11, loc='best')
+    
+    # Right: Auto Power Spectrum Gas-Gas
+    axes[1].loglog(flamingo_k_center, P_gas_gas_target_binned * box_gas, c='blue', alpha=0.7, linewidth=2,
+                   label=r'True $C_{gas,\,gas}$')
+    axes[1].loglog(k_center, P_gas_gas_reconstructed_binned * box_dm, c='red', alpha=0.7, linewidth=2,
+                   label=r'Reconstructed $\tilde C_{gas,\,gas}$')
+    axes[1].axvline(np.pi * ngrid_gas / box_gas, c='blue', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[1].axvline(np.pi * ngrid_dm / box_dm, c='red', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[1].set_xlabel('$k$ [h/cMpc]', fontsize=13)
+    axes[1].set_ylabel(r'$\hat C_{gas,\,gas}(k)\,L_{\rm box}$', fontsize=13)
+    axes[1].legend(fontsize=11, loc='best')
+    
+    plt.tight_layout()
+    p_gas = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_gas_combined_{sel_tag}_abacus')
+    ensure_parents(p_gas)
+    plt.savefig(p_gas, bbox_inches='tight', dpi=300, format='pdf')
     plt.close()
-    print(f"Saved: {p2}")
+    print(f"Saved: {p_gas}")
+    # Save plot data bundle
+    save_plot_data(p_gas, {
+        'flamingo_k_center': flamingo_k_center,
+        'P_gas_halos_target_binned': flamingo_P_gas_halos_binned,
+        'P_gas_halos_reconstructed_binned': abacus_P_gas_halos_binned,
+        'P_gas_gas_target_binned': P_gas_gas_target_binned,
+        'P_gas_gas_reconstructed_binned': P_gas_gas_reconstructed_binned,
+        'k_center': k_center,
+        'box_gas': box_gas,
+        'box_dm': box_dm,
+        'ngrid_gas': ngrid_gas,
+        'ngrid_dm': ngrid_dm,
+    }, description='Gas Power Spectra Comparison (Abacus vs Flamingo-reconstructed)')
 
-    plt.figure(figsize=(6, 4), dpi=300)
-    plt.loglog(flamingo_k_center, flamingo_P_dm_dm_binned * box_gas, c='blue', alpha=0.7, linewidth=1, label='FLAMINGO $P^{dm,dm}$')
-    plt.loglog(k_center, P_dm_dm_foundation_binned * box_dm, c='red', alpha=0.7, linewidth=1, label='Abacus $P^{dm,dm}$')
-    plt.axvline(k_Nyquist, c='red', linestyle='--', label='$k_{Nyquist}^{dm}$')
-    plt.xlabel('$k$ [h/cMpc]', fontsize=12)
-    plt.ylabel(r'$P^{dm,dm}(k)\,L_{\rm box}$', fontsize=12)
-    plt.title('Auto Power Spectrum: DM (Abacus branch)', fontsize=14)
-    plt.legend()
-    p2_dm = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_dm_auto_{sel_tag}_abacus')
-    ensure_parents(p2_dm)
-    plt.savefig(p2_dm, bbox_inches='tight', dpi=300)
+    # Publication-quality 1x2 plots for DM
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), dpi=300)
+    
+    # Left: Cross Power Spectrum DM-Halo
+    axes[0].loglog(flamingo_k_center, flamingo_P_dm_halos_binned * box_gas, c='blue', alpha=0.7, linewidth=2,
+                   label=r'FLAMINGO $C_{dm,\,halo}$')
+    axes[0].loglog(k_center, abacus_P_dm_halos_binned * box_dm, c='red', alpha=0.7, linewidth=2,
+                   label=r'Abacus $C_{dm,\,halo}$')
+    axes[0].axvline(np.pi * ngrid_gas / box_gas, c='blue', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[0].axvline(np.pi * ngrid_dm / box_dm, c='red', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[0].set_xlabel('$k$ [h/cMpc]', fontsize=13)
+    axes[0].set_ylabel(r'$\hat C_{dm,\,halo}(k)\,L_{\rm box}$', fontsize=13)
+    axes[0].legend(fontsize=11, loc='best')
+    
+    # Right: Auto Power Spectrum DM-DM
+    axes[1].loglog(flamingo_k_center, flamingo_P_dm_dm_binned * box_gas, c='blue', alpha=0.7, linewidth=2,
+                   label=r'FLAMINGO $C_{dm,\,dm}$')
+    axes[1].loglog(k_center, P_dm_dm_foundation_binned * box_dm, c='red', alpha=0.7, linewidth=2,
+                   label=r'Abacus $C_{dm,\,dm}$')
+    axes[1].axvline(np.pi * ngrid_gas / box_gas, c='blue', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[1].axvline(np.pi * ngrid_dm / box_dm, c='red', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[1].set_xlabel('$k$ [h/cMpc]', fontsize=13)
+    axes[1].set_ylabel(r'$\hat C_{dm,\,dm}(k)\,L_{\rm box}$', fontsize=13)
+    axes[1].legend(fontsize=11, loc='best')
+    
+    plt.tight_layout()
+    p_dm = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_dm_combined_{sel_tag}_abacus')
+    ensure_parents(p_dm)
+    plt.savefig(p_dm, bbox_inches='tight', dpi=300, format='pdf')
     plt.close()
-    print(f"Saved: {p2_dm}")
+    print(f"Saved: {p_dm}")
+    # Save plot data bundle
+    save_plot_data(p_dm, {
+        'flamingo_k_center': flamingo_k_center,
+        'flamingo_P_dm_halos_binned': flamingo_P_dm_halos_binned,
+        'abacus_P_dm_halos_binned': abacus_P_dm_halos_binned,
+        'flamingo_P_dm_dm_binned': flamingo_P_dm_dm_binned,
+        'P_dm_dm_foundation_binned': P_dm_dm_foundation_binned,
+        'k_center': k_center,
+        'box_gas': box_gas,
+        'box_dm': box_dm,
+        'ngrid_gas': ngrid_gas,
+        'ngrid_dm': ngrid_dm,
+    }, description='Dark Matter Power Spectra Comparison (Abacus vs Flamingo)')
+    
+    # Save tau map for Abacus branch
+    print("\nSaving tau map for Abacus branch...")
+    tau_bundle_path = plot_path('hatf/tau_maps', FEEDBACK_MODE, stem=f'tau_map_{sel_tag}')
+    tau_bundle_path = tau_bundle_path.with_suffix('.npz')
+    ensure_parents(tau_bundle_path)
+    np.savez_compressed(
+        tau_bundle_path,
+        tau_map_reconstructed=tau_xy_map,
+        ngrid_dm=ngrid_dm,
+        box_dm=box_dm,
+    )
+    print(f"Saved: {tau_bundle_path}")
 
 else:
     print("\n--- FLAMINGO diagnostics branch ---")
@@ -628,21 +660,6 @@ else:
     )
 
     P_gas_halos_reconstructed_binned = np.array(P_gas_halos_reconstructed_binned) * box_dm ** 2
-
-    # Plot 1: P^gas,halo comparison
-    plt.figure(figsize=(6, 4), dpi=300)
-    plt.loglog(k_center, P_gas_halos_target_binned * box_dm, c='blue', alpha=0.7, linewidth=1, label='True $P^{gas,halo}$')
-    plt.loglog(k_center, P_gas_halos_reconstructed_binned * box_dm, c='red', alpha=0.7, linewidth=1, label='Reconstructed $P^{gas,halo}$')
-    plt.axvline(k_Nyquist, c='blue', linestyle='--', label='$k_{Nyquist}$')
-    plt.xlabel('$k$ [h/cMpc]', fontsize=12)
-    plt.ylabel(r'$P^{gas,halo}(k)\,L_{\rm box}$', fontsize=12)
-    plt.title('Cross Power Spectrum: Gas-Halo', fontsize=14)
-    plt.legend()
-    p1 = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_gas_halo_{sel_tag}')
-    ensure_parents(p1)
-    plt.savefig(p1, bbox_inches='tight', dpi=300)
-    plt.close()
-    print(f"Saved: {p1}")
 
     print("\nComputing auto power spectra P^gas,gas and P^dm,dm...")
 
@@ -665,61 +682,118 @@ else:
         ngrid_dm,
         box_dm,
     )
+    
+    _, _, P_dm_halos_foundation_binned = bin_power_spectrum_2d(
+        (dm_field_fft_foundation * np.conj(halo_field_fft)).real,
+        k_grid_dm_foundation,
+        ngrid_dm,
+        box_dm,
+    )
 
     P_gas_gas_target_binned = np.array(P_gas_gas_target_binned) * box_gas ** 2
     P_gas_gas_reconstructed_binned = np.array(P_gas_gas_reconstructed_binned) * box_dm ** 2
     P_dm_dm_foundation_binned = np.array(P_dm_dm_foundation_binned) * box_dm ** 2
+    P_dm_halos_foundation_binned = np.array(P_dm_halos_foundation_binned) * box_dm ** 2
 
-    # Plot 2: P^gas,gas comparison
-    plt.figure(figsize=(6, 4), dpi=300)
-    plt.loglog(k_center, P_gas_gas_target_binned * box_gas, c='blue', alpha=0.7, linewidth=1, label='True $P^{gas,gas}$')
-    plt.loglog(k_center, P_gas_gas_reconstructed_binned * box_dm, c='red', alpha=0.7, linewidth=1, label='Reconstructed $P^{gas,gas}$')
-    plt.axvline(k_Nyquist, c='blue', linestyle='--', label='$k_{Nyquist}$')
-    plt.xlabel('$k$ [h/cMpc]', fontsize=12)
-    plt.ylabel(r'$P^{gas,gas}(k)\,L_{\rm box}$', fontsize=12)
-    plt.title('Auto Power Spectrum: Gas', fontsize=14)
-    plt.legend()
-    p2 = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_gas_auto_{sel_tag}')
-    ensure_parents(p2)
-    plt.savefig(p2, bbox_inches='tight', dpi=300)
+    # Publication-quality 1x2 plots for Gas
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), dpi=300)
+    
+    # Left: Cross Power Spectrum Gas-Halo
+    axes[0].loglog(k_center, P_gas_halos_target_binned * box_dm, c='blue', alpha=0.7, linewidth=2,
+                   label=r'True $C_{gas,\,halo}$')
+    axes[0].loglog(k_center, P_gas_halos_reconstructed_binned * box_dm, c='red', alpha=0.7, linewidth=2,
+                   label=r'Reconstructed $\tilde C_{gas,\,halo}$')
+    axes[0].axvline(k_Nyquist, c='blue', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[0].set_xlabel('$k$ [h/cMpc]', fontsize=13)
+    axes[0].set_ylabel(r'$\hat C_{gas,\,halo}(k)\,L_{\rm box}$', fontsize=13)
+    axes[0].legend(fontsize=11, loc='best')
+    
+    # Right: Auto Power Spectrum Gas-Gas
+    axes[1].loglog(k_center, P_gas_gas_target_binned * box_gas, c='blue', alpha=0.7, linewidth=2,
+                   label=r'True $C_{gas,\,gas}$')
+    axes[1].loglog(k_center, P_gas_gas_reconstructed_binned * box_dm, c='red', alpha=0.7, linewidth=2,
+                   label=r'Reconstructed $\tilde C_{gas,\,gas}$')
+    axes[1].axvline(k_Nyquist, c='blue', linestyle='--', linewidth=1.5, alpha=0.6)
+    axes[1].set_xlabel('$k$ [h/cMpc]', fontsize=13)
+    axes[1].set_ylabel(r'$\hat C_{gas,\,gas}(k)\,L_{\rm box}$', fontsize=13)
+    axes[1].legend(fontsize=11, loc='best')
+    
+    plt.tight_layout()
+    p_gas = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_gas_combined_{sel_tag}')
+    ensure_parents(p_gas)
+    plt.savefig(p_gas, bbox_inches='tight', dpi=300, format='pdf')
     plt.close()
-    print(f"Saved: {p2}")
-
-    # Plot 2: Cross-correlation between reconstructed and true gas fields
-    _, _, P_cross_reconstructed_target_binned = bin_power_spectrum_2d(
-        (gas_field_fft_reconstructed * np.conj(gas_field_fft_target)).real,
-        k_grid_gas_target,
-        ngrid_gas,
-        box_gas,
+    print(f"Saved: {p_gas}")
+    # Save plot data bundle
+    save_plot_data(p_gas, {
+        'k_center': k_center,
+        'P_gas_halos_target_binned': P_gas_halos_target_binned,
+        'P_gas_halos_reconstructed_binned': P_gas_halos_reconstructed_binned,
+        'P_gas_gas_target_binned': P_gas_gas_target_binned,
+        'P_gas_gas_reconstructed_binned': P_gas_gas_reconstructed_binned,
+        'k_Nyquist': k_Nyquist,
+        'box_dm': box_dm,
+        'box_gas': box_gas,
+    }, description='Gas Power Spectra (FLAMINGO diagnostics)')
+    
+    # Save tau maps for FLAMINGO branch
+    print("\nSaving tau maps for FLAMINGO branch...")
+    gas_field_target = np.fft.irfft2(gas_field_fft_target) * (ngrid_gas ** 2)
+    tau_map_target = prefactor * (1.0 + gas_field_target) * ngrid_gas
+    tau_map_reconstructed = prefactor * (1.0 + gas_field_reconstructed) * ngrid_dm
+    
+    tau_bundle_path = plot_path('hatf/tau_maps', FEEDBACK_MODE, stem=f'tau_maps_{sel_tag}')
+    tau_bundle_path = tau_bundle_path.with_suffix('.npz')
+    ensure_parents(tau_bundle_path)
+    np.savez_compressed(
+        tau_bundle_path,
+        tau_map_target=tau_map_target,
+        tau_map_reconstructed=tau_map_reconstructed,
+        ngrid_gas=ngrid_gas,
+        ngrid_dm=ngrid_dm,
+        box_gas=box_gas,
+        box_dm=box_dm,
     )
-    P_cross_reconstructed_target_binned = np.array(P_cross_reconstructed_target_binned) * box_gas ** 2
+    print(f"Saved: {tau_bundle_path}")
 
-    # Cross-correlation coefficient
-    r_reconstructed_vs_target = P_cross_reconstructed_target_binned / np.sqrt(P_gas_gas_reconstructed_binned * P_gas_gas_target_binned)
+# Plot 3: Cross-correlation between reconstructed and true gas fields (for both branches)
+_, _, P_cross_reconstructed_target_binned = bin_power_spectrum_2d(
+    (gas_field_fft_reconstructed * np.conj(gas_field_fft_target)).real,
+    k_grid_gas_target,
+    ngrid_gas,
+    box_gas,
+)
+P_cross_reconstructed_target_binned = np.array(P_cross_reconstructed_target_binned) * box_gas ** 2
 
-    plt.figure(figsize=(6, 4), dpi=300)
-    plt.semilogx(k_center, r_reconstructed_vs_target, c='red', alpha=0.7, label='Reconstructed vs Target Gas')
-    plt.axhline(1.0, c='grey', linestyle='--', label='Perfect Correlation')
-    plt.axvline(k_Nyquist, c='blue', linestyle='--', label='$k_{Nyquist}$')
-    plt.xlabel('$k$ [h/cMpc]', fontsize=12)
-    plt.ylabel('$r(k)$', fontsize=12)
-    plt.title('Cross-Correlation Coefficient', fontsize=14)
-    plt.ylim([0, 1.1])
-    plt.legend()
-    p_corr = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'r_recon_vs_true_{sel_tag}')
-    ensure_parents(p_corr)
-    plt.savefig(p_corr, bbox_inches='tight', dpi=300)
-    plt.close()
-    print(f"Saved: {p_corr}")
+# Cross-correlation coefficient
+r_reconstructed_vs_target = P_cross_reconstructed_target_binned / np.sqrt(P_gas_gas_reconstructed_binned * P_gas_gas_target_binned)
 
-# ============================================================================
-# OPTIONAL: PLOT T'(k) vs T(k) = T_old(k) * (1 + Ak^2)
-# ============================================================================
-plot_comparison = False  # Set to False to skip this step
+plt.figure(figsize=(7, 5), dpi=300)
+plt.semilogx(k_center, r_reconstructed_vs_target, c='red', alpha=0.8, linewidth=2.5)
+plt.axhline(1.0, c='grey', linestyle='--', linewidth=2, label='Perfect Correlation')
+plt.axvline(k_Nyquist, c='blue', linestyle='--', linewidth=1.5, label='$k_{Nyquist}$')
+plt.xlabel('$k$ [h/cMpc]', fontsize=13)
+plt.ylabel('$r(k)$', fontsize=13)
+plt.ylim([0, 1.1])
+plt.legend(fontsize=11)
+p_corr = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'r_recon_vs_true_{sel_tag}')
+ensure_parents(p_corr)
+plt.savefig(p_corr, bbox_inches='tight', dpi=300, format='pdf')
+plt.close()
+print(f"Saved: {p_corr}")
+# Save plot data bundle
+save_plot_data(p_corr, {
+    'k_center': k_center,
+    'r_reconstructed_vs_target': r_reconstructed_vs_target,
+    'k_Nyquist': k_Nyquist,
+}, description='Cross-correlation between reconstructed and true gas fields')
+
+# OPTIONAL: Plotting of transfer function comparison with mass-dependent correction
+plot_comparison = True  # Set to False to skip this step
 
 if plot_comparison:
     print("\n" + "="*60)
-    print("Plotting T'(k) vs T(k) with mass-dependent correction")
+    print("Plotting Transfer Function Comparison")
     print("="*60)
     
     # Set A parameter
@@ -773,9 +847,9 @@ if plot_comparison:
     # Create plot
     fig, ax = plt.subplots(figsize=(10, 7))
     
-    ax.loglog(k_center, T_k_new_binned, c='blue', linewidth=2, label=r"$T'(k) = P^{gas,halo} / P^{dm,halo}$")
+    ax.loglog(k_center, T_k_new_binned, c='blue', linewidth=2, label=r"$T'(k) = \hat C_{gas\,halo} / \hat C_{dm\,halo}$")
     ax.loglog(k_center, T_k_old_binned, c='green', linewidth=2, linestyle='-.', 
-              label=r"$T_{\rm old}(k) = \sqrt{P^{gas,gas} / P^{dm,dm}}$")
+              label=r"$T_{\rm old}(k) = \sqrt{\hat C_{gas\,gas} / \hat C_{dm\,dm}}$")
     ax.loglog(k_center, T_k_massdep_binned, c='red', linewidth=2, linestyle='--', 
               label=r"$T(k) = T_{\rm old}(k) \times (1 + Ak^2)$")
     ax.loglog(k_center, one_plus_Ak2_binned, c='orange', linewidth=2, linestyle=':', 
@@ -786,7 +860,6 @@ if plot_comparison:
     
     ax.set_xlabel(r'$k$ [h/cMpc]', fontsize=14)
     ax.set_ylabel(r"Transfer Function", fontsize=14)
-    ax.set_title(r"Comparison: New vs Mass-Dependent Transfer Functions (A1 = {:.5f}, A2 = {:.7f})".format(A1, A2), fontsize=16)
     ax.legend(fontsize=12)
     
     # Save plot
@@ -795,6 +868,13 @@ if plot_comparison:
     plt.savefig(p3, dpi=300, bbox_inches='tight')
     print(f"\nSaved: {p3}")
     plt.close()
+    # Save plot data bundle
+    save_plot_data(p3, {
+        'k_center': k_center,
+        'T_k_1d': T_k_new_binned,
+        'box_dm': box_dm,
+        'ngrid_dm': ngrid_dm,
+    }, description='Transfer function comparison')
 
 print("\n" + "="*60)
 print("Reconstruction completed successfully!")

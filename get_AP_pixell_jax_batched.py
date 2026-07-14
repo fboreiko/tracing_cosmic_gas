@@ -1,10 +1,11 @@
 """
-Advanced JAX implementation with full batch processing and MPI parallelization.
-
-This version extracts and processes multiple stamps simultaneously,
-maximizing GPU utilization for even better performance.
-MPI parallelization distributes halos across multiple processes/GPUs.
+Advanced implementation of aperture photometry in JAX with MPI parallelization.
+This version supports geometric corrections for the curvature of the sky
+through the "cea" projection option. Default is set to "car", which is a simple 
+Cartesian projection, following the get_AP_simple approach, because tests show 
+that the difference is negligible. Still worth keeping the option for future use.
 """
+
 import os
 import gc
 import numpy as np
@@ -12,12 +13,21 @@ from pixell import enmap, utils, enplot
 from astropy.cosmology import FlatLambdaCDM
 import astropy.units as u
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 import jax
 import jax.numpy as jnp
 from jax import vmap, jit
 import sys
 sys.path.insert(0, '/home/fb635/fedirfiles/tracing_cosmic_gas')
-from utils import *
+from utils.tools import (
+    cutoutGeometry,
+    bilinear_interpolate_batch,
+    extractStamp_jax,
+    compute_all_apertures_jax,
+    build_aperture_templates_jax,
+)
+from utils.rotfuncs import recenter
 from utils.pipeline_paths import (
     get_halo_file_path,
     tau_map_path as _tau_map_path,
@@ -25,7 +35,6 @@ from utils.pipeline_paths import (
     halo_indices_path as _halo_indices_path,
     resolve_halo_indices,
     halo_props_cache_path as _halo_props_cache_path,
-    is_massbin_config,
 )
 from utils.catalog_loaders import load_halo_properties
 from utils.sim_params import get_sim_params, require_sim_param
@@ -227,7 +236,7 @@ def compute_apertures_batch(stamps_batch, inners, outers, r_comoving_mpc):
     return tau_inners, tau_outers
 
 
-def prepare_pixel_coordinates_batch(stamp_template, ras, decs, cmbMap):
+def prepare_pixel_coordinates_batch(stamp_template, ras, decs, cmbMap, theta_arcmins=None):
     """
     Prepare pixel coordinates for a batch of positions.
     
@@ -249,9 +258,9 @@ def prepare_pixel_coordinates_batch(stamp_template, ras, decs, cmbMap):
         coords_batch[i] = pix_coords
 
         #HERE I BUTCHER TO PLOT
-        stamp_template[:, :] = cmbMap.at(ipos, order=1)
-        plots = enplot.plot(enmap.upgrade(stamp_template, 5), grid=True)
-        enplot.write(f"plt_ra_{ra:.2f}_dec_{dec:.2f}.png", plots)
+        #stamp_template[:, :] = cmbMap.at(ipos, order=1)
+        #plots = enplot.plot(enmap.upgrade(stamp_template, 5), grid=True)        
+        #enplot.write(f"plots/temporary_plots_pixell/plt_ra_{ra:.2f}_dec_{dec:.2f}.png", plots)
     
     return coords_batch
 
@@ -359,7 +368,7 @@ def run_batched_aperture_photometry(
         
         # Prepare pixel coordinates
         coords_batch = prepare_pixel_coordinates_batch(
-            stamp_template, ras_batch, decs_batch, tau_xy_map
+            stamp_template, ras_batch, decs_batch, tau_xy_map, theta_arcmins
         )
         coords_batch_jax = jnp.array(coords_batch)
         
@@ -428,13 +437,11 @@ def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6
     # Get paths from config
     paths = get_paths_from_config(config)
     
-    # Determine convergence mode from config
-    use_cache = is_massbin_config(config)
     cache_path = _halo_props_cache_path(config)
 
-    if use_cache and cache_path.exists():
+    if cache_path.exists():
         if rank == 0:
-            print(f"massbin mode: loading halo data from cache {cache_path}")
+            print(f"loading halo data from cache {cache_path}")
         all_data = load_halo_data_from_cache(cache_path)
         
         inds_sub = resolve_halo_indices(config)
@@ -442,7 +449,7 @@ def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6
         gc.collect()
         tau_map = np.load(paths['tau_map_path'])
     else:
-        # ngal path (or massbin cache missing — fallback)
+        # no cache: load selected subset from source catalog
         inds_sub = resolve_halo_indices(config)
         if rank == 0:
             print(f"Loaded {len(inds_sub)} halo indices from halo_indices file.")

@@ -6,8 +6,8 @@ import numpy as np
 from pathlib import Path
 
 # Root paths — edit once here if directories change
-DATA_ROOT = Path("/home/fb635/fedirfiles/tracing_cosmic_gas/data")
-PLOT_ROOT = Path("/home/fb635/fedirfiles/tracing_cosmic_gas/plots")
+DATA_ROOT = Path("/Users/fedorboreiko/Documents/Cambridge/project_github/data")
+PLOT_ROOT = Path("//Users/fedorboreiko/Documents/Cambridge/project_github/plots")
 FLAMINGO_ROOT = Path("/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO")
 ABACUS_ROOT = Path("/home/fb635/rds/hpc-work/tracing_cosmic_gas/abacus")
 
@@ -125,7 +125,10 @@ def _selection_tag(config: dict) -> str:
     urc = config.get('upper_radius_cut', False)
     parts.append("urc" if urc else "nourc")
 
-    if mode == 'mixed':
+    cmode = config.get('convergence_mode', 'ngal')
+    parts.append(f"cmode_{cmode}")
+
+    if mode == 'mixed' or mode == 'sat':
         sf = config.get('sat_frac', 0.10)
         parts.append(f"sf{int(round(sf * 100)):02d}")
 
@@ -197,34 +200,6 @@ def halo_indices_path(config: dict) -> Path:
     gas_type = config["gas_type"].replace("_reconstructed", "")
     sel_tag  = _selection_tag(config)
     return _sim_data_root(sim_name) / "halo_indices" / f"halo_indices_{gas_type}{sel_tag}.npy"
-
-
-def is_massbin_config(config: dict) -> bool:
-    """
-    Return True iff this config was produced by massbin convergence.
-
-    Massbin mode is identified by either:
-    1. halo_mass_range being set (not None) and n_gal_density being absent or None, OR
-    2. convergence_mode being explicitly set to 'massbin'
-
-    This mirrors the logic in HATF_reconstruction.py where `method == 'massbin'`.
-    
-    Args:
-        config: Configuration dictionary
-        convergence_mode: Optional convergence mode (if None, will be read from config)
-    """
-    
-    try: 
-        convergence_mode = config.get('convergence_mode')
-    except:
-        convergence_mode = None
-
-    return (
-        convergence_mode == 'massbin'
-        or (config.get('halo_mass_range') is not None
-            and config.get('n_gal_density') is None)
-    )
-
 
 def halo_props_cache_path(config: dict) -> Path:
     """
@@ -349,10 +324,10 @@ def plot_path(category: str, *subdirs: str, stem: str) -> Path:
         stem:      filename without extension.
 
     Returns:
-        Path object ending in <stem>.png
+        Path object ending in <stem>.pdf
     """
     parts = [p for p in subdirs if p is not None]
-    return PLOT_ROOT / category / Path(*parts) / f"{stem}.png"
+    return PLOT_ROOT / category / Path(*parts) / f"{stem}.pdf"
 
 
 # Utility
