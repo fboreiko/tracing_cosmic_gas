@@ -1,3 +1,4 @@
+import functools
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -27,7 +28,7 @@ def rotmatrix(ang, raxis, axis=0):
 	else: raise ValueError("Rotation axis %s not recognized" % raxis)
 	return moveaxis(R, 0, axis)
 
-@jax.jit
+@functools.partial(jax.jit, static_argnames=('raxis_idx',))
 def rotmatrix_jax(ang, raxis_idx):
     """
     JAX-compiled rotation matrix.
@@ -104,7 +105,7 @@ def ang2rect(angs, zenith=True, axis=0):
 	else:      res = np.array([ct*cp,ct*sp,st])
 	return moveaxis(res, 0, axis)
 
-@jax.jit
+@functools.partial(jax.jit, static_argnames=('zenith',))
 def ang2rect_jax(angs, zenith=True):
     """
     JAX-compiled conversion from angles to cartesian coordinates.
@@ -137,7 +138,7 @@ def rect2ang(rect, zenith=True, axis=0):
 	else:      theta = np.arctan2(z,r)
 	return moveaxis(np.array([phi,theta]), 0, axis)
 
-@jax.jit
+@functools.partial(jax.jit, static_argnames=('zenith',))
 def rect2ang_jax(rect, zenith=True):
     """
     JAX-compiled conversion from cartesian to angles.

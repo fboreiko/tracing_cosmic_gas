@@ -7,7 +7,7 @@ from pathlib import Path
 
 # Root paths — edit once here if directories change
 DATA_ROOT = Path("/Users/fedorboreiko/Documents/Cambridge/project_github/data")
-PLOT_ROOT = Path("//Users/fedorboreiko/Documents/Cambridge/project_github/plots")
+PLOT_ROOT = Path("/Users/fedorboreiko/Documents/Cambridge/project_github/plots")
 FLAMINGO_ROOT = Path("/home/fb635/rds/hpc-work/tracing_cosmic_gas/FLAMINGO")
 ABACUS_ROOT = Path("/home/fb635/rds/hpc-work/tracing_cosmic_gas/abacus")
 

@@ -593,7 +593,7 @@ def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6
 def main():
     """Main function for standalone execution using default config."""
     config = {
-        'sim': 'flamingo',
+        'sim_name': 'flamingo',
         'gas_type': 'strongest_AGN_reconstructed',
         'tau_method': 'fullFT_tau_reconstruction',
         'n_gal_density': 1e-4,

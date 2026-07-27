@@ -111,7 +111,7 @@ def compute_delta_field_and_mass(
                 dm_particles = load_particle_properties(
                     dm_particles_file,
                     'dm',
-                    requested=('pos'),
+                    requested=('pos',),
                     sim_name='abacus',
                     Lbox=box,
                     chunkid=i_chunk,

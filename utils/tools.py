@@ -332,7 +332,7 @@ def calc_T_AP(imap, rad_arcmin, test=False, mask=None, divmap=None, measurement=
                 divs = np.sum(divmap[inner]*mask[inner])/np.sum(mask[inner])
     
     if divmap is not None:
-        flux_inner, flux_outer, flux_inner_std, flux_outer_std, divs
+        return flux_inner, flux_outer, flux_inner_std, flux_outer_std, divs
     return flux_inner, flux_outer, flux_inner_std, flux_outer_std 
 
 

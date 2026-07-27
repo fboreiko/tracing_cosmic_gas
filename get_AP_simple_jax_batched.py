@@ -615,11 +615,11 @@ def main():
     from utils.pipeline_paths import selection_defaults
     
     config = {
-        'sim': 'flamingo',
+        'sim_name': 'flamingo',
         'gas_type': 'strongest_AGN_reconstructed',
         'tau_method': 'fullFT_tau_reconstruction',
         'n_gal_density': 1e-4,
-        'halo_mass_range': 0,
+        'halo_mass_range': None,
         **selection_defaults('mgal_sel'),  # Use explicit parameters
     }
     get_AP_simple(config)

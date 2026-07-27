@@ -399,9 +399,9 @@ def get_halo_data_for_dataset(config):
             requested_props,
             sim_name=sim_name,
         )
+        halo_props['mstell_50kpc'] = np.full_like(halo_props['m200b'], np.nan, dtype=float)
     if halo_props is None:
         raise RuntimeError(f'Failed to load halo properties from {halo_galaxy_data_path}')
-    halo_props['mstell_50kpc'] = np.full_like(halo_props['m200b'], np.nan, dtype=float)
     all_m200b = halo_props['m200b']
     all_m200c = halo_props['m200c']
     all_vels = halo_props['hvel_200b']
@@ -950,7 +950,7 @@ def main():
     gas_illustris = figure_content['gas_illustris']
     dm_tng = figure_content['dm_tng']
 
-    data_sim = working_profiles[0].get('sim', 'flamingo') if len(working_profiles) > 0 else 'flamingo'
+    data_sim = working_profiles[0].get('sim_name', 'flamingo') if len(working_profiles) > 0 else 'flamingo'
     data_h = require_sim_param(data_sim, 'h')
     data_om_m = require_sim_param(data_sim, 'omega_m')
     data_tcmb0 = require_sim_param(data_sim, 'tcmb0')
