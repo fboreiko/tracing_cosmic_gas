@@ -1,7 +1,7 @@
 """
 This is an important script to run once and forever for every simulation and field 
 configuration. It computes the true tau maps and saves them for later use within 
-the get_AP scripts, specifically for the "fullFT_tau_reconstruction" method. 
+the get_AP scripts, specifically as the tau_source='truth' branch of the pipeline.
 """
 
 import numpy as np
@@ -14,8 +14,8 @@ from utils.sim_params import get_sim_params
 SIM_NAME = 'abacus'
 SIM_PARAMS = get_sim_params(SIM_NAME)
 
-FEEDBACK_MODE = 'fiducial'  # 'fiducial', 'strongest_AGN'
-FIELD_TYPE = 'dm'  # 'gas' or 'dm'
+FEEDBACK = 'fiducial'  # 'fiducial', 'strongest_AGN'
+TRACER = 'dm'  # 'gas' or 'dm'
 
 # Simulation/cosmology parameters
 box = SIM_PARAMS['box_size_cMpc_h']
@@ -25,29 +25,29 @@ nthread = SIM_PARAMS['nthread_default']
 def main():
     # Get file paths using pipeline_paths
     dm_particles_file = get_particle_file_path(
-        FEEDBACK_MODE,
+        FEEDBACK,
         sim_name=SIM_NAME,
     )
     gas_particles_file = get_particle_file_path(
-        FEEDBACK_MODE,
+        FEEDBACK,
         sim_name='flamingo',
     )
     
     tau_out_path = tau_map_path({
         'sim_name': SIM_NAME,
-        'gas_type': FEEDBACK_MODE,
-        'tau_method': 'fullFT_tau_reconstruction',
-        'field_type': FIELD_TYPE,
+        'feedback': FEEDBACK,
+        'tau_source': 'truth',
+        'tracer': TRACER,
     })
     
-    print(f"Processing {FIELD_TYPE.upper()} field for {FEEDBACK_MODE} simulation")
+    print(f"Processing {TRACER.upper()} field for {FEEDBACK} simulation")
     print(f"Output tau map path: {tau_out_path}")
     
     # Compute 2D projected density field from particles
     print(f"\nComputing 2D projected delta field from particles...")
     
     delta_2d_field, total_mass_for_tau = compute_delta_field_and_mass(
-        field_type=FIELD_TYPE,
+        tracer=TRACER,
         sim_name=SIM_NAME,
         dm_particles_file=dm_particles_file,
         gas_particles_file=gas_particles_file,

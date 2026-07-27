@@ -17,6 +17,7 @@ import gc
 from .catalog_loaders import load_particle_properties
 from .catalog_loaders import load_halo_properties
 from .sample_selection import select_halos
+from .pipeline_config import PipelineConfig
 from .pipeline_paths import get_halo_file_path, ensure_parents
 from .sim_params import get_sim_params
 
@@ -39,7 +40,7 @@ def compute_delta_3d_projected(pos, box, ngrid, weights, nthread=4):
 
 
 def compute_delta_field_and_mass(
-    field_type,
+    tracer,
     sim_name,
     dm_particles_file,
     gas_particles_file,
@@ -48,7 +49,7 @@ def compute_delta_field_and_mass(
     nthread=4,
 ):
     """Compute projected delta field and total mass used for tau prefactor."""
-    if field_type == 'dm':
+    if tracer == 'dm':
 
         if sim_name == 'flamingo':
 
@@ -231,7 +232,7 @@ def save_halo_props_cache(
 def compute_selected_halo_delta_2d(
     *,
     sim_for_halos,
-    gas_type,
+    feedback,
     box,
     ngrid,
     selection_config,
@@ -243,28 +244,32 @@ def compute_selected_halo_delta_2d(
 ):
     """Compute a 2D overdensity field for a selected halo sample.
 
-    selection_config should contain the selection parameters used by the main
-    reconstruction pipeline, including selection_mode, selection_mass_def,
-    select_nonzero_masses, upper_mass_cut, upper_radius_cut, sat_frac,
-    n_gal_density, halo_mass_range, target_mean_mass, target_mass_tolerance,
-    mass_bin_halfwidth, and max_iterations.
+    selection_config may be a plain dict or a PipelineConfig; it is coerced and
+    validated here, so a malformed selection fails at this boundary rather than
+    surfacing later as a mysteriously empty halo sample. It carries
+    selection_mode, selection_mass_def, select_nonzero_masses, upper_mass_cut,
+    upper_radius_cut, sat_frac, n_gal_density, halo_mass_range,
+    target_mean_mass, target_mass_tolerance, mass_bin_halfwidth and
+    max_iterations.
     """
-    mass_type = selection_config['selection_mass_def']
-    cen_sat_mode = selection_config['selection_mode']
-    require_nonzero_mass = selection_config['select_nonzero_masses']
-    upper_mass_cut = selection_config['upper_mass_cut']
-    upper_radius_cut = selection_config['upper_radius_cut']
-    sat_frac = selection_config.get('sat_frac', 0.10)
-    n_gal_density = selection_config['n_gal_density']
-    halo_mass_range = selection_config['halo_mass_range']
-    target_mean_mass = selection_config['target_mean_mass']
-    target_mass_tolerance = selection_config.get('target_mass_tolerance', 0.005)
-    mass_bin_halfwidth = selection_config.get('mass_bin_halfwidth', 0.02)
-    max_iterations = selection_config.get('max_iterations', 1000)
+    selection_config = PipelineConfig.coerce(selection_config, require_selection=True)
 
-    halo_file_path = selection_config.get('halo_file_path')
+    mass_type = selection_config.selection_mass_def
+    cen_sat_mode = selection_config.selection_mode
+    require_nonzero_mass = selection_config.select_nonzero_masses
+    upper_mass_cut = selection_config.upper_mass_cut
+    upper_radius_cut = selection_config.upper_radius_cut
+    sat_frac = selection_config.sat_frac if selection_config.sat_frac is not None else 0.10
+    n_gal_density = selection_config.n_gal_density
+    halo_mass_range = selection_config.halo_mass_range
+    target_mean_mass = selection_config.target_mean_mass
+    target_mass_tolerance = selection_config.target_mass_tolerance
+    mass_bin_halfwidth = selection_config.mass_bin_halfwidth
+    max_iterations = selection_config.max_iterations
+
+    halo_file_path = selection_config.halo_file_path
     if halo_file_path is None:
-        halo_file_path = get_halo_file_path(gas_type, sim_name=sim_for_halos)
+        halo_file_path = get_halo_file_path(feedback, sim_name=sim_for_halos)
 
     delta_2d_path_val = Path(save_path) if save_path is not None else None
     idx_path = Path(halo_indices_save_path) if halo_indices_save_path is not None else None

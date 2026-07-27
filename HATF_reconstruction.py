@@ -21,6 +21,7 @@ from utils.power_spectrum_utils import (
     interp_extrapolate_loglog,
 )
 from utils.tau_prefactor import compute_prefactor
+from utils.pipeline_config import PipelineConfig
 from utils.pipeline_paths import (
     delta_2d_path as _delta_2d_path,
     tau_prefactor_path as _prefactor_path,
@@ -29,7 +30,8 @@ from utils.pipeline_paths import (
     halo_props_cache_path as _halo_props_cache_path,
     ensure_parents,
     plot_path,
-    _selection_tag,
+    selection_tag,
+    selection_defaults,
     get_particle_file_path,
 )
 from utils.sim_params import get_sim_params
@@ -42,25 +44,23 @@ rcParams['text.usetex'] = False
 SIM_NAME = 'flamingo' # this defines the "branch" of the pipeline to run: 'abacus' or 'flamingo'
 SIM_PARAMS = get_sim_params(SIM_NAME) # pull default sim parameters
 
-FEEDBACK_MODE = 'strongest_AGN'  # 'fiducial', 'strongest_AGN'
+FEEDBACK = 'strongest_AGN'  # 'fiducial', 'strongest_AGN'
 
 # Regime: determines which mass to use for halo (galaxy) selection
 regime = 'mgal_sel'  # 'mhalo_sel' (halo mass) or 'mgal_sel' (stellar mass)
 
-if regime == 'mhalo_sel':
-    cen_sat_mode = 'cen'          
-    mass_type = 'm200b'             # Use m200b for ranking
-    require_nonzero_mass = True
-    upper_mass_cut = False
-    upper_radius_cut = False
-elif regime == 'mgal_sel':
-    cen_sat_mode = 'mixed'    
-    mass_type = 'mstell'            # Use stellar mass for ranking
-    require_nonzero_mass = True     # Require nonzero stellar mass for selection
-    upper_mass_cut = False          # Apply m200b mass cut for satellites
-    upper_radius_cut = False        # Apply r200 radius cut for satellites
-else:
-    raise ValueError(f"Unknown regime: {regime}. Use 'mhalo_sel' or 'mgal_sel'.")
+# Selection parameters come from the ONE shared definition in pipeline_paths.
+# This file used to re-derive them inline, and the two copies had drifted
+# (upper_mass_cut differed), so HATF and the standalone get_AP main() built
+# different selection tags for the same nominal selection.
+_regime_params = selection_defaults(regime)
+
+cen_sat_mode         = _regime_params['selection_mode']
+mass_type            = _regime_params['selection_mass_def']
+require_nonzero_mass = _regime_params['select_nonzero_masses']
+upper_mass_cut       = _regime_params['upper_mass_cut']
+upper_radius_cut     = _regime_params['upper_radius_cut']
+max_mass             = _regime_params['max_mass']
 
 # Selection method: determines how to select from ranked objects
 # To run either, set the other to None.
@@ -107,15 +107,15 @@ if SIM_NAME == 'abacus':
         )
 
 dm_particles_file_abacus = get_particle_file_path(
-    FEEDBACK_MODE,
+    FEEDBACK,
     sim_name='abacus',
 )
 dm_particles_file_flamingo = get_particle_file_path(
-    FEEDBACK_MODE,
+    FEEDBACK,
     sim_name='flamingo',
 )
 gas_particles_file_flamingo = get_particle_file_path(
-    FEEDBACK_MODE,
+    FEEDBACK,
     sim_name='flamingo',
 )
 
@@ -131,34 +131,48 @@ print(f"box_gas: {box_gas} cMpc/h, ngrid_gas: {ngrid_gas}")
 
 nthread = SIM_PARAMS['nthread_default']
 
-# Build unified config dict for pipeline_paths
-_config = dict(
+# Build the pipeline config ONCE, immutably.
+#
+# `truth_cfg` addresses everything that does not depend on the reconstruction:
+# halo indices, halo-property caches, delta fields, prefactors.
+# `recon_cfg` differs in exactly one field and addresses the tau map this
+# script writes. They are separate objects, so which one a call site uses is
+# visible at that call site.
+
+_config = PipelineConfig.from_dict(dict(
     sim_name=SIM_NAME,
-    gas_type=FEEDBACK_MODE,  # Add _reconstructed suffix for tau map paths
-    tau_method='2D_FT_upgrade_tau_reconstruction',
+    feedback=FEEDBACK,
+    tau_source='truth',
     selection_mode=cen_sat_mode,
     selection_mass_def=mass_type,
     select_nonzero_masses=require_nonzero_mass,
     upper_mass_cut=upper_mass_cut,
+    max_mass=max_mass,
     upper_radius_cut=upper_radius_cut,
     sat_frac=sat_frac,
     n_gal_density=n_gal_density,
     halo_mass_range=halo_mass_range,
     target_mean_mass=target_mean_mass,
     convergence_mode=_convergence_mode,
-)
+    target_mass_tolerance=target_mass_tolerance,
+    mass_bin_halfwidth=mass_bin_halfwidth,
+    mass_bin_halfwidth_tol=mass_bin_halfwidth_tol,
+    max_iterations=max_iterations,
+))
+truth_cfg = _config
+recon_cfg = _config.replace(tau_source='recon')
 
 # Output directories
-delta_fields_dir = _delta_2d_path({'sim_name': SIM_NAME, 'gas_type': FEEDBACK_MODE}, 'dm').parent
+delta_fields_dir = _delta_2d_path({'sim_name': SIM_NAME, 'feedback': FEEDBACK}, 'dm').parent
 delta_fields_dir.mkdir(parents=True, exist_ok=True)
 
 # Path where selected halo indices will be saved/loaded
 # Use the sim-specific config for each branch (abacus/flamingo)
-_halo_idx_path_flamingo = _halo_indices_path(dict(_config, sim_name='flamingo'))
-_halo_idx_path_abacus = _halo_indices_path(dict(_config, sim_name='abacus')) if SIM_NAME == 'abacus' else None
+_halo_idx_path_flamingo = _halo_indices_path(_config.replace(sim_name='flamingo'))
+_halo_idx_path_abacus = _halo_indices_path(_config.replace(sim_name='abacus')) if SIM_NAME == 'abacus' else None
 
-_halo_props_cache_path_flamingo = _halo_props_cache_path(dict(_config, sim_name='flamingo'))
-_halo_props_cache_path_abacus = _halo_props_cache_path(dict(_config, sim_name='abacus')) if SIM_NAME == 'abacus' else None
+_halo_props_cache_path_flamingo = _halo_props_cache_path(_config.replace(sim_name='flamingo'))
+_halo_props_cache_path_abacus = _halo_props_cache_path(_config.replace(sim_name='abacus')) if SIM_NAME == 'abacus' else None
 
 print("="*60)
 print("Loading/computing 2D projected fields")
@@ -171,8 +185,7 @@ total_mass_for_tau = None
 print("\nPreparing projected fields...")
 
 # For either branch, we need the FLAMINGO gas field for the transfer function construction
-gas_config = dict(_config)
-gas_config['sim_name'] = 'flamingo'
+gas_config = _config.replace(sim_name='flamingo')
 gas_path = _delta_2d_path(gas_config, 'gas')
 
 if gas_path.exists():
@@ -182,7 +195,7 @@ if gas_path.exists():
 else:
     print("Gas field not found. Computing FLAMINGO gas field...")
     delta_2d_fields['gas'], total_mass_for_tau = compute_delta_field_and_mass(
-        field_type='gas',
+        tracer='gas',
         sim_name='flamingo',
         dm_particles_file=None,
         gas_particles_file=gas_particles_file_flamingo,
@@ -199,8 +212,9 @@ if SIM_NAME == 'abacus':
     print("\n--- ABACUS delta field branch ---")
 
     # DM field for Abacus
-    abacus_dm_config = dict(_config)
-    abacus_dm_config['gas_type'] = 'strongest_AGN'  # Use the same DM field for both feedback modes since it's identical in Abacus
+    # The Abacus DM field is identical across feedback variants, so always
+    # address it with a single canonical feedback label.
+    abacus_dm_config = _config.replace(feedback='strongest_AGN')
     abacus_dm_path = _delta_2d_path(abacus_dm_config, 'dm')
 
     if abacus_dm_path.exists():
@@ -210,7 +224,7 @@ if SIM_NAME == 'abacus':
     else:
         print("DM field not found. Computing Abacus DM field...")
         delta_2d_fields['dm'], total_mass_for_tau = compute_delta_field_and_mass(
-            field_type='dm',
+            tracer='dm',
             sim_name='abacus',
             dm_particles_file=dm_particles_file_abacus,
             gas_particles_file=None,
@@ -227,7 +241,7 @@ if SIM_NAME == 'abacus':
     print("Loading/computing halo fields...")
     delta_2d_fields['halos_abacus'] = compute_selected_halo_delta_2d(
         sim_for_halos='abacus',
-        gas_type=FEEDBACK_MODE,
+        feedback=FEEDBACK,
         box=box_dm,
         ngrid=ngrid_dm,
         selection_config=_config,
@@ -239,12 +253,11 @@ if SIM_NAME == 'abacus':
 
     # In the Abacus branch we also require the FLAMINGO halo field for the transfer 
     # function construction
-    _config_flamingo = dict(_config)
-    _config_flamingo['sim_name'] = 'flamingo'
+    _config_flamingo = _config.replace(sim_name='flamingo')
 
     delta_2d_fields['halos_flamingo'] = compute_selected_halo_delta_2d(
         sim_for_halos='flamingo',
-        gas_type=FEEDBACK_MODE,
+        feedback=FEEDBACK,
         box=box_gas,
         ngrid=ngrid_gas,
         selection_config=_config_flamingo,
@@ -264,7 +277,7 @@ if SIM_NAME == 'abacus':
     else:
         print("DM field (FLAMINGO) not found. Computing...")
         delta_2d_fields['dm_flamingo'], _ = compute_delta_field_and_mass(
-            field_type='dm',
+            tracer='dm',
             sim_name='flamingo',
             dm_particles_file=dm_particles_file_flamingo,
             gas_particles_file=None,
@@ -290,7 +303,7 @@ else:
     else:
         print("DM field not found. Computing Flamingo DM field...")
         delta_2d_fields['dm'], _ = compute_delta_field_and_mass(
-            field_type='dm',
+            tracer='dm',
             sim_name='flamingo',
             dm_particles_file=dm_particles_file_flamingo,
             gas_particles_file=None,
@@ -306,7 +319,7 @@ else:
     # Halo field for Flamingo
     delta_2d_fields['halos'] = compute_selected_halo_delta_2d(
         sim_for_halos='flamingo',
-        gas_type=FEEDBACK_MODE,
+        feedback=FEEDBACK,
         box=box_gas,
         ngrid=ngrid_gas,
         selection_config=_config,
@@ -377,7 +390,7 @@ if SIM_NAME == 'abacus':
     plt.ylabel('$T(k)$', fontsize=12)
     plt.title('Transfer Function: FLAMINGO to Abacus extrapolation', fontsize=14)
     plt.legend(fontsize=9)
-    p_ps_cmp = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem='transfer_flamingo_to_abacus')
+    p_ps_cmp = plot_path('hatf/power_spectra', FEEDBACK, stem='transfer_flamingo_to_abacus')
     ensure_parents(p_ps_cmp)
     plt.savefig(p_ps_cmp, bbox_inches='tight', dpi=300)
     plt.close()
@@ -479,14 +492,15 @@ gas_field_reconstructed = np.fft.irfft2(gas_field_fft_reconstructed) * (ngrid_dm
 tau_xy_map = prefactor * (1.0 + gas_field_reconstructed) * ngrid_dm
 
 # Use pipeline_paths to get output path
-_config['gas_type'] = FEEDBACK_MODE  + '_reconstructed'  # Add _reconstructed suffix for tau map paths
-tau_out_path = _tau_map_path(_config)
+# The reconstructed tau map is addressed by recon_cfg, built at the top of
+# this file. Nothing is mutated here.
+tau_out_path = _tau_map_path(recon_cfg)
 ensure_parents(tau_out_path)
 np.save(tau_out_path, tau_xy_map)
 print(f"Tau map saved to: {tau_out_path}")
 
 # Build selection tag for filenames
-sel_tag = _selection_tag(_config).lstrip('_')
+sel_tag = selection_tag(_config)
 
 print("\n" + "="*60)
 print("Creating diagnostic plots for new transfer function")
@@ -572,7 +586,7 @@ if SIM_NAME == 'abacus':
     axes[1].legend(fontsize=11, loc='best')
     
     plt.tight_layout()
-    p_gas = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_gas_combined_{sel_tag}_abacus')
+    p_gas = plot_path('hatf/power_spectra', FEEDBACK, stem=f'P_gas_combined_{sel_tag}_abacus')
     ensure_parents(p_gas)
     plt.savefig(p_gas, bbox_inches='tight', dpi=300, format='pdf')
     plt.close()
@@ -617,7 +631,7 @@ if SIM_NAME == 'abacus':
     axes[1].legend(fontsize=11, loc='best')
     
     plt.tight_layout()
-    p_dm = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_dm_combined_{sel_tag}_abacus')
+    p_dm = plot_path('hatf/power_spectra', FEEDBACK, stem=f'P_dm_combined_{sel_tag}_abacus')
     ensure_parents(p_dm)
     plt.savefig(p_dm, bbox_inches='tight', dpi=300, format='pdf')
     plt.close()
@@ -638,7 +652,7 @@ if SIM_NAME == 'abacus':
     
     # Save tau map for Abacus branch
     print("\nSaving tau map for Abacus branch...")
-    tau_bundle_path = plot_path('hatf/tau_maps', FEEDBACK_MODE, stem=f'tau_map_{sel_tag}')
+    tau_bundle_path = plot_path('hatf/tau_maps', FEEDBACK, stem=f'tau_map_{sel_tag}')
     tau_bundle_path = tau_bundle_path.with_suffix('.npz')
     ensure_parents(tau_bundle_path)
     np.savez_compressed(
@@ -719,7 +733,7 @@ else:
     axes[1].legend(fontsize=11, loc='best')
     
     plt.tight_layout()
-    p_gas = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'P_gas_combined_{sel_tag}')
+    p_gas = plot_path('hatf/power_spectra', FEEDBACK, stem=f'P_gas_combined_{sel_tag}')
     ensure_parents(p_gas)
     plt.savefig(p_gas, bbox_inches='tight', dpi=300, format='pdf')
     plt.close()
@@ -742,7 +756,7 @@ else:
     tau_map_target = prefactor * (1.0 + gas_field_target) * ngrid_gas
     tau_map_reconstructed = prefactor * (1.0 + gas_field_reconstructed) * ngrid_dm
     
-    tau_bundle_path = plot_path('hatf/tau_maps', FEEDBACK_MODE, stem=f'tau_maps_{sel_tag}')
+    tau_bundle_path = plot_path('hatf/tau_maps', FEEDBACK, stem=f'tau_maps_{sel_tag}')
     tau_bundle_path = tau_bundle_path.with_suffix('.npz')
     ensure_parents(tau_bundle_path)
     np.savez_compressed(
@@ -776,7 +790,7 @@ plt.xlabel('$k$ [h/cMpc]', fontsize=13)
 plt.ylabel('$r(k)$', fontsize=13)
 plt.ylim([0, 1.1])
 plt.legend(fontsize=11)
-p_corr = plot_path('hatf/power_spectra', FEEDBACK_MODE, stem=f'r_recon_vs_true_{sel_tag}')
+p_corr = plot_path('hatf/power_spectra', FEEDBACK, stem=f'r_recon_vs_true_{sel_tag}')
 ensure_parents(p_corr)
 plt.savefig(p_corr, bbox_inches='tight', dpi=300, format='pdf')
 plt.close()
@@ -863,7 +877,7 @@ if plot_comparison:
     ax.legend(fontsize=12)
     
     # Save plot
-    p3 = plot_path('hatf/transfer_fn', FEEDBACK_MODE, stem=f'T_k_{sel_tag}')
+    p3 = plot_path('hatf/transfer_fn', FEEDBACK, stem=f'T_k_{sel_tag}')
     ensure_parents(p3)
     plt.savefig(p3, dpi=300, bbox_inches='tight')
     print(f"\nSaved: {p3}")

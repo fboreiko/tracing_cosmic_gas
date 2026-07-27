@@ -3,30 +3,59 @@ Single strict schema for the kSZ / HATF pipeline config dict.
 
 `PipelineConfig` is the ONLY thing allowed to interpret a config dict. It
 rejects unknown keys and requires every key that affects a filename.
+
+Vocabulary
+---------------------------------------
+    feedback    : 'fiducial' | 'strongest_AGN'
+                  Which FLAMINGO AGN-feedback variant the gas comes from.
+                  (was: gas_type, which also encoded truth/recon via a
+                  '_reconstructed' suffix)
+
+    tau_source  : 'truth' | 'recon'
+                  Where the tau map came from. 'truth' is measured directly
+                  from the gas particles; 'recon' is reconstructed from the
+                  DM field via the HATF transfer function.
+
+    tracer      : 'gas' | 'dm'
+                  Which particle field the map traces.
+                  (was: field_type)
+
+These three axes are orthogonal. Do not re-encode one inside another.
 """
 
 import math
-from dataclasses import dataclass, field, fields
-from pathlib import Path
+from dataclasses import dataclass, fields
 
-# Allowed value sets (empty set == not constrained)
+# Allowed value sets
 _ALLOWED_SIM_NAME = ('flamingo', 'abacus')
-_ALLOWED_GAS_TYPE = (
-    'fiducial',
-    'strongest_AGN',
-    'fiducial_reconstructed',
-    'strongest_AGN_reconstructed',
-)
-_ALLOWED_TAU_METHOD = (
-    'fullFT_tau_reconstruction',
-    '2D_FT_upgrade_tau_reconstruction',
-    '2D_FT_massdep_tau_reconstruction',
-)
-_ALLOWED_FIELD_TYPE = ('gas', 'dm')
+_ALLOWED_FEEDBACK = ('fiducial', 'strongest_AGN')
+_ALLOWED_TAU_SOURCE = ('truth', 'recon')
+_ALLOWED_TRACER = ('gas', 'dm')
 _ALLOWED_SELECTION_MODE = ('cen', 'sat', 'mixed', 'cens_sat', None)
 _ALLOWED_SELECTION_MASS_DEF = ('mstell', 'mstell_fof', 'm200b', 'm200c', 'mfof')
 _ALLOWED_CONVERGENCE_MODE = ('ngal', 'massbin')
 _ALLOWED_PROJECTION_TYPE = ('simple', 'pixell', 'pixell_cea', None)
+
+# Legacy names -> new names. Used only to produce a helpful error message.
+_LEGACY_KEYS = {
+    'sim': 'sim_name',
+    'gas_type': 'feedback',
+    'tau_method': 'tau_source',
+    'field_type': 'tracer',
+    'A': None,  # deleted with the massdep method
+}
+
+_LEGACY_VALUES = {
+    'feedback': {
+        'fiducial_reconstructed': "'fiducial' with tau_source='recon'",
+        'strongest_AGN_reconstructed': "'strongest_AGN' with tau_source='recon'",
+    },
+    'tau_source': {
+        'fullFT_tau_reconstruction': "'truth'",
+        '2D_FT_upgrade_tau_reconstruction': "'recon'",
+        '2D_FT_massdep_tau_reconstruction': "nothing - this method was removed",
+    },
+}
 
 # Selection fields that must be present when require_selection is True.
 # The value None is acceptable only for those listed in _NULLABLE_SELECTION.
@@ -48,8 +77,6 @@ _NULLABLE_SELECTION = (
     'target_mean_mass',
 )
 
-_MASSDEP_METHOD = '2D_FT_massdep_tau_reconstruction'
-
 
 @dataclass(frozen=True)
 class PipelineConfig:
@@ -57,9 +84,9 @@ class PipelineConfig:
 
     # Identity
     sim_name: str = None
-    gas_type: str = None
-    tau_method: str = None
-    field_type: str = 'gas'
+    feedback: str = None
+    tau_source: str = None
+    tracer: str = 'gas'
     z_real: float = None
 
     # Selection (required whenever a selection tag may be built)
@@ -76,15 +103,15 @@ class PipelineConfig:
     # Conditionally required
     max_mass: float = None
     sat_frac: float = None
-    A: float = None
 
-    # Selection-loop knobs (defaults equal the pre-WP3 delta_fields fallbacks)
+    # Selection-loop knobs
     target_mass_tolerance: float = 0.005
     mass_bin_halfwidth: float = 0.02
+    mass_bin_halfwidth_tol: float = 0.001
     max_iterations: int = 1000
     halo_file_path: str = None
 
-    # Presentation metadata — never used in tags or paths
+    # Presentation metadata - never used in tags or paths
     name: str = None
     projection_type: str = None
 
@@ -96,18 +123,23 @@ class PipelineConfig:
     def from_dict(cls, d, *, require_selection=True):
         """Validate a plain config dict and return a frozen PipelineConfig.
 
-        Raises ValueError on a legacy 'sim' key, on unknown keys, on missing
-        required keys, and on any cross-field rule violation.
+        Raises ValueError on legacy keys, on legacy values, on unknown keys,
+        on missing required keys, and on any cross-field rule violation.
         """
         d = dict(d)  # never mutate the caller's dict
 
         # 1. Legacy-key trap
-        if 'sim' in d:
-            raise ValueError(
-                "Config key 'sim' is not accepted; use 'sim_name'. "
-                "(This key was a historical typo that silently selected the "
-                "wrong simulation.)"
-            )
+        for old, new in _LEGACY_KEYS.items():
+            if old in d:
+                if new is None:
+                    raise ValueError(
+                        f"Config key {old!r} was removed along with the "
+                        f"mass-dependent tau method. Delete it."
+                    )
+                raise ValueError(
+                    f"Config key {old!r} was renamed to {new!r}. "
+                    f"See NAMING_REFACTOR.md."
+                )
 
         # 2. Unknown keys
         known = {f.name for f in fields(cls)}
@@ -117,34 +149,33 @@ class PipelineConfig:
                 "Unknown config keys (typos?): " + ", ".join(repr(k) for k in unknown)
             )
 
-        # 3. Identity requiredness.
-        #
-        # NOTE (WP3 deviation, flagged in the WP report): the WP requires
-        # sim_name, gas_type AND tau_method for every construction. Applied to
-        # require_selection=False that contradicts the WP's own hard constraint,
-        # because live callers legitimately pass identity-only dicts holding just
-        # sim_name and gas_type (HATF_reconstruction.py line 152, and the WP1
-        # golden probes simprobe_flamingo_strongest_AGN / simprobe_abacus_fiducial).
-        # Section 2.4 itself describes those call sites as reading "only
-        # sim_name/gas_type". tau_method is therefore required only when
-        # require_selection is True.
-        for key in ('sim_name', 'gas_type'):
+        # 3. Legacy-value trap (catches half-migrated configs)
+        for key, mapping in _LEGACY_VALUES.items():
+            value = d.get(key)
+            if value in mapping:
+                raise ValueError(
+                    f"Config key {key!r} has legacy value {value!r}; "
+                    f"use {mapping[value]}. See NAMING_REFACTOR.md."
+                )
+
+        # 4. Identity requiredness.
+        # sim_name and feedback are always required; identity-only dicts
+        # (e.g. for particle/halo file lookup) legitimately omit tau_source.
+        for key in ('sim_name', 'feedback'):
             if d.get(key) is None:
                 raise ValueError(f"Missing required config key: '{key}'")
-        if require_selection and d.get('tau_method') is None:
-            raise ValueError("Missing required config key: 'tau_method'")
+        if require_selection and d.get('tau_source') is None:
+            raise ValueError("Missing required config key: 'tau_source'")
 
-        # 4. Selection requiredness
+        # 5. Selection requiredness
         if require_selection:
             for key in _REQUIRED_SELECTION:
                 if key not in d:
                     raise ValueError(f"Missing required config key: '{key}'")
                 if d[key] is None and key not in _NULLABLE_SELECTION:
-                    raise ValueError(
-                        f"Config key '{key}' must not be None"
-                    )
+                    raise ValueError(f"Config key '{key}' must not be None")
 
-        # 5. Conditional fields
+        # 6. Conditional fields
         if d.get('upper_mass_cut') is True and d.get('max_mass') is None:
             raise ValueError(
                 "Config key 'max_mass' is required when upper_mass_cut is True"
@@ -154,23 +185,14 @@ class PipelineConfig:
                 "Config key 'sat_frac' is required when selection_mode is "
                 f"{d.get('selection_mode')!r}"
             )
-        if d.get('tau_method') == _MASSDEP_METHOD:
-            if d.get('A') is None:
-                raise ValueError(
-                    f"Config key 'A' is required when tau_method is {_MASSDEP_METHOD!r}"
-                )
-        elif d.get('A') is not None:
-            raise ValueError(
-                f"Config key 'A' is only valid when tau_method is {_MASSDEP_METHOD!r}"
-            )
 
-        # 6. Allowed values
+        # 7. Allowed values
         cls._check_allowed(d, 'sim_name', _ALLOWED_SIM_NAME)
-        cls._check_allowed(d, 'gas_type', _ALLOWED_GAS_TYPE)
-        if d.get('tau_method') is not None:
-            cls._check_allowed(d, 'tau_method', _ALLOWED_TAU_METHOD)
-        if 'field_type' in d:
-            cls._check_allowed(d, 'field_type', _ALLOWED_FIELD_TYPE)
+        cls._check_allowed(d, 'feedback', _ALLOWED_FEEDBACK)
+        if d.get('tau_source') is not None:
+            cls._check_allowed(d, 'tau_source', _ALLOWED_TAU_SOURCE)
+        if 'tracer' in d:
+            cls._check_allowed(d, 'tracer', _ALLOWED_TRACER)
         if 'projection_type' in d:
             cls._check_allowed(d, 'projection_type', _ALLOWED_PROJECTION_TYPE)
         if require_selection:
@@ -178,7 +200,7 @@ class PipelineConfig:
             cls._check_allowed(d, 'selection_mass_def', _ALLOWED_SELECTION_MASS_DEF)
             cls._check_allowed(d, 'convergence_mode', _ALLOWED_CONVERGENCE_MODE)
 
-        # 7. Cross-field validation
+        # 8. Cross-field validation
         cls._validate_cross_fields(d, require_selection=require_selection)
 
         instance = cls(**d)
@@ -191,6 +213,20 @@ class PipelineConfig:
         if isinstance(obj, cls):
             return obj
         return cls.from_dict(obj, require_selection=require_selection)
+
+    def replace(self, **changes):
+        """Return a NEW config with `changes` applied and re-validated.
+
+        Use this instead of mutating a shared config dict. Mutation in place
+        was the mechanism behind the old `_config['gas_type'] += '_reconstructed'`
+        bug, where a path built before the mutation and one built after
+        silently pointed at different files.
+        """
+        d = {f.name: getattr(self, f.name) for f in fields(self)}
+        d.update(changes)
+        return type(self).from_dict(
+            d, require_selection=getattr(self, '_has_selection', False)
+        )
 
     @staticmethod
     def _check_allowed(d, key, allowed):
@@ -208,7 +244,7 @@ class PipelineConfig:
         target_mean_mass = d.get('target_mean_mass')
         selection_mass_def = d.get('selection_mass_def')
 
-        # Rule 5 — shape of halo_mass_range
+        # Rule 5 - shape of halo_mass_range
         if halo_mass_range is not None:
             if not isinstance(halo_mass_range, (list, tuple)) or len(halo_mass_range) != 2:
                 raise ValueError(
@@ -216,14 +252,14 @@ class PipelineConfig:
                     f"or None; got {halo_mass_range!r}"
                 )
 
-        # Rule 1 — mass-bin selection is incompatible with mixed cen+sat mode
+        # Rule 1 - mass-bin selection is incompatible with mixed cen+sat mode
         if halo_mass_range is not None and selection_mode == 'mixed':
             raise ValueError(
                 "halo_mass_range selection is not supported for "
                 "selection_mode='mixed'; use n_gal_density instead."
             )
 
-        # Rule 2 — massbin convergence needs a mass range
+        # Rule 2 - massbin convergence needs a mass range
         if convergence_mode == 'massbin' and halo_mass_range is None:
             raise ValueError(
                 "convergence_mode='massbin' requires a non-None halo_mass_range "
@@ -231,7 +267,7 @@ class PipelineConfig:
                 "halo_indices file)."
             )
 
-        # Rule 3 — mass-bin targeting requires a halo mass definition
+        # Rule 3 - mass-bin targeting requires a halo mass definition
         if (
             target_mean_mass is not None
             and halo_mass_range is not None
@@ -243,7 +279,7 @@ class PipelineConfig:
                 "stellar mass."
             )
 
-        # Rule 4 — Abacus catalog restrictions (selection-validated calls only)
+        # Rule 4 - Abacus catalog restrictions (selection-validated calls only)
         if require_selection and d.get('sim_name') == 'abacus':
             if selection_mass_def != 'm200b':
                 raise ValueError(
@@ -263,6 +299,10 @@ class PipelineConfig:
     def selection_tag(self):
         """Build the filename token encoding the selection INTENT.
 
+        Returns a BARE token with no leading underscore. Callers that need a
+        separator add it themselves. (The old version returned a leading '_'
+        and half the call sites immediately did .lstrip('_').)
+
         Tokens emitted (in order):
             mode_<mode> | mode_all
             mass_<mdef>
@@ -274,7 +314,7 @@ class PipelineConfig:
             tm<v>           (when target_mean_mass is set, e.g. tm13p2)
 
         Numeric convergence results (ngal, massbin window) are intentionally
-        NOT included — those live in the halo_indices file, not in filenames.
+        NOT included - those live in the halo_indices file, not in filenames.
         """
         if not getattr(self, '_has_selection', False):
             raise ValueError(
@@ -285,9 +325,7 @@ class PipelineConfig:
 
         mode = self.selection_mode
         parts.append(f"mode_{mode}" if mode is not None else "mode_all")
-
         parts.append(f"mass_{self.selection_mass_def}")
-
         parts.append("nzmass" if self.select_nonzero_masses else "allm")
 
         if self.upper_mass_cut:
@@ -297,14 +335,13 @@ class PipelineConfig:
             parts.append("noumc")
 
         parts.append("urc" if self.upper_radius_cut else "nourc")
-
         parts.append(f"cmode_{self.convergence_mode}")
 
-        if mode == 'mixed' or mode == 'sat':
+        if mode in ('mixed', 'sat'):
             parts.append(f"sf{int(round(self.sat_frac * 100)):02d}")
 
         tm = self.target_mean_mass
         if tm is not None:
             parts.append(f"tm{tm:.1f}".replace('.', 'p'))
 
-        return "_" + "_".join(parts)
+        return "_".join(parts)

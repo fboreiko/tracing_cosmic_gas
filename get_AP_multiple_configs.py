@@ -7,14 +7,13 @@ true tau fields via computing their kSZ statistics for the same set of halos.
 This set of halos has to be the same as the one used for HATF construction, 
 and the pipeline ensures this. 
 
-Somewhat confusingly, the HATF reconstructed profiles are referred to as 
-"2D_FT_upgrade_tau_reconstruction" with "strongest_AGN_reconstructed" or 
-"fiducial_reconstructed" gas specifications.
+Each profile declares two orthogonal axes:
+    tau_source : 'truth' (measured from gas particles) or
+                 'recon' (HATF-reconstructed from the DM field)
+    feedback   : 'fiducial' or 'strongest_AGN'
 
-The true profiles are referred to as "fullFT_tau_reconstruction" with 
-"strongest_AGN" or "fiducial" gas specifications.
-
-This naming convention is legacy and should be cleaned up in the future.
+These are independent: 'feedback' says which simulation the gas came from and
+never encodes whether the map was reconstructed.
 """
 
 from mpi4py import MPI
@@ -35,7 +34,7 @@ Z_REAL = 0.74   # redshift of observed sample — never changes, this is indepen
 from utils.profile_configs import PROFILE_CONFIGS, build_profiles
 
 # Which of the shared configs this script actually runs.
-ACTIVE_PROFILE_NAMES = ['flamingo_cen_massbin']
+ACTIVE_PROFILE_NAMES = ['flamingo_cen_massbin_tm13p2']
 
 PROFILES = [p for p in build_profiles(PROFILE_CONFIGS)
             if p['name'] in ACTIVE_PROFILE_NAMES]
@@ -48,9 +47,9 @@ def run_configuration(profile, config_num, total_configs):
         print(f"  profile   : {profile.get('name', 'N/A')}")
         print(f"  sim_name  : {profile.get('sim_name', 'flamingo')}")
         print(f"  projection: {profile.get('projection_type', 'N/A')}")
-        print(f"  gas_type  : {profile['gas_type']}")
-        print(f"  tau_method: {profile['tau_method']}")
-        print(f"  field_type: {profile['field_type']}")
+        print(f"  feedback  : {profile['feedback']}")
+        print(f"  tau_source: {profile['tau_source']}")
+        print(f"  tracer: {profile['tracer']}")
         print(f"  sel_mode  : {profile.get('selection_mode', 'N/A')}")
         print(f"  sel_mass  : {profile.get('selection_mass_def', 'N/A')}")
         _sf = profile.get('sat_frac')
@@ -60,9 +59,9 @@ def run_configuration(profile, config_num, total_configs):
     try:
         config = {
             'sim_name': profile.get('sim_name', 'flamingo'),
-            'gas_type': profile['gas_type'],
-            'tau_method': profile['tau_method'],
-            'field_type': profile.get('field_type', 'gas'),
+            'feedback': profile['feedback'],
+            'tau_source': profile['tau_source'],
+            'tracer': profile.get('tracer', 'gas'),
             'z_real': Z_REAL,
             'selection_mode': profile['selection_mode'],
             'selection_mass_def': profile['selection_mass_def'],
@@ -129,7 +128,7 @@ def main():
                 print(f"    Satellite fracs   : {[f'{s*100:.0f}%' for s in config['sat_fracs']]} (swept)")
             else:
                 print(f"    Satellite fracs   : N/A (not swept; mode={config['selection_params']['selection_mode']})")
-            print(f"    Tau methods       : {len(config['tau_methods'])} (recon, fullFT gas, fullFT dm)")
+            print(f"    Tau methods       : {len(config['tau_variants'])} (recon gas, truth gas, truth dm)")
             print(f"    Convergence mode  : {config['convergence_mode']}")
         print(f"\nMPI processes        : {size}")
         print(f"Start time           : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

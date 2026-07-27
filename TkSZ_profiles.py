@@ -14,6 +14,7 @@ from astropy.constants import codata2018 as const
 import astropy.units as u
 from datetime import datetime
 from utils.pipeline_paths import (
+    DATA_ROOT,
     ap_output_path, plot_path, ensure_parents, get_halo_file_path,
     halo_props_cache_path as _halo_props_cache_path,
 )
@@ -47,7 +48,7 @@ MASSBIN_RATIO_MODE = True  # T_kSZ_ngal / T_kSZ_massbin
 from utils.profile_configs import PROFILE_CONFIGS, build_profiles
 
 # Which of the shared configs this script actually plots.
-ACTIVE_PROFILE_NAMES = ['flamingo_m200b_cen_massbin',
+ACTIVE_PROFILE_NAMES = ['flamingo_m200b_cen_massbin_tm13p2',
                         'flamingo_mstell_mixed_ngal',
                         'flamingo_mstell_cen_ngal']
 
@@ -117,7 +118,7 @@ def get_halo_data_for_dataset(config):
     -----------
     config : dict
         Configuration dictionary with keys:
-        - gas_type: str
+        - feedback: str
     
     Returns:
     --------
@@ -134,7 +135,7 @@ def get_halo_data_for_dataset(config):
     """
     
     # Extract config values
-    GAS_TYPE = config['gas_type']
+    GAS_TYPE = config['feedback']
     sim_name = config.get('sim_name', 'flamingo')
     
     # Get halo data path using pipeline_paths
@@ -252,7 +253,7 @@ def get_kSZ_profile(config, use_dm=False):
     config : dict
         Configuration dictionary with keys required by pipeline_paths
     use_dm : bool
-        If True, load DM-only profile (changes field_type to 'dm')
+        If True, load DM-only profile (changes tracer to 'dm')
     """
     # Prepare config for ap_output_path
     load_config = dict(config)
@@ -279,17 +280,17 @@ def get_kSZ_profile(config, use_dm=False):
     cosmology.setCosmology('myCosmo', params)
     
     if use_dm:
-        load_config['field_type'] = 'dm'
-        load_config['tau_method'] = 'fullFT_tau_reconstruction'
-        # For DM, strip '_reconstructed' from gas_type
-        load_config['gas_type'] = config['gas_type'].replace('_reconstructed', '')
+        load_config['tracer'] = 'dm'
+        load_config['tau_source'] = 'truth'
+        # feedback no longer encodes reconstruction, so nothing to strip:
+        # setting tau_source='truth' above is the whole change.
     
     # Determine method based on projection_type
     projection_type = config.get('projection_type', 'simple')
     method = 'pixell' if projection_type in ['pixell', 'pixell_cea'] else 'simple'
     
     # Get path using pipeline_paths
-    tau_apertures_path = str(ap_output_path(load_config, method=method))
+    tau_apertures_path = str(ap_output_path(load_config, projection=method))
     print(f"Loading tau data from: {tau_apertures_path}")
     
     try:
@@ -442,7 +443,7 @@ def generate_comparison_filename(profiles):
     Returns:
         tuple: (filename_string, comparison_subject_string, is_single_profile)
             - filename_string: Filename without extension
-            - comparison_subject_string: The parameter(s) being compared (e.g., 'ngrid' or 'ngrid+tau_method')
+            - comparison_subject_string: The parameter(s) being compared (e.g., 'ngrid' or 'ngrid+tau_source')
             - is_single_profile: True if only one profile is being plotted
     """
     if len(profiles) == 0:
@@ -451,7 +452,7 @@ def generate_comparison_filename(profiles):
     is_single_profile = len(profiles) == 1
     
     # Define all possible keys (removed constants: ngrid, JAX, z, smoothed, selection_regime)
-    keys = ['projection_type', 'tau_method', 'gas_type', 'halo_mass_range', 'sat_frac', 'A', 
+    keys = ['projection_type', 'tau_source', 'feedback', 'halo_mass_range', 'sat_frac', 'A', 
             'selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']
     
     # Find common and varying parameters
@@ -475,7 +476,7 @@ def generate_comparison_filename(profiles):
     
     # Determine comparison subject (what's varying)
     # Priority order for naming when multiple params vary
-    comparison_priority = ['sat_frac', 'halo_mass_range', 'gas_type', 'tau_method', 'projection_type', 
+    comparison_priority = ['sat_frac', 'halo_mass_range', 'feedback', 'tau_source', 'projection_type', 
                           'selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut', 'A']
     comparison_subjects = [key for key in comparison_priority if key in varying_params]
     
@@ -491,7 +492,7 @@ def generate_comparison_filename(profiles):
     
     # For single profile, include all relevant parameters
     if is_single_profile:
-        param_order = ['projection_type', 'tau_method', 'gas_type', 'halo_mass_range', 'sat_frac', 'A',
+        param_order = ['projection_type', 'tau_source', 'feedback', 'halo_mass_range', 'sat_frac', 'A',
                       'selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']
         for key in param_order:
             value = common_params.get(key)
@@ -511,7 +512,7 @@ def generate_comparison_filename(profiles):
                 filename_parts.append(value)
     else:
         # For multiple profiles, add common parameters
-        param_order = ['projection_type', 'tau_method', 'gas_type', 'halo_mass_range', 'sat_frac', 'A']
+        param_order = ['projection_type', 'tau_source', 'feedback', 'halo_mass_range', 'sat_frac', 'A']
         for key in param_order:
             if key in common_params:
                 value = common_params[key]
@@ -526,7 +527,7 @@ def generate_comparison_filename(profiles):
                     filename_parts.append(value)
         
         # Add varying parameters with their values
-        for key in ['sat_frac', 'projection_type', 'tau_method', 'gas_type', 'halo_mass_range', 'A',
+        for key in ['sat_frac', 'projection_type', 'tau_source', 'feedback', 'halo_mass_range', 'A',
                    'selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']:
             if key in varying_params:
                 values_str = '-'.join(varying_params[key])
@@ -588,28 +589,28 @@ def _get_profile_label_generators():
     
     def flamingo_m200b_cen_label(profile):
         """Label for Abacus m200b central galaxies."""
-        gas_type = profile.get('gas_type', '')
-        if 'strongest_AGN' in gas_type:
+        feedback = profile.get('feedback', '')
+        if 'strongest_AGN' in feedback:
             return 'strongest AGN, FLAMINGO'
-        elif 'fiducial' in gas_type:
+        elif 'fiducial' in feedback:
             return 'fiducial, FLAMINGO'
         else:
             return 'FLAMINGO'
     
     def abacus_m200b_cen_label(profile):
         """Label for Abacus m200b central galaxies."""
-        gas_type = profile.get('gas_type', '')
-        if 'strongest_AGN' in gas_type:
+        feedback = profile.get('feedback', '')
+        if 'strongest_AGN' in feedback:
             return 'strongest AGN, Abacus + HATF'
-        elif 'fiducial' in gas_type:
+        elif 'fiducial' in feedback:
             return 'fiducial, Abacus + HATF'
         else:
             return 'Abacus + HATF'
     
     def massbin_reconstructed_target_label(profile, mass_label=''):
-        """Label for massbin profiles based on reconstructed/target gas type."""
-        gas_type = profile.get('gas_type', '')
-        label_type = 'reconstructed' if 'reconstructed' in gas_type else 'target'
+        """Label for massbin profiles, keyed on tau_source."""
+        # tau_source is now the single carrier of truth-vs-reconstruction.
+        label_type = 'reconstructed' if profile.get('tau_source') == 'recon' else 'target'
         return f"{label_type}{mass_label}"
     
     return {
@@ -623,10 +624,14 @@ def _get_profile_label_generators():
         # ngal-based mixed profiles
         'flamingo_mstell_mixed_ngal': n_gal_based_sat_frac_with_mass_def,
 
-        # massbin-based profiles
-        'flamingo_m200b_cen_massbin': lambda p: massbin_reconstructed_target_label(p),
-        'flamingo_m200b_cen_massbin_tm12.2': lambda p: massbin_reconstructed_target_label(p, ", $\langle M_{200m} \\rangle \simeq$ 12.2"),
-        'flamingo_m200b_cen_massbin_tm13.8': lambda p: massbin_reconstructed_target_label(p, ", $\langle M_{200m} \\rangle \simeq$ 13.8"),
+        # massbin-based profiles. Keys match the (now unique) profile names in
+        # PROFILE_CONFIGS; the old 'tm12.2'/'tm13.8' keys were a workaround for
+        # two configs sharing the name 'flamingo_cen_massbin'.
+        'flamingo_m200b_cen_massbin_tm13p2': lambda p: massbin_reconstructed_target_label(p),
+        'flamingo_cen_massbin_tm12p2': lambda p: massbin_reconstructed_target_label(
+            p, r", $\langle M_{200m} \rangle \simeq$ 12.2"),
+        'flamingo_cen_massbin_tm13p8': lambda p: massbin_reconstructed_target_label(
+            p, r", $\langle M_{200m} \rangle \simeq$ 13.8"),
         
         # Abacus profiles
         # 'abacus_m200b_cen_ngal': fixed_sat_frac_zero_with_mass_def,
@@ -638,20 +643,20 @@ def format_profile_label(profile, all_profiles):
     """
     Build plot labels based on gas type.
     
-    Maps gas_type to human-readable legend labels with model type (reconstructed/target).
+    Maps feedback to human-readable legend labels with model type (reconstructed/target).
     """
-    gas_type = profile.get('gas_type', 'profile')
+    feedback = profile.get('feedback', 'profile')
     
     # This is only for RESULT_1 profiles
     """gas_type_map = {
-        'strongest_AGN_reconstructed': ('strongest AGN', 'reconstructed'),
-        'fiducial_reconstructed': ('fiducial', 'reconstructed'),
+        'strongest_AGN': ('strongest AGN', 'reconstructed'),
+        'fiducial': ('fiducial', 'reconstructed'),
         'strongest_AGN': ('strongest AGN', 'target'),
         'fiducial': ('fiducial', 'target'),
     }
     
-    if gas_type in gas_type_map:
-        model_name, label_type = gas_type_map[gas_type]
+    if feedback in gas_type_map:
+        model_name, label_type = gas_type_map[feedback]
         #return f"{model_name}, {label_type}"
         return f"FLAMINGO {model_name}"
        """ 
@@ -663,7 +668,7 @@ def format_profile_label(profile, all_profiles):
         return generator(profile)
     
     # Fallback for unmapped profiles
-    return gas_type
+    return feedback
 
 
 def main():
@@ -685,7 +690,7 @@ def main():
             print(f"    Satellite fracs   : {[f'{s*100:.0f}%' for s in config['sat_fracs']]} (swept)")
         else:
             print(f"    Satellite fracs   : N/A (not swept; mode={config['selection_params']['selection_mode']})")
-        print(f"    Tau methods       : {len(config['tau_methods'])} (recon, fullFT gas, fullFT dm)")
+        print(f"    Tau variants      : {len(config['tau_variants'])} (recon gas, truth gas, truth dm)")
         print(f"    Convergence mode  : {config['convergence_mode']}")
     print(f"\nStart time            : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70 + "\n")
@@ -702,7 +707,7 @@ def main():
     
     fig, ax = plt.subplots(figsize=(6, 4), dpi=300)
 
-    figure_content = np.load("/Users/fedorboreiko/Documents/Cambridge/project_github/data/Fig2_sim.npz")
+    figure_content = np.load(DATA_ROOT / "Fig2_sim.npz")
 
     theta_arcmin = figure_content['theta_arcmins']
     signal = figure_content['signal']  # μK arcmin²
@@ -867,9 +872,9 @@ def main():
         ax.set_yscale('log')
     fig.tight_layout()
     
-    # Determine gas_type and tau_method directory components
-    all_gas_types   = list(dict.fromkeys(p['gas_type']   for p in working_profiles))
-    all_tau_methods = list(dict.fromkeys(p['tau_method'] for p in working_profiles))
+    # Determine feedback and tau_source directory components
+    all_gas_types   = list(dict.fromkeys(p['feedback']   for p in working_profiles))
+    all_tau_methods = list(dict.fromkeys(p['tau_source'] for p in working_profiles))
     gas_dir    = all_gas_types[0]   if len(all_gas_types)   == 1 else 'multi'
     method_dir = all_tau_methods[0] if len(all_tau_methods) == 1 else 'multi'
     

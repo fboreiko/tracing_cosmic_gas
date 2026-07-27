@@ -16,9 +16,11 @@ import os
 import sys
 from astropy.cosmology import FlatLambdaCDM
 from astropy import units as u
-sys.path.insert(0, '/home/fb635/fedirfiles/tracing_cosmic_gas')
+# `utils` is a proper package (utils/__init__.py); run from the repo root
+# or `pip install -e .` instead of patching sys.path to one machine.
 from utils.catalog_loaders import load_halo_properties
 from utils.pipeline_paths import (
+    DATA_ROOT,
     get_halo_file_path,
     tau_map_path as _tau_map_path,
     ap_output_path,
@@ -27,6 +29,13 @@ from utils.pipeline_paths import (
     halo_props_cache_path as _halo_props_cache_path,
 )
 from colossus.halo import mass_defs, concentration
+from utils.ap_common import (
+    load_halo_data_from_cache,
+    compute_distances,
+    translate_grid_params_to_degrees,
+    gauss_beam,
+    get_smooth_density,
+)
 from utils.sim_params import get_sim_params, require_sim_param
 import matplotlib.pyplot as plt
 
@@ -101,22 +110,6 @@ def load_data(tau_map_path, halo_galaxy_data_path, sim='flamingo', halo_indices=
     return tau_map, all_data
 
 
-def load_halo_data_from_cache(cache_path):
-    """
-    Load halo properties directly from the massbin props cache.
-
-    Returns a dict with keys: pos, vel, m200b, r200b.
-    All arrays are already the selected subset — no index subsetting needed.
-    """
-    cached = np.load(cache_path)
-    return {
-        'pos':   cached['pos'],    # (N, 3) float32
-        'vel':   cached['vel'],    # (N, 3) float32 — velocities
-        'm200b': cached['m200b'],  # (N,)   float32
-        'r200b': cached['r200b'],  # (N,)   float32
-        'm200c': None,             # not stored in cache
-        'mfof':  None,
-    }
 
 
 @partial(jit, static_argnums=(1,))
@@ -353,59 +346,14 @@ def split_workload(n_total, n_ranks):
     return counts, displacements
 
 
-def compute_distances(cosmo, z, h):
-    d_L = cosmo.luminosity_distance(z).to(u.Mpc).value
-    d_C = d_L / (1.0 + z)                      # Mpc
-    d_A = d_L / (1.0 + z) ** 2                 # Mpc
-    d_C *= h                                   # Mpc/h
-    d_A *= h                                   # Mpc/h
-    return d_A, d_C
 
 
-def translate_grid_params_to_degrees(z, n_cell, sim_params):
-    h = sim_params['h']
-    om_m = sim_params['omega_m']
-    tcmb0 = sim_params['tcmb0']
-    lbox = sim_params['box_size_cMpc_h']
 
-    a = 1.0 / (1.0 + z)
-    cosmo = FlatLambdaCDM(H0=h * 100.0, Om0=om_m, Tcmb0=tcmb0)
-    d_A, _ = compute_distances(cosmo, z, h)
-    Lbox_rad = (a * lbox) / d_A                     # rad
-    Lbox_deg = Lbox_rad * 180.0 / np.pi          # degrees
-    cell_size_deg = Lbox_deg / n_cell
 
-    return Lbox_rad, Lbox_deg, cell_size_deg
-
-def gauss_beam(ellsq, fwhm):
-    """
-    Gaussian beam of size fwhm
-    """
-    tht_fwhm = np.deg2rad(fwhm/60.)
-    return np.exp(-(tht_fwhm**2.)*(ellsq)/(2.*8.*np.log(2.)))
-
-def get_smooth_density(D, fwhm, pixsizedeg, Lboxdeg, N_dim):
-    """
-    Smooth density map D ((0, Lbox] and N_dim^2 cells) with Gaussian beam of FWHM
-    """
-    kstep = 2*np.pi/(N_dim*np.pi/180*pixsizedeg)
-    #karr = np.fft.fftfreq(N_dim, d=Lbox/(2*np.pi*N_dim)) # physical (not correct)
-    karr = np.fft.fftfreq(N_dim, d=Lboxdeg*np.pi/180./(2*np.pi*N_dim)) # angular
-    #print("kstep = ", kstep, karr[1]-karr[0]) # N_dim/d gives kstep
-
-    # fourier transform the map and apply gaussian beam
-    dfour = np.fft.fftn(D)
-    dksmo = np.zeros((N_dim, N_dim), dtype=complex)
-    ksq = np.zeros((N_dim, N_dim), dtype=complex)
-    ksq[:, :] = karr[None, :]**2+karr[:,None]**2
-    dksmo[:, :] = gauss_beam(ksq, fwhm)*dfour
-    drsmo = np.real(np.fft.ifftn(dksmo))
-
-    return drsmo
 
 def match_aperture_radii(z, sim_params):
     """Get aperture radii matching the observational data."""
-    figure_content = np.load("/home/fb635/fedirfiles/tracing_cosmic_gas/data/Fig2_sim.npz")
+    figure_content = np.load(DATA_ROOT / "Fig2_sim.npz")
     theta_arcmin = figure_content['theta_arcmins']
     h = sim_params['h']
     om_m = sim_params['omega_m']
@@ -422,8 +370,8 @@ def get_paths_from_config(config):
     sim = config.get('sim_name', 'flamingo')
     return {
         'tau_map_path':          str(_tau_map_path(config)),
-        'halo_galaxy_data_path': str(get_halo_file_path(config['gas_type'], sim_name=sim)),
-        'output_file':           str(ap_output_path(config, method='simple')),
+        'halo_galaxy_data_path': str(get_halo_file_path(config['feedback'], sim_name=sim)),
+        'output_file':           str(ap_output_path(config, projection='simple')),
     }
 
 
@@ -434,9 +382,9 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
     -----------
     config : dict
         Configuration dictionary with keys:
-        - gas_type: str (e.g., 'fiducial', 'fiducial_reconstructed', 'strongest_AGN', 'strongest_AGN_reconstructed')
-        - tau_method: str (e.g., 'fullFT_tau_reconstruction', 'histmethod_tau_reconstruction')
-        - field_type: str ('gas' or 'dm', default 'gas') - use 'dm' for dark matter fictitious tau maps
+        - feedback: str (e.g., 'fiducial', 'strongest_AGN')
+        - tau_source: str (e.g., 'truth', 'recon')
+        - tracer: str ('gas' or 'dm', default 'gas') - use 'dm' for dark matter fictitious tau maps
         - n_cell: int (grid resolution, cells per side)
         - z_real: float (redshift)
         - n_gal_density: float (galaxy number density in cMpc/h^-3, e.g., 87e-5 or 1e-4) - only used when halo_mass_range is None
@@ -615,9 +563,9 @@ def main():
     
     config = {
         'sim_name': 'flamingo',
-        'gas_type': 'strongest_AGN_reconstructed',
-        'tau_method': 'fullFT_tau_reconstruction',
-        'field_type': 'gas',
+        'feedback': 'strongest_AGN',
+        'tau_source': 'truth',
+        'tracer': 'gas',
         'n_gal_density': 1e-4,
         'halo_mass_range': None,
         'convergence_mode': 'ngal',
