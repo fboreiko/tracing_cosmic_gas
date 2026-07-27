@@ -250,14 +250,14 @@ def compute_selected_halo_delta_2d(
     mass_bin_halfwidth, and max_iterations.
     """
     mass_type = selection_config['selection_mass_def']
-    cen_sat_mode = selection_config.get('selection_mode', 'cen')
-    require_nonzero_mass = selection_config.get('select_nonzero_masses', True)
-    upper_mass_cut = selection_config.get('upper_mass_cut', False)
-    upper_radius_cut = selection_config.get('upper_radius_cut', False)
+    cen_sat_mode = selection_config['selection_mode']
+    require_nonzero_mass = selection_config['select_nonzero_masses']
+    upper_mass_cut = selection_config['upper_mass_cut']
+    upper_radius_cut = selection_config['upper_radius_cut']
     sat_frac = selection_config.get('sat_frac', 0.10)
-    n_gal_density = selection_config.get('n_gal_density')
-    halo_mass_range = selection_config.get('halo_mass_range')
-    target_mean_mass = selection_config.get('target_mean_mass')
+    n_gal_density = selection_config['n_gal_density']
+    halo_mass_range = selection_config['halo_mass_range']
+    target_mean_mass = selection_config['target_mean_mass']
     target_mass_tolerance = selection_config.get('target_mass_tolerance', 0.005)
     mass_bin_halfwidth = selection_config.get('mass_bin_halfwidth', 0.02)
     max_iterations = selection_config.get('max_iterations', 1000)

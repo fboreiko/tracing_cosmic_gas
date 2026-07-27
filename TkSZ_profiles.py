@@ -44,261 +44,15 @@ PLOT_DATA = False
 RATIO_MODE = False
 MASSBIN_RATIO_MODE = True  # T_kSZ_ngal / T_kSZ_massbin 
 
-SAT_FRACS = [0.10, 0.20, 0.30]
+from utils.profile_configs import PROFILE_CONFIGS, build_profiles
 
-# Define profile configurations: each configuration specifies selection parameters,
-# convergence mode, and which tau methods/field types to include
+# Which of the shared configs this script actually plots.
+ACTIVE_PROFILE_NAMES = ['flamingo_m200b_cen_massbin',
+                        'flamingo_mstell_mixed_ngal',
+                        'flamingo_mstell_cen_ngal']
 
-PROFILE_CONFIGS = [
-    {
-        'name': 'flamingo_m200b_cen_massbin',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'm200b',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
-        },
-        'convergence_mode': 'massbin',
-        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-
-        ],
-    },
-    {
-        'name': 'flamingo_mstell_mixed_ngal',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'mixed',
-            'selection_mass_def': 'mstell',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 13.2,
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': SAT_FRACS,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-
-        ],
-    },
-    {
-        'name': 'flamingo_mstell_cen_ngal',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'mstell',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-        ],
-        },
-]
-
-"""     {
-        'name': 'abacus_m200b_cen_ngal',
-        'sim_name': 'abacus',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'm200b',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': None,  # Informational only; convergence done in HATF
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "strongest_AGN_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "fiducial_reconstructed",
-                "field_type": "gas",
-            },
-        ],
-    },
-    {
-        'name': 'flamingo_mstell_cen_ngal',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'mstell',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "fiducial",
-                "field_type": "gas",
-            },
-        ],
-    },    
-        {
-        'name': 'flamingo_m200b_cen_massbin',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'm200b',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 13.2,  # Informational only; convergence done in HATF
-        },
-        'convergence_mode': 'massbin',
-        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-
-        ],
-    },
-    {
-        'name': 'flamingo_mstell_mixed_ngal',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'mixed',
-            'selection_mass_def': 'mstell',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 13.2,
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': SAT_FRACS,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-
-        ],
-    },
-    {
-        'name': 'abacus_m200b_cen_ngal',
-        'sim_name': 'abacus',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'm200b',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': None,  # Informational only; convergence done in HATF
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': None,  # Not used for centrals-only mode; sat_frac doesn't affect selection or filenames
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "strongest_AGN_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "fiducial_reconstructed",
-                "field_type": "gas",
-            },
-        ],
-    },
-"""
-
-def build_profiles():
-    """Expand profile configurations over all sat_frac values and tau methods."""
-    profiles = []
-    
-    for config in PROFILE_CONFIGS:
-        sel_params = dict(config['selection_params'])
-        
-        # Determine if we should iterate over sat_fracs
-        # Only iterate when sat_fracs is not None (typically for 'mixed' mode)
-        if config['sat_fracs'] is not None:
-            sat_frac_values = config['sat_fracs']
-        else:
-            # For non-mixed modes, use a single placeholder value
-            # (won't appear in filenames anyway)
-            sat_frac_values = [0.0]
-        
-        for sf in sat_frac_values:
-            for base in config['tau_methods']:
-                p = dict(base)
-                p.update(sel_params)
-                # Set convergence parameters based on convergence_mode
-                if config['convergence_mode'] == 'massbin':
-                    # For massbin mode: halo_mass_range must be non-None
-                    # Use placeholder [0, 1] since indices will be loaded from halo_indices file
-                    p['halo_mass_range'] = [0, 1]
-                    p['n_gal_density']   = None
-                else:
-                    # For ngal mode: both can be None (indices loaded from file)
-                    p['n_gal_density']   = None
-                    p['halo_mass_range'] = None
-                p['sat_frac']        = sf
-                p['name']            = config['name']  # Add name from config for simplified labels
-                p['convergence_mode'] = config['convergence_mode']  # Add convergence_mode for path construction
-                p.setdefault('sim_name', config.get('sim_name', 'flamingo'))
-                profiles.append(p)
-    
-    return profiles
-
-PROFILES = build_profiles()
+PROFILES = [p for p in build_profiles(PROFILE_CONFIGS)
+            if p['name'] in ACTIVE_PROFILE_NAMES]
 
 
 def M200c_to_M200m(M200c, z):
@@ -746,7 +500,8 @@ def generate_comparison_filename(profiles):
             if key == 'halo_mass_range' and value != 'None':
                 filename_parts.append(f"massbin{value}")
             elif key == 'sat_frac':
-                filename_parts.append(f"sf{int(float(value)*100):02d}")
+                if value != 'None':
+                    filename_parts.append(f"sf{int(float(value)*100):02d}")
             elif key == 'A':
                 filename_parts.append(f"A{value}")
             elif key in ['selection_mode', 'selection_mass_def', 'upper_mass_cut', 'upper_radius_cut']:
@@ -763,7 +518,8 @@ def generate_comparison_filename(profiles):
                 if key == 'halo_mass_range' and value != 'None':
                     filename_parts.append(f"massbin{value}")
                 elif key == 'sat_frac':
-                    filename_parts.append(f"sf{int(float(value)*100):02d}")
+                    if value != 'None':
+                        filename_parts.append(f"sf{int(float(value)*100):02d}")
                 elif key == 'A':
                     filename_parts.append(f"A{value}")
                 elif key not in ['halo_mass_range']:
@@ -776,8 +532,11 @@ def generate_comparison_filename(profiles):
                 values_str = '-'.join(varying_params[key])
                 if key == 'sat_frac':
                     # Convert to percentages: 0.10 -> 10, 0.20 -> 20
-                    pct_values = [f"{int(float(v)*100):02d}" for v in varying_params[key]]
-                    filename_parts.append(f"sf_{'_'.join(pct_values)}")
+                    # (the None placeholder carries no sf token)
+                    pct_values = [f"{int(float(v)*100):02d}"
+                                  for v in varying_params[key] if v != 'None']
+                    if pct_values:
+                        filename_parts.append(f"sf_{'_'.join(pct_values)}")
                 elif key == 'halo_mass_range':
                     filename_parts.append(f"massbin_{values_str}")
                 elif key == 'A':
@@ -817,7 +576,7 @@ def _get_profile_label_generators():
     
     def n_gal_based_sat_frac_with_mass_def(profile):
         """Generate label for ngal-based profiles with sat_frac."""
-        sat_frac = profile.get('sat_frac', 0)
+        sat_frac = profile.get('sat_frac') or 0
         mass_str = get_mass_def_label(profile.get('selection_mass_def', 'm200b'))
 
         return f"$\\bar n$-based, $f_\\mathrm{{sat}} = {sat_frac:.1f}$ ({mass_str})"
@@ -916,7 +675,8 @@ def main():
     print(f"Ratio mode            : {RATIO_MODE}")
     print(f"Massbin ratio mode    : {MASSBIN_RATIO_MODE}")
     print(f"\nProfile configurations:")
-    for i, config in enumerate(PROFILE_CONFIGS, start=1):
+    for i, config in enumerate(
+            [c for c in PROFILE_CONFIGS if c['name'] in ACTIVE_PROFILE_NAMES], start=1):
         print(f"\n  Config {i}: {config['name']}")
         print(f"    Selection mode    : {config['selection_params']['selection_mode']}")
         print(f"    Mass def          : {config['selection_params']['selection_mass_def']}")
@@ -935,7 +695,7 @@ def main():
         # Sort: massbin first, then ngal by sat_frac
         working_profiles = sorted(
             PROFILES,
-            key=lambda p: (p.get('convergence_mode') != 'massbin', p.get('sat_frac', 0))
+            key=lambda p: (p.get('convergence_mode') != 'massbin', p.get('sat_frac') or 0)
         )
     else:
         working_profiles = PROFILES
@@ -1054,7 +814,7 @@ def main():
 
         # Create dynamic label for MASSBIN_RATIO_MODE
         if MASSBIN_RATIO_MODE:
-            sat_frac = profile.get('sat_frac', 0)
+            sat_frac = profile.get('sat_frac') or 0
             if np.isclose(sat_frac, 0.0):
                 label = f"Centrals-only ($f_\\mathrm{{sat}} = 0$)"
             else:

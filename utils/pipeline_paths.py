@@ -5,6 +5,8 @@ Single source of truth for all file paths in the kSZ pipeline.
 import numpy as np
 from pathlib import Path
 
+from utils.pipeline_config import PipelineConfig
+
 # Root paths — edit once here if directories change
 DATA_ROOT = Path("/Users/fedorboreiko/Documents/Cambridge/project_github/data")
 PLOT_ROOT = Path("/Users/fedorboreiko/Documents/Cambridge/project_github/plots")
@@ -60,6 +62,10 @@ def selection_defaults(regime: str) -> dict:
         max_mass                : float  (ceiling applied when upper_mass_cut=True)
         upper_radius_cut        : bool
         sat_frac                : float  (only active when selection_mode='mixed')
+
+    This bundle is partial; the caller must additionally supply
+    convergence_mode, n_gal_density, halo_mass_range, target_mean_mass
+    (and identity fields) before the dict is schema-complete.
     """
     if regime == 'mhalo_sel':
         return dict(
@@ -91,52 +97,10 @@ def _selection_tag(config: dict) -> str:
     Build a filename token encoding the selection INTENT — the parameters a
     user sets in a PROFILE_CONFIG — not the converged numeric outcome.
 
-    Tokens emitted (in order):
-        mode_<mode>
-        mass_<mdef>
-        nzmass | allm
-        umc1e<exp> | noumc
-        urc | nourc
-        sf<nn>          (mixed mode only)
-        tm<v>           (when target_mean_mass is set, e.g. tm13p2)
-
-    Numeric convergence results (ngal, massbin window) are intentionally
-    NOT included — those live in the halo_indices file, not in filenames.
+    The implementation now lives in PipelineConfig.selection_tag(); this
+    wrapper is kept because external modules import this name.
     """
-    parts = []
-
-    mode = config.get('selection_mode', 'mixed')
-    parts.append(f"mode_{mode}" if mode is not None else "mode_all")
-
-    mdef = config.get('selection_mass_def', 'mstell')
-    parts.append(f"mass_{mdef}")
-
-    nonzero = config.get('select_nonzero_masses', True)
-    parts.append("nzmass" if nonzero else "allm")
-
-    umc = config.get('upper_mass_cut', True)
-    if umc:
-        mmax = config.get('max_mass', 1e14)
-        exp = int(round(np.log10(mmax)))
-        parts.append(f"umc1e{exp:02d}")
-    else:
-        parts.append("noumc")
-
-    urc = config.get('upper_radius_cut', False)
-    parts.append("urc" if urc else "nourc")
-
-    cmode = config.get('convergence_mode', 'ngal')
-    parts.append(f"cmode_{cmode}")
-
-    if mode == 'mixed' or mode == 'sat':
-        sf = config.get('sat_frac', 0.10)
-        parts.append(f"sf{int(round(sf * 100)):02d}")
-
-    tm = config.get('target_mean_mass')
-    if tm is not None:
-        parts.append(f"tm{tm:.1f}".replace('.', 'p'))
-
-    return "_" + "_".join(parts)
+    return PipelineConfig.coerce(config).selection_tag()
 
 
 def resolve_halo_indices(config: dict) -> np.ndarray:
@@ -160,6 +124,7 @@ def resolve_halo_indices(config: dict) -> np.ndarray:
     Raises:
         FileNotFoundError if the indices file does not exist (run HATF first).
     """
+    config = PipelineConfig.coerce(config, require_selection=True)
     path = halo_indices_path(config)
     if not path.exists():
         raise FileNotFoundError(
@@ -168,6 +133,16 @@ def resolve_halo_indices(config: dict) -> np.ndarray:
             f"Run HATF first to generate the halo sample for this selection config."
         )
     return np.load(path)
+
+
+def _peek_tau_method(config):
+    """Read tau_method before validation (tau_map_path needs it to decide
+    whether selection fields are required). Accepts a dict or a PipelineConfig."""
+    if isinstance(config, PipelineConfig):
+        value = config.tau_method
+    else:
+        value = config.get("tau_method")
+    return value if value is not None else "fullFT_tau_reconstruction"
 
 
 # Stage 1 — HATF / tau-map paths
@@ -179,8 +154,9 @@ def delta_2d_path(config: dict, label: str) -> Path:
     For 'halos': includes comprehensive selection tag with ALL parameters for maximum specificity
                  to prevent different selection configs from colliding
     """
-    sim_name = config.get('sim_name', 'flamingo')
-    gas_type = config["gas_type"].replace("_reconstructed", "")
+    config   = PipelineConfig.coerce(config, require_selection=(label == "halos"))
+    sim_name = config.sim_name
+    gas_type = config.gas_type.replace("_reconstructed", "")
     sel_tag  = _selection_tag(config) if label == "halos" else ""
     return _sim_data_root(sim_name) / "delta_fields" / f"delta_2d_{label}_{gas_type}{sel_tag}.npy"
 
@@ -196,8 +172,9 @@ def halo_indices_path(config: dict) -> Path:
     'gas_type' here is the raw physics label (no _reconstructed suffix), matching
     the convention used by delta_2d_path for the 'halos' label.
     """
-    sim_name = config.get('sim_name', 'flamingo')
-    gas_type = config["gas_type"].replace("_reconstructed", "")
+    config   = PipelineConfig.coerce(config, require_selection=True)
+    sim_name = config.sim_name
+    gas_type = config.gas_type.replace("_reconstructed", "")
     sel_tag  = _selection_tag(config)
     return _sim_data_root(sim_name) / "halo_indices" / f"halo_indices_{gas_type}{sel_tag}.npy"
 
@@ -221,8 +198,9 @@ def halo_props_cache_path(config: dict) -> Path:
       (the closest available proxy).
     * This file is only written/read when is_massbin_config(config) is True.
     """
-    sim_name = config.get('sim_name', 'flamingo')
-    gas_type = config["gas_type"].replace("_reconstructed", "")
+    config   = PipelineConfig.coerce(config, require_selection=True)
+    sim_name = config.sim_name
+    gas_type = config.gas_type.replace("_reconstructed", "")
     sel_tag  = _selection_tag(config)
     return _sim_data_root(sim_name) / "halo_indices" / f"halo_props_{gas_type}{sel_tag}.npz"
 
@@ -232,8 +210,9 @@ def tau_prefactor_path(config: dict) -> Path:
     Path for the τ-map prefactor.
     Depends only on gas physics and grid resolution, not on selection.
     """
-    sim_name = config.get('sim_name', 'flamingo')
-    gas_type = config["gas_type"].replace("_reconstructed", "")
+    config   = PipelineConfig.coerce(config, require_selection=False)
+    sim_name = config.sim_name
+    gas_type = config.gas_type.replace("_reconstructed", "")
     return _sim_data_root(sim_name) / "tau_map_prefactors" / f"tau_prefactor_{gas_type}.npy"
 
 
@@ -246,10 +225,13 @@ def tau_map_path(config: dict) -> Path:
     2D_FT methods: comprehensive selection tag included so different selection 
                    configs produce different files (prevents collisions).
     """
-    sim_name   = config.get('sim_name', 'flamingo')
-    gas_type   = config["gas_type"]
-    tau_method = config.get("tau_method", "fullFT_tau_reconstruction")
-    field_type = config.get("field_type", "gas")
+    tau_method = _peek_tau_method(config)
+    config     = PipelineConfig.coerce(
+        config, require_selection=(tau_method != "fullFT_tau_reconstruction")
+    )
+    sim_name   = config.sim_name
+    gas_type   = config.gas_type
+    field_type = config.field_type
     method_dir = _sim_data_root(sim_name) / "tau_maps" / tau_method
     prefix     = "tau_map_dm_" if field_type == "dm" else "tau_map_"
 
@@ -258,7 +240,7 @@ def tau_map_path(config: dict) -> Path:
 
     elif tau_method == "2D_FT_massdep_tau_reconstruction":
         sel = _selection_tag(config)
-        fname = f"{prefix}{gas_type}_A_{config['A']:.5f}{sel}.npy"
+        fname = f"{prefix}{gas_type}_A_{config.A:.5f}{sel}.npy"
 
     else:
         sel   = _selection_tag(config)
@@ -285,10 +267,11 @@ def ap_output_path(config: dict, method: str = "simple") -> Path:
         config: Configuration dictionary
         method: 'simple' (get_AP_simple_jax_batched) or 'pixell' (get_AP_pixell_jax_batched)
     """
-    sim_name   = config.get('sim_name', 'flamingo')
-    gas_type   = config["gas_type"]
-    tau_method = config.get("tau_method", "fullFT_tau_reconstruction")
-    field_type = config.get("field_type", "gas")
+    config     = PipelineConfig.coerce(config, require_selection=True)
+    sim_name   = config.sim_name
+    gas_type   = config.gas_type
+    tau_method = config.tau_method
+    field_type = config.field_type
     sel_tag    = _selection_tag(config).lstrip("_")
 
     # Base directory depends on method
@@ -296,7 +279,7 @@ def ap_output_path(config: dict, method: str = "simple") -> Path:
 
     # Optional A-parameter suffix (massdep method only)
     if tau_method == "2D_FT_massdep_tau_reconstruction":
-        method_dir = f"{tau_method}_A_{config['A']:.5f}"
+        method_dir = f"{tau_method}_A_{config.A:.5f}"
     else:
         method_dir = tau_method
 

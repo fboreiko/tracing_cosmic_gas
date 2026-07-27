@@ -441,7 +441,6 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
         - z_real: float (redshift)
         - n_gal_density: float (galaxy number density in cMpc/h^-3, e.g., 87e-5 or 1e-4) - only used when halo_mass_range is None
         - halo_mass_range: int or None (mass bin index 0 to N-1, where N bins are created with ~5000 halos per bin between 10^13 and max mass)
-        - beam_smoothing: bool (whether to apply beam smoothing, default True)
         - selection_regime: str ('mhalo_sel' or 'mgal_sel', default 'mhalo_sel')
     fwhm_beam_arcmin : float, optional
         Beam FWHM in arcminutes (default 1.6)
@@ -618,8 +617,11 @@ def main():
         'sim_name': 'flamingo',
         'gas_type': 'strongest_AGN_reconstructed',
         'tau_method': 'fullFT_tau_reconstruction',
+        'field_type': 'gas',
         'n_gal_density': 1e-4,
         'halo_mass_range': None,
+        'convergence_mode': 'ngal',
+        'target_mean_mass': None,
         **selection_defaults('mgal_sel'),  # Use explicit parameters
     }
     get_AP_simple(config)

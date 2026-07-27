@@ -31,199 +31,21 @@ import get_AP_pixell_jax_batched as pixell_module
 # Simulation constants
 Z_REAL = 0.74   # redshift of observed sample — never changes, this is independent of simulation intrinsic redshift
 
-SAT_FRACS = [0.10, 0.20, 0.30]
 
-PROFILE_CONFIGS = [
-    {
-        'name': 'flamingo_cen_massbin',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'm200b',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 12.2,
-        },
-        'convergence_mode': 'massbin',
-        'sat_fracs': None,
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction", 
-                "gas_type": "strongest_AGN_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "dm",
-            },
-        ],
-    },
-    {
-        'name': 'flamingo_cen_massbin',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'm200b',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': 13.8,
-        },
-        'convergence_mode': 'massbin',
-        'sat_fracs': None,
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "strongest_AGN_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "dm",
-            },
-        ],
-    },   
-]
+from utils.profile_configs import PROFILE_CONFIGS, build_profiles
 
-"""
-    {
-        'name': 'flamingo_mstell_sat',
-        'sim_name': 'flamingo',
-        'selection_params': {
-            'selection_mode': 'sat',
-            'selection_mass_def': 'mstell',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': None,
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': SAT_FRACS,
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "strongest_AGN_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "dm",
-            },
-        ],
-    },
-    {
-        'name': 'abacus_m200b_cen_ngal',
-        'sim_name': 'abacus',
-        'selection_params': {
-            'selection_mode': 'cen',
-            'selection_mass_def': 'm200b',
-            'select_nonzero_masses': True,
-            'upper_mass_cut': False,
-            'max_mass': 1e14,
-            'upper_radius_cut': False,
-            'target_mean_mass': None,  # Informational only; convergence done in HATF
-        },
-        'convergence_mode': 'ngal',
-        'sat_fracs': None,
-        'tau_methods': [
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "strongest_AGN_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "strongest_AGN",
-                "field_type": "dm",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "2D_FT_upgrade_tau_reconstruction",
-                "gas_type": "fiducial_reconstructed",
-                "field_type": "gas",
-            },
-            {
-                "projection_type": "simple",
-                "tau_method": "fullFT_tau_reconstruction",
-                "gas_type": "fiducial",
-                "field_type": "dm",
-            },
-        ],
-    }, """
+# Which of the shared configs this script actually runs.
+ACTIVE_PROFILE_NAMES = ['flamingo_cen_massbin']
 
-def build_profiles():
-    """Expand profile configurations over all sat_frac values and tau methods."""
-    profiles = []
-    
-    for config in PROFILE_CONFIGS:
-        sel_params = dict(config['selection_params'])
-        
-        if config['sat_fracs'] is not None:
-            sat_frac_values = config['sat_fracs']
-        else:
-            # For non-mixed modes, use a single placeholder value
-            # (won't appear in filenames anyway)
-            sat_frac_values = [0.10]
-        
-        for sf in sat_frac_values:
-            for base in config['tau_methods']:
-                p = dict(base)
-                p.update(sel_params)
-                p['profile_name']    = config.get('name', 'unnamed_profile')
-                if config['convergence_mode'] == 'massbin':
-                    p['halo_mass_range'] = [0, 1] # placeholder
-                    p['n_gal_density']   = None
-                else:
-                    p['n_gal_density']   = None
-                    p['halo_mass_range'] = None
-                p['sat_frac']        = sf
-                p['sim_name']        = base.get('sim_name', config.get('sim_name', 'flamingo'))
-                p['convergence_mode'] = config.get('convergence_mode', 'ngal')
-                profiles.append(p)
-    
-    return profiles
-
-PROFILES = build_profiles()
+PROFILES = [p for p in build_profiles(PROFILE_CONFIGS)
+            if p['name'] in ACTIVE_PROFILE_NAMES]
 
 
 def run_configuration(profile, config_num, total_configs):
     if rank == 0:
         print(f"\n{'='*70}")
         print(f"Config {config_num}/{total_configs}")
-        print(f"  profile   : {profile.get('profile_name', 'N/A')}")
+        print(f"  profile   : {profile.get('name', 'N/A')}")
         print(f"  sim_name  : {profile.get('sim_name', 'flamingo')}")
         print(f"  projection: {profile.get('projection_type', 'N/A')}")
         print(f"  gas_type  : {profile['gas_type']}")
@@ -231,7 +53,8 @@ def run_configuration(profile, config_num, total_configs):
         print(f"  field_type: {profile['field_type']}")
         print(f"  sel_mode  : {profile.get('selection_mode', 'N/A')}")
         print(f"  sel_mass  : {profile.get('selection_mass_def', 'N/A')}")
-        print(f"  sat_frac  : {profile['sat_frac']*100:.0f}%")
+        _sf = profile.get('sat_frac')
+        print(f"  sat_frac  : {'N/A' if _sf is None else f'{_sf*100:.0f}%'}")
         print(f"  Start     : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     try:
@@ -248,16 +71,14 @@ def run_configuration(profile, config_num, total_configs):
             'upper_radius_cut': profile['upper_radius_cut'],
         }
 
-        if profile.get('target_mean_mass') is not None:
-            config['target_mean_mass'] = profile['target_mean_mass']
+        config['target_mean_mass'] = profile.get('target_mean_mass')
 
         if profile.get('upper_mass_cut'):
             config['max_mass'] = profile['max_mass']
 
         # Always include these for cache detection
         config['n_gal_density'] = profile.get('n_gal_density')
-        if profile.get('halo_mass_range') is not None:
-            config['halo_mass_range'] = profile['halo_mass_range']
+        config['halo_mass_range'] = profile.get('halo_mass_range')
 
         if profile.get('selection_mode') in ('mixed', 'sat'):
             config['sat_frac'] = profile['sat_frac']

@@ -397,7 +397,8 @@ def get_paths_from_config(config):
     }
 
 
-def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6, batch_size=100):
+def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6, batch_size=100,
+                  proj_cutout='car'):
     """Main processing pipeline with MPI parallelization.
     
     Parameters:
@@ -411,8 +412,6 @@ def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6
         - z_real: float (real redshift)
         - n_gal_density: float (galaxy number density in cMpc/h^-3, e.g., 87e-5 or 5e-4) - only used when halo_mass_range is None
         - halo_mass_range: int or None (mass bin index 0 to N-1, where N bins are created with ~5000 halos per bin between 10^13 and max mass)
-        - beam_smoothing: bool (whether to apply beam smoothing, default True)
-        - projection_type: str ('car' or 'cea', default 'car')
         - selection_regime: str ('mhalo_sel' or 'mgal_sel', default 'mhalo_sel')
     z_fict : float, optional
         Fictitious redshift for projection (default 3.0)
@@ -422,6 +421,10 @@ def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6
         Beam FWHM in arcminutes (default 1.6)
     batch_size : int, optional
         Batch size for processing (default 100)
+    proj_cutout : str, optional
+        Cutout map projection passed to pixell, 'car' or 'cea' (default 'car').
+        This is NOT the config key 'projection_type', which selects the AP
+        method ('simple' / 'pixell' / 'pixell_cea') in the conductor and plotter.
     """
     
     sim_name = config.get('sim_name', 'flamingo')
@@ -432,7 +435,6 @@ def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6
     n_cell = require_sim_param(sim_name, 'ngrid_default')
     z_real = config.get('z_real', 0.74)
     beam_smoothing = BEAM_SMOOTHED
-    proj_cutout = config.get('projection_type', 'car')
     
     # Get paths from config
     paths = get_paths_from_config(config)
@@ -592,20 +594,18 @@ def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6
 
 def main():
     """Main function for standalone execution using default config."""
+    from utils.pipeline_paths import selection_defaults
+
     config = {
         'sim_name': 'flamingo',
         'gas_type': 'strongest_AGN_reconstructed',
         'tau_method': 'fullFT_tau_reconstruction',
+        'field_type': 'gas',
         'n_gal_density': 1e-4,
-        'halo_mass_range': 0,
-        'beam_smoothing': True,
-        'projection_type': 'car',
-        'selection_mode': 'mixed',
-        'selection_mass_def': 'mstell',
-        'select_nonzero_masses': True,
-        'upper_mass_cut': True,
-        'upper_radius_cut': False,
-        'sat_frac': 0.10
+        'halo_mass_range': None,
+        'convergence_mode': 'ngal',
+        'target_mean_mass': None,
+        **selection_defaults('mgal_sel'),  # Use explicit parameters
     }
     get_AP_pixell(config)
 
