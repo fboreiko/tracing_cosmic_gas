@@ -559,7 +559,7 @@ def get_AP_simple(config, fwhm_beam_arcmin=1.6, batch_size=100, res_increase=8):
 
 def main():
     """Main function for standalone execution using default config."""
-    from utils.pipeline_paths import selection_defaults
+    from utils.sample_selection import selection_defaults
     
     config = {
         'sim_name': 'flamingo',

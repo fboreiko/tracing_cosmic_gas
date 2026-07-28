@@ -68,50 +68,6 @@ def get_particle_file_path(feedback: str, sim_name: str = "flamingo") -> Path:
 
 
 # ----------------------------------------------------------------------
-# Selection presets - the ONE definition of each regime.
-#
-# These values are authoritative. HATF_reconstruction.py must import them
-# rather than re-deriving its own regime block; the two copies had drifted
-# (upper_mass_cut True here vs False there), which silently produced two
-# different selection tags for nominally the same selection.
-# ----------------------------------------------------------------------
-SELECTION_REGIMES = {
-    'mhalo_sel': dict(
-        selection_mode='cen',
-        selection_mass_def='m200b',
-        select_nonzero_masses=True,
-        upper_mass_cut=False,
-        max_mass=1e14,
-        upper_radius_cut=False,
-        sat_frac=0.10,
-    ),
-    'mgal_sel': dict(
-        selection_mode='mixed',
-        selection_mass_def='mstell',
-        select_nonzero_masses=True,
-        upper_mass_cut=False,
-        max_mass=1e14,
-        upper_radius_cut=False,
-        sat_frac=0.10,
-    ),
-}
-
-
-def selection_defaults(regime: str) -> dict:
-    """Return the standard bundle of explicit selection parameters for a regime.
-
-    This bundle is partial; the caller must additionally supply
-    convergence_mode, n_gal_density, halo_mass_range, target_mean_mass
-    (and identity fields) before the dict is schema-complete.
-    """
-    if regime not in SELECTION_REGIMES:
-        raise ValueError(
-            f"Unknown regime {regime!r}. Use one of {sorted(SELECTION_REGIMES)}."
-        )
-    return dict(SELECTION_REGIMES[regime])
-
-
-# ----------------------------------------------------------------------
 # Selection tag
 # ----------------------------------------------------------------------
 def selection_tag(config) -> str:

@@ -31,9 +31,9 @@ from utils.pipeline_paths import (
     ensure_parents,
     plot_path,
     selection_tag,
-    selection_defaults,
     get_particle_file_path,
 )
+from utils.sample_selection import selection_defaults
 from utils.sim_params import get_sim_params
 from utils.plot_data import save_plot_data
 

@@ -543,7 +543,7 @@ def get_AP_pixell(config, z_fict=3.0, cutout_pixel_dim=150, fwhm_beam_arcmin=1.6
 
 def main():
     """Main function for standalone execution using default config."""
-    from utils.pipeline_paths import selection_defaults
+    from utils.sample_selection import selection_defaults
 
     config = {
         'sim_name': 'flamingo',

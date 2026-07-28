@@ -1,5 +1,58 @@
+"""
+Halo/galaxy sample selection: the regime presets and the selection algorithm.
+
+`SELECTION_REGIMES` is the ONE definition of each named regime. Every entry
+point (HATF_reconstruction, get_AP_*) must import `selection_defaults` from
+here rather than re-deriving its own regime block; the copies had drifted
+once already (upper_mass_cut True in one place vs False in the other), which
+silently produced two different selection tags for nominally the same
+selection.
+"""
+
 import numpy as np
 
+# ----------------------------------------------------------------------
+# Selection presets
+# ----------------------------------------------------------------------
+SELECTION_REGIMES = {
+    'mhalo_sel': dict(
+        selection_mode='cen',
+        selection_mass_def='m200b',
+        select_nonzero_masses=True,
+        upper_mass_cut=False,
+        max_mass=1e14,
+        upper_radius_cut=False,
+        sat_frac=0.10,
+    ),
+    'mgal_sel': dict(
+        selection_mode='mixed',
+        selection_mass_def='mstell',
+        select_nonzero_masses=True,
+        upper_mass_cut=False,
+        max_mass=1e14,
+        upper_radius_cut=False,
+        sat_frac=0.10,
+    ),
+}
+
+
+def selection_defaults(regime: str) -> dict:
+    """Return the standard bundle of explicit selection parameters for a regime.
+
+    This bundle is partial; the caller must additionally supply
+    convergence_mode, n_gal_density, halo_mass_range, target_mean_mass
+    (and identity fields) before the dict is schema-complete.
+    """
+    if regime not in SELECTION_REGIMES:
+        raise ValueError(
+            f"Unknown regime {regime!r}. Use one of {sorted(SELECTION_REGIMES)}."
+        )
+    return dict(SELECTION_REGIMES[regime])
+
+
+# ----------------------------------------------------------------------
+# Selection algorithm
+# ----------------------------------------------------------------------
 def select_halos(selection_masses, is_central_flags,
                  n_gal_density=None, halo_mass_range=None,
                  rank=0, min_mass=1e13, select_nonzero_masses=False,
