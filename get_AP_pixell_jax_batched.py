@@ -19,8 +19,6 @@ import jax
 import jax.numpy as jnp
 from jax import vmap, jit
 import sys
-# `utils` is a proper package (utils/__init__.py); run from the repo root
-# or `pip install -e .` instead of patching sys.path to one machine.
 from utils.tools import (
     cutoutGeometry,
     bilinear_interpolate_batch,

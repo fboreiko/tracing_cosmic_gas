@@ -155,7 +155,7 @@ class PipelineConfig:
             if value in mapping:
                 raise ValueError(
                     f"Config key {key!r} has legacy value {value!r}; "
-                    f"use {mapping[value]}. See NAMING_REFACTOR.md."
+                    f"use {mapping[value]}."
                 )
 
         # 4. Identity requiredness.
@@ -217,10 +217,7 @@ class PipelineConfig:
     def replace(self, **changes):
         """Return a NEW config with `changes` applied and re-validated.
 
-        Use this instead of mutating a shared config dict. Mutation in place
-        was the mechanism behind the old `_config['gas_type'] += '_reconstructed'`
-        bug, where a path built before the mutation and one built after
-        silently pointed at different files.
+        Use this instead of mutating a shared config dict.
         """
         d = {f.name: getattr(self, f.name) for f in fields(self)}
         d.update(changes)

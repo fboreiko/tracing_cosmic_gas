@@ -16,8 +16,6 @@ import os
 import sys
 from astropy.cosmology import FlatLambdaCDM
 from astropy import units as u
-# `utils` is a proper package (utils/__init__.py); run from the repo root
-# or `pip install -e .` instead of patching sys.path to one machine.
 from utils.catalog_loaders import load_halo_properties
 from utils.pipeline_paths import (
     DATA_ROOT,

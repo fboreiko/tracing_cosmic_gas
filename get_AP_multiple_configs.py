@@ -28,7 +28,7 @@ import get_AP_simple_jax_batched as simple_module
 import get_AP_pixell_jax_batched as pixell_module
 
 # Simulation constants
-Z_REAL = 0.74   # redshift of observed sample — never changes, this is independent of simulation intrinsic redshift
+Z_REAL = 0.74   # redshift of observed sample
 
 
 from utils.profile_configs import PROFILE_CONFIGS, build_profiles
