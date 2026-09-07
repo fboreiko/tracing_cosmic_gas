@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=predict_Pmg
-#SBATCH --partition=icelake
+#SBATCH --partition=sapphire
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -26,8 +26,8 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 WORKDIR=/home/fb635/fedirfiles/tracing_cosmic_gas
-VENV=/home/fb635/fedirfiles/venv
-SCRIPT=predict_Pmx_from_Phx.py
+VENV=/home/fb635/fedirfiles/ox_env
+SCRIPT=Pmx_reconstruction/predict_Pmx_from_Phx.py
 
 # Activate the virtual environment
 source "${VENV}/bin/activate"
@@ -64,7 +64,7 @@ free -h
 echo "Starting P_mg prediction..."
 srun --ntasks="${SLURM_NTASKS:-1}" \
      --cpus-per-task="${SLURM_CPUS_PER_TASK:-1}" \
-     python -u "${SCRIPT}" "$@"
+     python -u -m Pmx_reconstruction.predict_Pmx_from_Phx "$@"
 
 # Print completion info
 echo "Job completed at: $(date)"
