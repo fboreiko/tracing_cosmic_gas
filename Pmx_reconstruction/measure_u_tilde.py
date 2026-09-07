@@ -75,16 +75,23 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
 
-from abacusnbody.analysis.tsc import tsc_parallel
 
-import tracing_cosmic_gas.Pmx_reconstruction.predict_Pmx_from_Phx as P
-from utils.catalog_loaders import load_halo_properties, load_particle_properties
+from utils.catalog_loaders import load_particle_properties
 from utils.power_spectrum_utils import (compute_2d_fft, compute_k_grid_2d,
                                         bin_power_spectrum_2d)
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
-                                  get_halo_file_path, get_particle_file_path,
-                                  plot_path)
+                  get_particle_file_path,
+                 plot_path)
 from utils.plot_data import save_plot_data
+
+from Pmx_reconstruction.pmxlib.binning import load_binned_halos
+from Pmx_reconstruction.pmxlib.bundle import (bundle_path, derive_P_halo_matter,
+                                              _load_or_compute_delta)
+from Pmx_reconstruction.pmxlib.config import (PmxConfig, TRACER_INFO,
+                                              add_binning_args,
+                                              add_concentration_args)
+from Pmx_reconstruction.pmxlib.nfw import concentration, r200m_of_M, u_nfw
+from Pmx_reconstruction.pmxlib.painting import azimuthal_mean, paint_2d
 
 TRACER_COLOR = {'gas': 'C1', 'dm': 'C0', 'matter': 'C2'}
 SPECIES = ('dm', 'gas')
@@ -93,55 +100,32 @@ SPECIES = ('dm', 'gas')
 # ==============================================================================
 # 1.  Paths
 # ==============================================================================
-def ustar_path(nbins, logm_min, logm_max, ngrid, nkbins):
+def ustar_path(cfg, nbins, logm_min, logm_max, ngrid, nkbins):
     """Companion cache to bundle_path: same stem, different prefix."""
     nk = 'default' if nkbins is None else str(nkbins)
-    stem = (f'ustar_v3_{P.FEEDBACK}_{P.MASS_DEF}'
+    stem = (f'ustar_v3_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{logm_min:g}-{logm_max:g}_nb{nbins}'
             f'_ngrid{ngrid}_nk{nk}'
-            f'_{"cen" if P.CENTRALS_ONLY else "all"}.npz')
-    return DATA_ROOT / P.SIM_NAME / 'pme_inputs' / stem
+            f'_{"cen" if cfg.centrals_only else "all"}.npz')
+    return DATA_ROOT / cfg.sim_name / 'pme_inputs' / stem
 
 
 # ==============================================================================
 # 2.  Halo catalogue, binned exactly as measure_spectra does it
 # ==============================================================================
-def load_binned_centrals(nbins, logm_min, logm_max):
+def load_binned_centrals(cfg):
     """Positions, masses, radii and bin index of the in-range centrals.
 
-    Reproduces the binning of measure_spectra bit for bit (same edges, same
-    right-edge rule, same centrals cut), so bin i here is bin i in the bundle.
-    r200b is NOT taken from the catalogue but recomputed from M200b with the
-    module's r200m_of_M, i.e. with exactly the truncation radius u_nfw assumes.
-    The catalogue value is loaded only for a consistency print.
+    The binning itself is pmxlib.binning's, which is the same code
+    measure_spectra uses, so bin i here is bin i in the bundle by construction
+    rather than by comment. r200b is NOT taken from the catalogue but recomputed
+    from M200b with r200m_of_M, i.e. with exactly the truncation radius u_nfw
+    assumes. The catalogue value is loaded only for a consistency print.
     """
-    halo_file = get_halo_file_path(P.FEEDBACK, sim_name=P.SIM_NAME)
-    print(f"  {halo_file}")
-    requested = ['pos', P.MASS_DEF, 'r200b']
-    if P.CENTRALS_ONLY:
-        requested.append('centrals')
-    props = load_halo_properties(halo_file, requested, sim_name=P.SIM_NAME)
-
-    pos = np.asarray(props['pos'], dtype=np.float64)
-    mass = np.asarray(props[P.MASS_DEF], dtype=np.float64) * P.HALO_MASS_UNIT_MSUN_H
-    r_cat = np.asarray(props['r200b'], dtype=np.float64)
-    if P.CENTRALS_ONLY:
-        cen = np.asarray(props['centrals']).astype(bool)
-        pos, mass, r_cat = pos[cen], mass[cen], r_cat[cen]
-    del props
-    gc.collect()
-
-    logM_edges = np.linspace(logm_min, logm_max, nbins + 1)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        logm = np.log10(mass)
-    in_range = np.isfinite(logm) & (logm >= logm_min) & (logm < logm_max)
-    bin_index = np.full(mass.size, -1, dtype=np.int64)
-    bin_index[in_range] = np.digitize(logm[in_range], logM_edges) - 1
-    bin_index[bin_index == nbins] = nbins - 1
-
-    pos, mass, r_cat, bin_index = (pos[in_range], mass[in_range],
-                                   r_cat[in_range], bin_index[in_range])
-    r_use = P.r200m_of_M(mass)                       # cMpc/h, comoving
+    pos, mass, bin_index, logM_edges, extras = load_binned_halos(
+        cfg, extra_props=('r200b',), restrict_to_range=True)
+    r_cat = extras['r200b']
+    r_use = r200m_of_M(mass, cfg.rhobar_m)           # cMpc/h, comoving
 
     # Unit check on the catalogue radius: it should agree with r200m_of_M up to
     # the rhobar_m convention. A ratio near h or 1/h means the catalogue is in
@@ -150,12 +134,12 @@ def load_binned_centrals(nbins, logm_min, logm_max):
     if np.any(finite):
         ratio = np.median(r_cat[finite] / r_use[finite])
         print(f"  catalogue r200b / r200m_of_M(M200b): median {ratio:.4f} "
-              f"(1 = same units and convention; {P.H_LITTLE:.3f} or "
-              f"{1 / P.H_LITTLE:.3f} = cMpc vs cMpc/h)")
+              f"(1 = same units and convention; {cfg.h:.3f} or "
+              f"{1 / cfg.h:.3f} = cMpc vs cMpc/h)")
 
-    pos = np.mod(pos, P.BOX)                         # cKDTree boxsize wants [0, L)
+    pos = np.mod(pos, cfg.box)                       # cKDTree boxsize wants [0, L)
     order = np.argsort(-mass, kind='stable')         # descending mass
-    print(f"  {mass.size} centrals in [{logm_min}, {logm_max}), "
+    print(f"  {mass.size} centrals in [{cfg.logm_min}, {cfg.logm_max}), "
           f"r_max = {r_use.max():.3f} cMpc/h")
     return (pos[order], mass[order], r_use[order], bin_index[order],
             logM_edges)
@@ -164,7 +148,7 @@ def load_binned_centrals(nbins, logm_min, logm_max):
 # ==============================================================================
 # 3.  Particle membership
 # ==============================================================================
-def assign_particles(pos_p, halo_pos, halo_r, halo_mass, m_particle_msun_h,
+def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass, m_particle_msun_h,
                      chunk_particles=5e7, nthread=4):
     """label[p] = index (into the descending-mass halo arrays) of the most
     massive central whose r200m sphere contains particle p, or -1.
@@ -177,7 +161,7 @@ def assign_particles(pos_p, halo_pos, halo_r, halo_mass, m_particle_msun_h,
     n_p = pos_p.shape[0]
     label = np.full(n_p, -1, dtype=np.int32)
     t0 = time.time()
-    tree = cKDTree(pos_p, boxsize=P.BOX, leafsize=64, balanced_tree=False,
+    tree = cKDTree(pos_p, boxsize=cfg.box, leafsize=64, balanced_tree=False,
                    compact_nodes=False)
     print(f"    KD-tree on {n_p:.3e} particles: {time.time() - t0:.1f} s")
 
@@ -208,111 +192,39 @@ def assign_particles(pos_p, halo_pos, halo_r, halo_mass, m_particle_msun_h,
     return label
 
 
-# ==============================================================================
-# 4.  Painting
-# ==============================================================================
-# Number of z cells used by paint(). See the note there; 3 is the smallest
-# value that is safe against the _rightwrap index range.
-_NZ_PAINT = 3
+# Painting, the TSC window and azimuthal averaging now live in
+# pmxlib.painting, shared with predict_Pmx_from_Phx.py rather than duplicated.
 
 
-def paint(pos, weights, ngrid, nthread):
-    """Mass on the 2-D grid (column sum), no normalisation.
-
-    NOT a call to tsc_parallel with a 2-D grid. In abacusutils 2.1.2 the 2-D
-    branch of _tsc_scatter is broken: it sets izw = int16(0) but still writes
-    density[ix, iy, izw], i.e. three indices into a two-dimensional array, so
-    numba fails to type it. (compute_delta_2d in utils/ hits the same bug on
-    this version; if the cached delta fields were built with an older
-    abacusutils, that is why they exist and this did not.)
-
-    Instead we paint into a genuine 3-D grid with _NZ_PAINT cells along z and
-    sum over z. The TSC weights in z sum to unity for every particle, so the
-    column sum is EXACTLY the 2-D result and is independent of _NZ_PAINT -- it
-    is not an approximation, and it is not a different smoothing. _NZ_PAINT = 1
-    would be the obvious choice but is unsafe: iz = round(z/box) can be 1, and
-    then izp1 = _rightwrap(2, 1) = 1 indexes past the end of a size-1 axis,
-    which numba does not bounds-check.
-
-    Weights are normalised by their mean before painting and the mean restored
-    afterwards, so the float32 accumulation happens on numbers of order unity
-    rather than on raw particle masses.
-    """
-    pos = np.ascontiguousarray(pos, dtype=np.float32)   # tsc wraps this IN PLACE
-    w = np.asarray(weights, dtype=np.float64)
-    w_mean = float(w.mean()) if w.size else 1.0
-    if not np.isfinite(w_mean) or w_mean == 0.0:
-        w_mean = 1.0
-    grid = np.zeros((ngrid, ngrid, _NZ_PAINT), dtype=np.float32)
-    tsc_parallel(pos, grid, P.BOX,
-                 weights=np.ascontiguousarray(w / w_mean, dtype=np.float32),
-                 nthread=(nthread or 1))
-    return grid.sum(axis=2, dtype=np.float64) * w_mean
-
-
-def tsc_window_2d(ngrid):
-    """W(k) = prod_i sinc^3(k_i Delta/2) on the fft2 layout, Delta = L/ngrid.
-
-    One factor of the TSC assignment window. Every spectrum in the pipeline is
-    a product of two painted fields and carries W^2, which cancels in the ratio
-    u~_m = R_star_i / (f_i P_halo_x). A stacked profile is ONE painted field and
-    carries a single W that does not cancel; it must be divided out, or the
-    stack reads low by 10% at k = 2 and 30% at k = 5 for ngrid = 2048.
-    """
-    kf = 2.0 * np.pi * np.fft.fftfreq(ngrid, d=P.BOX / ngrid)
-    arg = 0.5 * kf * (P.BOX / ngrid)
-    s = np.ones_like(arg)
-    nz = arg != 0
-    s[nz] = np.sin(arg[nz]) / arg[nz]
-    return (s[:, None] * s[None, :]) ** 3
-
-
-def azimuthal_mean(field, ngrid, k_bins, deconvolve_tsc=False):
-    """Azimuthal average of a full fft2 layout field over the bundle's k bins.
-
-    Self-contained (own fftfreq grid), used only for the profile transforms,
-    where the absolute normalisation is fixed by dividing by the k=0 mode and
-    the repo's binning helper is not needed. With deconvolve_tsc the field is
-    divided by one TSC window before averaging.
-    """
-    if deconvolve_tsc:
-        field = field / tsc_window_2d(ngrid)
-    kf = 2.0 * np.pi * np.fft.fftfreq(ngrid, d=P.BOX / ngrid)
-    kk = np.sqrt(kf[:, None] ** 2 + kf[None, :] ** 2)
-    ib = np.digitize(kk.ravel(), k_bins) - 1
-    ok = (ib >= 0) & (ib < k_bins.size - 1)
-    num = np.bincount(ib[ok], weights=field.ravel()[ok], minlength=k_bins.size - 1)
-    den = np.bincount(ib[ok], minlength=k_bins.size - 1).astype(float)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        return np.where(den > 0, num / den, np.nan)
-
-
+# Painting, the TSC window and azimuthal averaging now live in
+# pmxlib.painting, shared with predict_Pmx_from_Phx.py rather than duplicated
+# with the docstrings copied between the two files by hand.
 # ==============================================================================
 # 5.  The measurement
 # ==============================================================================
-def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
+def measure(cfg, nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
             chunk_particles=5e7):
-    ngrid, nthread = P.NGRID, P.NTHREAD
+    ngrid, nthread = cfg.grid, cfg.threads
     k_bins = np.asarray(data['k_bins'])
-    k_min = 2.0 * np.pi / P.BOX
-    k_grid = compute_k_grid_2d(ngrid, P.BOX)
+    k_min = 2.0 * np.pi / cfg.box
+    k_grid = compute_k_grid_2d(ngrid, cfg.box)
 
     def _binned(prod):
-        kb, kc, Pk = bin_power_spectrum_2d(prod, k_grid, ngrid, P.BOX,
+        kb, kc, Pk = bin_power_spectrum_2d(prod, k_grid, ngrid, cfg.box,
                                            nkbins=nkbins, k_min=k_min)
-        return np.asarray(kc), np.asarray(Pk) * P.BOX ** 2
+        return np.asarray(kc), np.asarray(Pk) * cfg.box ** 2
 
     # --- tracer fields, exactly as measure_spectra builds them ----------------
     print("\nProjected tracer fields:")
-    gas_fft = compute_2d_fft(P._load_or_compute_delta('gas'), ngrid)
-    dm_fft = compute_2d_fft(P._load_or_compute_delta('dm'), ngrid)
+    gas_fft = compute_2d_fft(_load_or_compute_delta(cfg, 'gas'), ngrid)
+    dm_fft = compute_2d_fft(_load_or_compute_delta(cfg, 'dm'), ngrid)
     f_c, f_g = float(data['f_c']), float(data['f_g'])
     m_fft = f_c * dm_fft + f_g * gas_fft
     tracer_fft = {'gas': gas_fft, 'dm': dm_fft}
 
     # --- centrals --------------------------------------------------------------
     print("\nHalo catalogue:")
-    (h_pos, h_mass, h_r, h_bin, logM_edges) = load_binned_centrals(
+    (h_pos, h_mass, h_r, h_bin, logM_edges) = load_binned_centrals(cfg, 
         nbins, logm_min, logm_max)
     if not np.allclose(logM_edges, data['logM_edges']):
         raise SystemExit("Mass-bin edges differ from the spectra bundle; "
@@ -341,17 +253,17 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
     P_shot_species = {}
     rng = np.random.default_rng(12345)
     mass_halo_assigned = np.zeros(n_halo)            # per-halo assigned mass
-    particles_file = get_particle_file_path(P.FEEDBACK, sim_name=P.SIM_NAME)
+    particles_file = get_particle_file_path(cfg.feedback, sim_name=cfg.sim_name)
 
     for species in SPECIES:
         print(f"\n[{species}] loading particles ...")
         t0 = time.time()
         part = load_particle_properties(particles_file, species,
                                         requested=('mass', 'pos'),
-                                        sim_name=P.SIM_NAME, Lbox=P.BOX)
+                                        sim_name=cfg.sim_name, Lbox=cfg.box)
         # float32 is kept for painting; cKDTree makes its own float64 copy.
-        pos = np.mod(np.asarray(part['pos'], dtype=np.float32), np.float32(P.BOX))
-        pos[pos >= P.BOX] -= np.float32(P.BOX)       # boxsize wants [0, L)
+        pos = np.mod(np.asarray(part['pos'], dtype=np.float32), np.float32(cfg.box))
+        pos[pos >= cfg.box] -= np.float32(cfg.box)       # boxsize wants [0, L)
         mass = np.asarray(part['mass'], dtype=np.float64)
         del part
         gc.collect()
@@ -362,9 +274,9 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
         # --- shot spectrum of this species, same convention as the bundle ---
         print(f"[{species}] shot-noise spectrum (random positions) ...")
         t0 = time.time()
-        pos_rand = rng.uniform(0.0, P.BOX, size=pos.shape).astype(np.float32)
-        pos_rand[pos_rand >= P.BOX] -= np.float32(P.BOX)
-        dens_r = paint(pos_rand, mass, ngrid, nthread)
+        pos_rand = rng.uniform(0.0, cfg.box, size=pos.shape).astype(np.float32)
+        pos_rand[pos_rand >= cfg.box] -= np.float32(cfg.box)
+        dens_r = paint_2d(pos_rand, mass, ngrid, nthread)
         del pos_rand
         delta_r = dens_r / (mass_tot_species[species] / ngrid ** 2) - 1.0
         del dens_r
@@ -379,14 +291,14 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
         # Particle-mass unit, self-calibrated: the species' total should be
         # its cosmological share of rhobar_m L^3 (short by the stellar mass).
         # Only used to size the membership chunks, so a few per cent is fine.
-        omega_b = float(P.SIM_PARAMS.get('omega_b'))
-        share = (P.OMEGA_M - omega_b) / P.OMEGA_M if species == 'dm' else omega_b / P.OMEGA_M
-        unit = share * P.rhobar_m * P.BOX ** 3 / mass_tot_species[species]
+        omega_b = float(cfg.sim_params.get('omega_b'))
+        share = (cfg.omega_m - omega_b) / cfg.omega_m if species == 'dm' else omega_b / cfg.omega_m
+        unit = share * cfg.rhobar_m * cfg.box ** 3 / mass_tot_species[species]
         m_p = float(np.mean(mass)) * unit            # Msun/h per particle
         print(f"    mean particle mass ~ {m_p:.3e} Msun/h (self-calibrated)")
 
         print(f"[{species}] membership ...")
-        label = assign_particles(pos, h_pos, h_r, h_mass, m_p,
+        label = assign_particles(cfg, pos, h_pos, h_r, h_mass, m_p,
                                  chunk_particles=chunk_particles,
                                  nthread=nthread)
         member = label >= 0
@@ -404,7 +316,7 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
             m_i = mass[sel]
             mass_bin_species[species][i] = float(m_i.sum())
             m2_bin_species[species][i] = float(np.sum(m_i ** 2))
-            dens_bin[i] += paint(pos[sel], m_i, ngrid, nthread)
+            dens_bin[i] += paint_2d(pos[sel], m_i, ngrid, nthread)
             if stack_bin is not None:
                 # every member re-centred on its own central, all centrals
                 # moved to the box centre: the stacked (mass-weighted mean)
@@ -416,7 +328,7 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
                 # transform is real and positive; the periodic wrap in tsc
                 # takes care of the negative displacements.
                 d = pos[sel] - h_pos[label[sel]]
-                stack_bin[i] += paint(np.mod(d, P.BOX), m_i, ngrid, nthread)
+                stack_bin[i] += paint_2d(np.mod(d, cfg.box), m_i, cfg.box, ngrid, nthread)
         print(f"    {time.time() - t0:.1f} s")
         del pos, mass, label, member, bin_of_particle
         gc.collect()
@@ -432,8 +344,8 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
     mass_bin[:] = mass_bin_species['dm'] + mass_bin_species['gas']
     f_part = mass_bin / M_tot                        # true mass fraction per bin
     counts = data['counts']
-    n_i = counts / P.BOX ** 3
-    f_i = n_i * data['M_mean'] / P.rhobar_m          # what the reconstruction uses
+    n_i = counts / cfg.box ** 3
+    f_i = n_i * data['M_mean'] / cfg.rhobar_m          # what the reconstruction uses
 
     print("\n  bin  logM   f_i (n_i M_i/rhobar)   f_part (assigned)   ratio")
     for i in range(nbins):
@@ -445,7 +357,7 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
           f"  true out-of-sphere fraction = {1 - f_part.sum():.4f}")
     # Per-halo check: assigned mass vs M200b (the catalogue mass counts stars
     # and the sphere assignment loses overlaps, so this is not 1 exactly).
-    unit_total = P.rhobar_m * P.BOX ** 3 / M_tot     # particle unit -> Msun/h
+    unit_total = cfg.rhobar_m * cfg.box ** 3 / M_tot     # particle unit -> Msun/h
     with np.errstate(divide='ignore', invalid='ignore'):
         q = mass_halo_assigned * unit_total / h_mass
     print(f"  assigned mass / M200b per halo: median {np.nanmedian(q):.4f}, "
@@ -472,8 +384,8 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
         if stack_bin is not None:
             F = (np.fft.fft2(stack_bin[i]))
             F = F / F[0, 0]
-            u_stack[i] = azimuthal_mean(F.real, ngrid, k_bins, deconvolve_tsc=True)
-            u_stack_raw[i] = azimuthal_mean(F.real, ngrid, k_bins, deconvolve_tsc=False)
+            u_stack[i] = azimuthal_mean(F.real, cfg.box, ngrid, k_bins, deconvolve_tsc=True)
+            u_stack_raw[i] = azimuthal_mean(F.real, cfg.box, ngrid, k_bins, deconvolve_tsc=False)
         print(f"  bin {i:2d} done")
     del dens_bin
     gc.collect()
@@ -513,15 +425,15 @@ def measure(nbins, logm_min, logm_max, nkbins, data, skip_stack=False,
         m2_bin_dm=m2_bin_species['dm'], m2_bin_gas=m2_bin_species['gas'],
         m2_tot_dm=m2_tot_species['dm'], m2_tot_gas=m2_tot_species['gas'],
         assigned_over_m200b_median=float(np.nanmedian(q)),
-        box=P.BOX, ngrid=ngrid, redshift=P.Z_EVAL, feedback=P.FEEDBACK,
-        mass_def=P.MASS_DEF, centrals_only=P.CENTRALS_ONLY,
+        box=cfg.box, ngrid=ngrid, redshift=cfg.z, feedback=cfg.feedback,
+        mass_def=cfg.mass_def, centrals_only=cfg.centrals_only,
     )
 
 
 # ==============================================================================
 # 6.  Derived quantities
 # ==============================================================================
-def shot_terms(us, data, x):
+def shot_terms(cfg, us, data, x):
     """Self-pair (shot-noise) contributions to R_star_i, U_star and the truth
     for tracer x, in the bundle's units. Zero arrays if the cache predates the
     shot measurement.
@@ -551,7 +463,7 @@ def shot_terms(us, data, x):
     return dict(R_i=R_i, U=truth - R_i.sum(axis=0), truth=truth)
 
 
-def derived(us, data, z, subtract_shot=True):
+def derived(cfg, us, data, z, subtract_shot=True):
     """u~_m per tracer, u_nfw per bin, rho_u, and the Eq. (59) terms.
 
     With subtract_shot the self-pair terms are removed from R_star_i, U_star
@@ -563,8 +475,10 @@ def derived(us, data, z, subtract_shot=True):
     counts = data['counts']
     occ = counts > 0
     f_i = us['f_i']
-    c_i = P.concentration(M_i, z)
-    u_nfw = np.array([P.u_nfw(k, M_i[i], c_i[i]) for i in range(M_i.size)])
+    c_i = concentration(M_i, z, source=cfg.concentration_source,
+                      colossus_model=cfg.colossus_conc_model,
+                      sim_params=cfg.sim_params, sim_name=cfg.sim_name)
+    u_nfw = np.array([u_nfw(k, M_i[i], c_i[i], cfg.rhobar_m) for i in range(M_i.size)])
 
     out = dict(k=k, occ=occ, u_nfw=u_nfw, u_stack=us['u_stack'], f_i=f_i,
                u_stack_raw=us.get('u_stack_raw', us['u_stack']),
@@ -576,9 +490,9 @@ def derived(us, data, z, subtract_shot=True):
             U_star = f_c * us['U_star_dm'] + f_g * us['U_star_gas']
         else:
             R_star_i, U_star = us[f'R_star_{x}'], us[f'U_star_{x}']
-        P_halo_x = data[P.TRACER_INFO[x]['halo_key']]
-        P_true = np.asarray(data[P.TRACER_INFO[x]['truth_key']], dtype=float)
-        sh = shot_terms(us, data, x)
+        P_halo_x = data[TRACER_INFO[x]['halo_key']]
+        P_true = np.asarray(data[TRACER_INFO[x]['truth_key']], dtype=float)
+        sh = shot_terms(cfg, us, data, x)
         shot_frac = sh['truth'] / P_true
         if subtract_shot:
             R_star_i = R_star_i - sh['R_i']
@@ -613,7 +527,7 @@ def derived(us, data, z, subtract_shot=True):
 # ==============================================================================
 # 7.  Plot
 # ==============================================================================
-def make_plot(d, us, data, args):
+def make_plot(cfg, d, us, data, args):
     k = d['k']
     k_Ny = float(data['k_Nyquist'])
     logM = data['logM_cen']
@@ -622,7 +536,7 @@ def make_plot(d, us, data, args):
     tracers = ['gas', 'dm']
 
     fig, ax = plt.subplots(2, 3, figsize=(16, 9))
-    fig.suptitle(rf"$\tilde u_m$ measured from the particles, {P.FEEDBACK}, $z={z}$"
+    fig.suptitle(rf"$\tilde u_m$ measured from the particles, {cfg.feedback}, $z={z}$"
                  + ("  [self-pair shot noise subtracted]" if d['subtract_shot']
                     else "  [shot noise NOT subtracted]"), fontsize=12)
 
@@ -691,17 +605,17 @@ def make_plot(d, us, data, args):
         a_.grid(alpha=0.3)
     fig.tight_layout()
 
-    stem = (f"u_tilde_{P.MASS_DEF}_nb{args.nbins}"
-            f"_logM{args.logm_min:g}-{args.logm_max:g}_{args.concentration}"
+    stem = (f"u_tilde_{cfg.mass_def}_nb{args.nbins}"
+            f"_logM{args.logm_min:g}-{args.logm_max:g}_{cfg.concentration_source}"
             f"{'' if d['subtract_shot'] else '_noshot'}")
-    out = plot_path('pme_reconstruction', P.FEEDBACK, stem=stem)
+    out = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
     ensure_parents(out)
     fig.savefig(out, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"\n[plot] saved {out}")
 
     payload = dict(k=k, logM_cen=logM, occupied=occ, u_nfw=d['u_nfw'],
-                   u_stack=d['u_stack'], f_i=d['f_i'], concentration=args.concentration)
+                   u_stack=d['u_stack'], f_i=d['f_i'], concentration=cfg.concentration_source)
     payload['subtract_shot'] = d['subtract_shot']
     for x in ('gas', 'dm', 'matter'):
         for key in ('u_tilde', 'rho_u', 'R', 'R_star', 'U_star', 'U_flat',
@@ -730,10 +644,8 @@ def make_plot(d, us, data, args):
 def main():
     ap = argparse.ArgumentParser(
         description="Measure u~_m(k|M_i), R_star, U_star from the particles.")
-    ap.add_argument('--nbins', type=int, default=P.NBINS)
-    ap.add_argument('--logm-min', type=float, default=P.LOGM_MIN)
-    ap.add_argument('--logm-max', type=float, default=P.LOGM_MAX)
-    ap.add_argument('--nkbins', type=int, default=P.NKBINS)
+    add_binning_args(ap)
+    add_concentration_args(ap)
     ap.add_argument('--recompute', action='store_true')
     ap.add_argument('--plot-only', action='store_true',
                     help="never measure; fail if the cache is absent")
@@ -741,34 +653,29 @@ def main():
                     help="do not measure the stacked first-moment profile")
     ap.add_argument('--chunk-particles', type=float, default=5e7,
                     help="expected member particles per membership chunk")
-    ap.add_argument('--concentration', choices=['powerlaw', 'colossus'],
-                    default=P.CONCENTRATION_SOURCE)
-    ap.add_argument('--concentration-model', default=P.COLOSSUS_CONC_MODEL)
     ap.add_argument('--show-bins', nargs='+', type=float, default=[12.5, 13.5, 14.5],
                     help="log10 M of the three bins whose profiles are drawn")
-    ap.add_argument('--no-shot-subtract', action='store_true',
+    ap.add_argument('--no-shot-subtract', dest='subtract_self_pairs',
+                    action='store_false', default=True,
                     help="keep the self-pair shot-noise terms in R_star, U_star "
                          "and the truth (for comparison; the default removes them)")
-    ap.add_argument('--nthread', type=int, default=None,
-                    help=f"threads for the KD-tree query and TSC painting "
-                         f"(default: sim_params nthread = {P.NTHREAD})")
     args = ap.parse_args()
-    if args.nthread is not None:
-        P.NTHREAD = int(args.nthread)
 
-    P.CONCENTRATION_SOURCE = args.concentration
-    P.COLOSSUS_CONC_MODEL = args.concentration_model
+    # One frozen config. This is where the script used to reach into the main
+    # module and rebind its globals (P.NTHREAD, P.CONCENTRATION_SOURCE,
+    # P.COLOSSUS_CONC_MODEL); nothing is mutated now.
+    cfg = PmxConfig.from_args(args)
 
-    bpath = P.bundle_path(args.nbins, args.logm_min, args.logm_max, P.NGRID, args.nkbins)
+    bpath = bundle_path(cfg, args.nbins, args.logm_min, args.logm_max, cfg.grid, args.nkbins)
     if not bpath.exists():
         raise SystemExit(f"Spectra bundle missing:\n  {bpath}\nRun "
                          "predict_Pmx_from_Phx.py first.")
     print(f"Spectra bundle:\n  {bpath}")
     with np.load(bpath, allow_pickle=False) as f:
         data = {key: f[key] for key in f.files}
-    P.derive_P_halo_matter(data)
+    derive_P_halo_matter(cfg, data)
 
-    upath = ustar_path(args.nbins, args.logm_min, args.logm_max, P.NGRID, args.nkbins)
+    upath = ustar_path(cfg, args.nbins, args.logm_min, args.logm_max, cfg.grid, args.nkbins)
     if upath.exists() and not args.recompute:
         print(f"u~ cache:\n  {upath}")
         with np.load(upath, allow_pickle=False) as f:
@@ -776,19 +683,19 @@ def main():
     elif args.plot_only:
         raise SystemExit(f"--plot-only but no cache at\n  {upath}")
     else:
-        us = measure(args.nbins, args.logm_min, args.logm_max, args.nkbins,
+        us = measure(cfg, args.nbins, args.logm_min, args.logm_max, args.nkbins,
                      data, skip_stack=args.skip_stack,
                      chunk_particles=args.chunk_particles)
         ensure_parents(upath)
         np.savez_compressed(upath, **us)
         print(f"\nu~ cache saved:\n  {upath}")
 
-    if 'P_shot_dd' not in us and not args.no_shot_subtract:
+    if 'P_shot_dd' not in us and cfg.subtract_self_pairs:
         print("NOTE: cache predates the shot-noise measurement; nothing is "
               "subtracted. Run with --recompute to measure it.")
-    d = derived(us, data, float(data['redshift']),
-                subtract_shot=not args.no_shot_subtract)
-    make_plot(d, us, data, args)
+    d = derived(cfg, us, data, float(data['redshift']),
+                subtract_shot=cfg.subtract_self_pairs)
+    make_plot(cfg, d, us, data, args)
 
 
 if __name__ == '__main__':

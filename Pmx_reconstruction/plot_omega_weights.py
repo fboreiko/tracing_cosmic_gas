@@ -75,30 +75,39 @@ import matplotlib.pyplot as plt
 # u_nfw, c(M,z), the bundle path and the f_c/f_g that define P_halo_matter all
 # come from there, so this script cannot drift out of step with the
 # reconstruction it is diagnosing.
-import tracing_cosmic_gas.Pmx_reconstruction.predict_Pmx_from_Phx as P
+from utils.pipeline_paths import ensure_parents, plot_path
+from utils.plot_data import save_plot_data
+
+from Pmx_reconstruction.pmxlib.bundle import bundle_path, derive_P_halo_matter
+from Pmx_reconstruction.pmxlib.config import (PmxConfig, TRACER_INFO,
+                                              add_binning_args,
+                                              add_concentration_args)
+from Pmx_reconstruction.pmxlib.nfw import concentration, u_nfw
 
 TRACER_COLOR = {'gas': 'C1', 'dm': 'C0', 'matter': 'C2'}
 
 
 # ------------------------------------------------------------------------------
-def omega_measured(data, tracer, z=None):
+def omega_measured(cfg, data, tracer, z=None):
     """omega_i(k) for one tracer, from the bundle. Returns a dict.
 
     R_i(k) = f_i u_m^NFW(k|M_i) P_halo_x(k; M_i)   -- the summand of the
     reconstruction, term by term, with exactly the f_i, M_i and c(M,z) that
     reconstruct_P_matter_x uses.
     """
-    info = P.TRACER_INFO[tracer]
+    info = TRACER_INFO[tracer]
     k = data['k_center']
     P_halo_x = data[info['halo_key']]                 # (nbins, nk)
     counts = data['counts']
     M_i = data['M_mean']
     n_i = counts / float(data['box']) ** 3
-    f_i = n_i * M_i / P.rhobar_m
+    f_i = n_i * M_i / cfg.rhobar_m
     z = float(data['redshift']) if z is None else z
 
-    c_i = P.concentration(M_i, z)
-    u_im = np.array([P.u_nfw(k, M_i[i], c_i[i]) for i in range(M_i.size)])
+    c_i = concentration(M_i, z, source=cfg.concentration_source,
+                      colossus_model=cfg.colossus_conc_model,
+                      sim_params=cfg.sim_params, sim_name=cfg.sim_name)
+    u_im = np.array([u_nfw(k, M_i[i], c_i[i], cfg.rhobar_m) for i in range(M_i.size)])
 
     R_i = f_i[:, None] * u_im * P_halo_x              # (nbins, nk)
     R = R_i.sum(axis=0)
@@ -129,7 +138,7 @@ def omega_from_cache(us, data, tracer):
         omega = R_i / R[None, :]
     # the measured profile per bin, for <u~_m>_omega
     f_i = us['f_i']
-    P_halo_x = data[P.TRACER_INFO[tracer]['halo_key']]
+    P_halo_x = data[TRACER_INFO[tracer]['halo_key']]
     with np.errstate(divide='ignore', invalid='ignore'):
         u_tilde = R_i / (f_i[:, None] * P_halo_x)
     return dict(k=data['k_center'], omega=omega, R_i=R_i, R=R, u_im=u_tilde,
@@ -164,16 +173,10 @@ def main():
         description="Plot the measured reconstruction weight omega_i(k) "
                     "(Eq. 58) for each tracer, from the cached bundle.")
     ap.add_argument('--tracers', nargs='+', default=['gas', 'dm'],
-                    choices=sorted(P.TRACER_INFO),
+                    choices=sorted(TRACER_INFO),
                     help="which tracers to compare (default: gas dm)")
-    ap.add_argument('--nbins', type=int, default=P.NBINS)
-    ap.add_argument('--logm-min', type=float, default=P.LOGM_MIN)
-    ap.add_argument('--logm-max', type=float, default=P.LOGM_MAX)
-    ap.add_argument('--nkbins', type=int, default=P.NKBINS)
-    ap.add_argument('--concentration', choices=['powerlaw', 'colossus'],
-                    default=P.CONCENTRATION_SOURCE,
-                    help="c(M,z) source; must match the run being diagnosed")
-    ap.add_argument('--concentration-model', default=P.COLOSSUS_CONC_MODEL)
+    add_binning_args(ap)
+    add_concentration_args(ap)
     ap.add_argument('--k-show', nargs='+', type=float,
                     default=[0.1, 0.5, 1.0, 2.0, 5.0],
                     help="wavenumbers at which to draw dw/dlnM")
@@ -188,11 +191,11 @@ def main():
                          "part of omega exceeds this fraction (noise guard)")
     args = ap.parse_args()
 
-    P.CONCENTRATION_SOURCE = args.concentration
-    P.COLOSSUS_CONC_MODEL = args.concentration_model
+    # One frozen config; this script used to rebind the main module's globals.
+    cfg = PmxConfig.from_args(args)
 
-    path = P.bundle_path(args.nbins, args.logm_min, args.logm_max,
-                         P.NGRID, args.nkbins)
+    path = bundle_path(cfg, args.nbins, args.logm_min, args.logm_max,
+                         cfg.grid, args.nkbins)
     if not path.exists():
         raise SystemExit(
             f"No bundle at\n  {path}\nRun predict_Pmx_from_Phx.py first "
@@ -200,7 +203,7 @@ def main():
     print(f"Loading bundle:\n  {path}")
     with np.load(path, allow_pickle=False) as f:
         data = {key: f[key] for key in f.files}
-    P.derive_P_halo_matter(data)
+    derive_P_halo_matter(cfg, data)
 
     k = data['k_center']
     logM = data['logM_cen']
@@ -214,7 +217,7 @@ def main():
     try:
         from tracing_cosmic_gas.Pmx_reconstruction.measure_u_tilde import ustar_path
         upath = ustar_path(args.nbins, args.logm_min, args.logm_max,
-                           P.NGRID, args.nkbins)
+                           cfg.grid, args.nkbins)
         if upath.exists():
             with np.load(upath, allow_pickle=False) as f:
                 us = {key: f[key] for key in f.files}
@@ -234,7 +237,7 @@ def main():
     if source in ('measured', 'both'):
         res['measured'] = {t: omega_from_cache(us, data, t) for t in args.tracers}
     if source in ('model', 'both'):
-        res['model'] = {t: omega_measured(data, t, z) for t in args.tracers}
+        res['model'] = {t: omega_measured(cfg, data, t, z) for t in args.tracers}
     primary = 'measured' if 'measured' in res else 'model'
     SRC_LS = {'measured': '-', 'model': '--'}
     SRC_LABEL = {'measured': r'$R_\star$', 'model': r'$u^{\rm NFW}$'}
@@ -244,7 +247,7 @@ def main():
     # --- figure ---------------------------------------------------------------
     fig, ax = plt.subplots(2, 2, figsize=(11.5, 8.5))
     fig.suptitle(rf"Reconstruction weight $\omega_i(k)$ (Eq. 58), "
-                 rf"{P.FEEDBACK}, $z={z}$  [solid: measured $R_\star$, dashed: NFW model]",
+                 rf"{cfg.feedback}, $z={z}$  [solid: measured $R_\star$, dashed: NFW model]",
                  fontsize=11)
 
     # (1) dw/dlnM vs M at a few k, primary source only (both would be unreadable)
@@ -323,14 +326,14 @@ def main():
 
     stem = (f"omega_weights_{'-'.join(args.tracers)}"
             f"_nb{args.nbins}_logM{args.logm_min:g}-{args.logm_max:g}"
-            f"_{args.concentration}_{source}")
-    out = P.plot_path('pme_reconstruction', P.FEEDBACK, stem=stem)
-    P.ensure_parents(out)
+            f"_{cfg.concentration_source}_{source}")
+    out = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
+    ensure_parents(out)
     fig.savefig(out, dpi=150, bbox_inches='tight')
     print(f"\nSaved:\n  {out}")
 
     payload = dict(k=k, logM_cen=logM, occupied=occ, k_Nyquist=k_Ny,
-                   redshift=z, concentration=args.concentration, source=source)
+                   redshift=z, concentration=cfg.concentration_source, source=source)
     for src, rs in res.items():
         for t in args.tracers:
             r = rs[t]
@@ -344,7 +347,7 @@ def main():
     payload['M_i'] = res[primary][args.tracers[0]]['M_i']
     if 'model' in res:
         payload['c_i'] = res['model'][args.tracers[0]]['c_i']
-    P.save_plot_data(out, payload,
+    save_plot_data(out, payload,
                      description=("Measured reconstruction weight omega_i(k) "
                                   "(Eq. 58) per mass bin, per tracer, with the "
                                   "u_m^NFW the reconstruction itself uses"))
