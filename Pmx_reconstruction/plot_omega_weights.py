@@ -215,7 +215,7 @@ def main():
     # --- which weights to draw ---------------------------------------------
     us = None
     try:
-        from tracing_cosmic_gas.Pmx_reconstruction.measure_u_tilde import ustar_path
+        from measure_u_tilde import ustar_path
         upath = ustar_path(args.nbins, args.logm_min, args.logm_max,
                            cfg.grid, args.nkbins)
         if upath.exists():
