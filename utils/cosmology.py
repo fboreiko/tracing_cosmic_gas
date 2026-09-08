@@ -14,6 +14,7 @@ at the top of that file and only filled in 1300 lines later. Sections 1 and 2
 import numpy as np
 import astropy.units as u
 from astropy.cosmology import FlatLambdaCDM
+from functools import lru_cache
 
 from utils.pipeline_paths import DATA_ROOT, ensure_parents
 
@@ -118,3 +119,64 @@ def camb_linear_power_table(sim_params, sim_name):
                header='log10(k [h/Mpc])  log10(P [(Mpc/h)^3])')
     print(f"  [camb] table written to {path}")
     return path
+
+
+def colossus_params(sim_params):
+    """Return the colossus cosmology parameter dict for a simulation."""
+    return {
+        'flat': True,
+        'H0': 100.0 * sim_params['h'],
+        'Om0': sim_params['omega_m'],
+        'Ob0': sim_params.get('omega_b'),
+        'sigma8': sim_params.get('sigma8'),
+        'ns': sim_params.get('n_s'),
+        'Tcmb0': sim_params.get('tcmb0', 2.725),
+    }
+
+
+@lru_cache(maxsize=None)
+def _cosmo_name(sim_name, h, omega_m, omega_b, sigma8, n_s, tcmb0):
+    """Stable cache key for the registered colossus cosmology."""
+    ob = 'None' if omega_b is None else f'{omega_b:.8f}'
+    s8 = 'None' if sigma8 is None else f'{sigma8:.8f}'
+    ns = 'None' if n_s is None else f'{n_s:.8f}'
+    return (
+        f'{sim_name}_h{h:.8f}_om{omega_m:.8f}_ob{ob}'
+        f'_s8{s8}_ns{ns}_tcmb{tcmb0:.4f}'
+    )
+
+
+def ensure_colossus_cosmology(sim_params, sim_name='flamingo'):
+    """Register and return the colossus cosmology for ``sim_params``.
+
+    colossus stores the active cosmology in process-global state. This helper
+    makes sure the repo always installs the same cosmology for a given set of
+    simulation parameters, and reuses it on subsequent calls.
+    """
+    from colossus.cosmology import cosmology as colossus_cosmology
+
+    params = colossus_params(sim_params)
+    name = _cosmo_name(
+        sim_name,
+        float(sim_params['h']),
+        float(sim_params['omega_m']),
+        None if sim_params.get('omega_b') is None else float(sim_params['omega_b']),
+        None if sim_params.get('sigma8') is None else float(sim_params['sigma8']),
+        None if sim_params.get('n_s') is None else float(sim_params['n_s']),
+        float(sim_params.get('tcmb0', 2.725)),
+    )
+
+    try:
+        current = colossus_cosmology.getCurrent()
+    except Exception:
+        current = None
+    if current is not None and getattr(current, 'name', None) == name:
+        return current
+
+    try:
+        colossus_cosmology.addCosmology(name, params)
+    except Exception:
+        # The cosmology may already exist from a previous call in this process.
+        pass
+    colossus_cosmology.setCosmology(name)
+    return colossus_cosmology.getCurrent()

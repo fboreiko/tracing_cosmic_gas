@@ -14,7 +14,7 @@ from colossus.lss import mass_function as colossus_mf
 from colossus.lss import bias as colossus_bias
 from colossus.lss import peaks as colossus_peaks
 
-from utils.colossus_cosmology import colossus_params, ensure_colossus_cosmology
+from utils.cosmology import colossus_params, ensure_colossus_cosmology
 from Pmx_reconstruction.pmxlib.cosmology import DELTA_HALO, camb_linear_power_table
 from Pmx_reconstruction.pmxlib.nfw import concentration, u_nfw
 
@@ -30,8 +30,8 @@ class ColossusBackend:
         self.z = float(z)
         self.mdef = f'{int(DELTA_HALO)}m'
 
-        # Registration goes through utils.colossus_cosmology so that HATF and
-        # this pipeline cannot install different cosmologies into colossus's
+        # Registration goes through utils.cosmology so that HATF and this
+        # pipeline cannot install different cosmologies into colossus's
         # process-global slot.
         self.cosmo = ensure_colossus_cosmology(sim_params, sim_name)
         self.params = colossus_params(sim_params)

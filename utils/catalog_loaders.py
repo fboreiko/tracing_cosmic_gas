@@ -5,8 +5,6 @@ import glob
 import asdf
 import gc
 from typing import Any, cast
-from abacusnbody.data.bitpacked import unpack_rvint
-from abacusnbody.data.compaso_halo_catalog import CompaSOHaloCatalog
 from .sim_params import get_sim_params
 
 
@@ -31,6 +29,7 @@ _FLAMINGO_PARTICLE_GROUPS = {
 
 
 def read_abacus(rv_fn, Lbox):
+    from abacusnbody.data.bitpacked import unpack_rvint
 
     # read the halo (L0+L1) matter particles
     rv_data = asdf.open(rv_fn)['data']['rvint'][:]
@@ -94,6 +93,8 @@ def load_halo_properties(file_path, properties, compute_mfof_if_needed=True, sim
         return out
     
     if sim_name == 'abacus':
+        from abacusnbody.data.compaso_halo_catalog import CompaSOHaloCatalog
+
         supported = {'x_L2com', 'v_L2com', 'm200b', 'r95_L2com'}
         unknown = sorted(requested - supported)
         if unknown:
