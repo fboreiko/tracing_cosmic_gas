@@ -15,7 +15,7 @@ from scipy.special import sici
 
 from colossus.halo import concentration as colossus_conc
 
-from utils.cosmology import ensure_colossus_cosmology
+from utils.colossus_cosmology import ensure_colossus_cosmology
 from Pmx_reconstruction.pmxlib.cosmology import DELTA_HALO
 
 _conc_warned = False

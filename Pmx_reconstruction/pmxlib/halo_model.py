@@ -14,7 +14,7 @@ from colossus.lss import mass_function as colossus_mf
 from colossus.lss import bias as colossus_bias
 from colossus.lss import peaks as colossus_peaks
 
-from utils.cosmology import colossus_params, ensure_colossus_cosmology
+from utils.colossus_cosmology import colossus_params, ensure_colossus_cosmology
 from Pmx_reconstruction.pmxlib.cosmology import DELTA_HALO, camb_linear_power_table
 from Pmx_reconstruction.pmxlib.nfw import concentration, u_nfw
 
