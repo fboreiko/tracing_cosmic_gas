@@ -66,8 +66,7 @@ import argparse
 
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+matplotlib.use('Agg')   # headless; must precede the pyplot import in pmxlib.plotting
 
 from utils.pipeline_paths import ensure_parents, plot_path
 from utils.plot_data import save_plot_data
@@ -79,6 +78,8 @@ from Pmx_reconstruction.pmxlib.config import (INT_LOGM_LO, INT_NODES,
                                               add_experiment_a_args,
                                               add_selfpair_args, add_target_args)
 from Pmx_reconstruction.pmxlib.halo_model import HaloModel, _conc, _trapz_weights
+from Pmx_reconstruction.pmxlib import plotting as pl
+from Pmx_reconstruction.pmxlib import rstar_ustar as ru
 from Pmx_reconstruction.pmxlib.nfw import u_nfw
 
 def transfer_T(k, M_nodes, M_ref, mode, hm=None, T_sim=None):
@@ -383,147 +384,88 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
                   f"point neither\n      mode is controlled and only the "
                   f"--split-logm validation can decide.")
 
-    # --- figure 1: the shape factor S(k) ---------------------------------------
-    fig, axes = plt.subplots(2, 1, figsize=(8, 8), sharex=True, dpi=300,
-                             gridspec_kw=dict(height_ratios=[1, 1], hspace=0.08))
-    ax = axes[0]
-    # 'flat' is the control, so it is drawn in grey-dashed rather than black:
-    # black is reserved for the truth on the reconstruction panel.
-    colours = {'flat': '0.35', 'simhc': 'C3', 'bias': 'C0', 'halomodel': 'C2'}
-    styles = {'flat': '--', 'simhc': '-', 'bias': '--', 'halomodel': '-.'}
-    for mode, res in results.items():
-        ax.loglog(k, np.abs(res['S']), color=colours.get(mode, 'C4'),
-                  ls=styles.get(mode, ':'), lw=1.8, label=f"$S(k)$, {mode}")
-    if Delta_P_exact is not None and f_u_hidden:
-        with np.errstate(divide='ignore', invalid='ignore'):
-            S_exact = Delta_P_exact / (f_u_hidden * P_halo_x_ref)
-        ax.loglog(k, np.abs(S_exact), 'C1:', lw=2.5, label=r'$S(k)$ exact (measured)')
-    ax.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-    ax.axhline(1.0, c='grey', lw=0.6)
-    ax.set_ylabel(r'$S(k)=\langle u_m T\rangle_w$')
-    ax.legend(frameon=False, fontsize=9)
-    ax.set_title(rf'Experiment A shape factor, $M_{{\rm min}}={M_min:.2e}$, '
-                 rf'ref logM$={logM_cen[ref]:.2f}$, $z={z}$')
- 
-    ax = axes[1]
-    if Delta_P_exact is not None:
-        for mode, res in results.items():
-            with np.errstate(divide='ignore', invalid='ignore'):
-                ax.semilogx(k, res['Delta_P'] / Delta_P_exact,
-                            color=colours.get(mode, 'C4'),
-                            ls=styles.get(mode, ':'), lw=1.8, label=mode)
-        ax.axhline(1.0, c='k', lw=0.8)
-        ax.fill_between(k, 0.9, 1.1, color='0.85', zorder=0)
-        ax.set_ylim(0.0, 2.0)
-        ax.set_ylabel(r'$\Delta P_{\rm pred}/\Delta P_{\rm exact}$')
-        ax.legend(frameon=False, fontsize=9, ncol=2)
-    else:
-        for mode, res in results.items():
-            ax.loglog(k, np.abs(res['Delta_P']), color=colours.get(mode, 'C4'),
-                      ls=styles.get(mode, ':'), lw=1.8, label=mode)
-        ax.set_ylabel(r'$\Delta P(k)\,L_{\rm box}^2$')
-        ax.legend(frameon=False, fontsize=9)
-    ax.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-    ax.set_xlabel(r'$k$ [h/cMpc]')
- 
-    stem = (f'expA_shape_{tag}_{cfg.mass_def}_nb{cfg.nbins}'
-            f'_split{"none" if opts.split_logm is None else f"{opts.split_logm:.2f}"}'
-            f'_ref{logM_cen[ref]:.2f}_hmf{opts.hmf}_fu{opts.fu}'
-            f'{"" if bool(data.get("self_pairs_removed", False)) else "_noshot"}')
-    p1 = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
-    ensure_parents(p1)
-    fig.savefig(p1, bbox_inches='tight', dpi=300)
-    plt.close(fig)
-    print(f"\n[A][plot] {p1}")
- 
-    # --- figure 2: the ansatz itself, bin by bin -------------------------------
-    p2 = None
-    if np.any(hidden):
-        idx = np.flatnonzero(hidden)
-        fig, ax = plt.subplots(figsize=(8, 5), dpi=300)
-        show = idx[:: max(1, idx.size // 6)]
-        for n, j in enumerate(show):
-            with np.errstate(divide='ignore', invalid='ignore'):
-                T_e = P_halo_x[j] / P_halo_x_ref          # what we want
-                T_c = P_halo_dm[j] / P_halo_dm[ref]         # what we use as a proxy
-            ax.semilogx(k, T_e, color=f'C{n}', ls='-', lw=1.6,
-                        label=rf'logM$={logM_cen[j]:.2f}$')
-            ax.semilogx(k, T_c, color=f'C{n}', ls='--', lw=1.2)
-        ax.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-        ax.set_xlabel(r'$k$ [h/cMpc]')
-        ax.set_ylabel(r'$P^{he}(k|M)/P^{h_re}$ (solid) vs $P^{hc}(k|M)/P^{h_rc}$ (dashed)')
-        ax.set_title('Experiment A ansatz: does the tracer cancel in the ratio?')
-        ax.legend(frameon=False, fontsize=9, ncol=2)
-        ax.set_ylim(0, 2)
-        stem2 = stem.replace('expA_shape', 'expA_ansatz')
-        p2 = plot_path('pme_reconstruction', cfg.feedback, stem=stem2)
-        ensure_parents(p2)
-        fig.savefig(p2, bbox_inches='tight', dpi=300)
-        plt.close(fig)
-        print(f"[A][plot] {p2}")
- 
-    # --- figure 3: what it does to the reconstruction --------------------------
+    # --- the figures ------------------------------------------------------------
     # One-way script-to-script import, no cycle: predict_Pmx_from_Phx only
     # imports run_experiment_A inside its --experiment A branch.
     from Pmx_reconstruction.predict_Pmx_from_Phx import reconstruct_P_matter_x
     n_use = np.where(resolved, n_i, 0.0)
     P_rec_resolved = reconstruct_P_matter_x(cfg, k, P_halo_x, M_i, n_use, z)
- 
-    if Delta_P_exact is not None:
-        P_target = P_rec_resolved + Delta_P_exact
-        ref_label = 'full-catalogue rec.'
-        ratio_label = 'rec / full-catalogue rec.'
+
+    has_exact = Delta_P_exact is not None
+    P_target = (P_rec_resolved + Delta_P_exact) if has_exact else P_matter_x_true
+
+    S_exact = None
+    if has_exact and f_u_hidden:
+        with np.errstate(divide='ignore', invalid='ignore'):
+            S_exact = Delta_P_exact / (f_u_hidden * P_halo_x_ref)
+
+    stem = (f'expA_shape_{tag}_{cfg.mass_def}_nb{cfg.nbins}'
+            f'_split{"none" if opts.split_logm is None else f"{opts.split_logm:.2f}"}'
+            f'_ref{logM_cen[ref]:.2f}_hmf{opts.hmf}_fu{opts.fu}'
+            f'{"" if bool(data.get("self_pairs_removed", False)) else "_noshot"}')
+
+    # Production only: those two figures are standalone, so they keep a title.
+    # The validation panel is deliberately bare -- see below.
+    rec_title = (rf'Experiment A, {mode_label} mode, FLAMINGO {cfg.feedback}, '
+                 rf'$z={z}$')
+    shape_title = (rf'Experiment A shape factor, $M_{{\rm min}}={M_min:.2e}$, '
+                   rf'ref logM$={logM_cen[ref]:.2f}$, $z={z}$')
+
+    # Each figure below is then three lines: build, save, report. Saving goes
+    # through pl.save_figure so the tick labels are rendered under the same
+    # rcParams the panels were built with -- see its docstring.
+    def _save(fig, this_stem):
+        path = plot_path('pme_reconstruction', cfg.feedback, stem=this_stem)
+        ensure_parents(path)
+        pl.save_figure(fig, path)
+        print(f"[A][plot] {path}")
+        return path
+
+    d = pl.PanelData(k=k, k_Ny=k_Ny, results=results,
+                     P_rec_resolved=P_rec_resolved, P_target=P_target,
+                     P_matter_x_true=P_matter_x_true, tag=tag, x_sym=x_sym,
+                     Delta_P_exact=Delta_P_exact, S_exact=S_exact)
+
+    print()
+    if has_exact:
+        # Validation puts both halves of the split test on one canvas.
+        p_main = _save(pl.validation_panel(d),
+                       stem.replace('expA_shape', 'expA_validation_panel'))
     else:
-        P_target = P_matter_x_true
-        ref_label = 'truth'
-        ratio_label = 'rec / truth'
- 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 8), sharex=True, dpi=300,
-                                   gridspec_kw=dict(height_ratios=[3, 1], hspace=0.05))
-    if Delta_P_exact is not None:
-        ax1.loglog(k, np.abs(P_matter_x_true), color='0.7', ls='-', lw=1.5,
-                   label=rf'full truth $\delta_m\times\delta_{{{x_sym}}}$ '
-                         rf'(incl. mass below the catalogue)')
-        ax1.loglog(k, np.abs(P_target), 'k-', lw=2.5,
-                   label='target: all occupied bins')
-        ax1.loglog(k, np.abs(P_rec_resolved), color='0.5', ls='-', lw=1.5,
-                   label=rf'bins above the split only')
-    else:
-        ax1.loglog(k, np.abs(P_matter_x_true), 'k-', lw=2.5,
-                   label=rf'truth $\delta_m\times\delta_{{{x_sym}}}$')
-        ax1.loglog(k, np.abs(P_rec_resolved), color='0.5', ls='-', lw=1.5,
-                   label='resolved bins only')
-    for mode, res in results.items():
-        ax1.loglog(k, np.abs(P_rec_resolved + res['Delta_P']), color=colours.get(mode, 'C4'),
-                   ls=styles.get(mode, ':'), lw=1.8, label=f'+ {mode}')
-    ax1.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-    ax1.set_ylabel(rf'$P_{{\rm m,{tag}}}(k)\,L_{{\rm box}}^2$')
-    ax1.legend(frameon=False, fontsize=9)
-    ax1.set_title(rf'Experiment A, {mode_label} mode, FLAMINGO {cfg.feedback}, $z={z}$')
- 
-    with np.errstate(divide='ignore', invalid='ignore'):
-        if Delta_P_exact is not None:
-            ax2.semilogx(k, P_matter_x_true / P_target, color='0.7', lw=1.5)
-        ax2.semilogx(k, P_rec_resolved / P_target, color='0.5', lw=1.5)
-        for mode, res in results.items():
-            ax2.semilogx(k, (P_rec_resolved + res['Delta_P']) / P_target,
-                         color=colours.get(mode, 'C4'), ls=styles.get(mode, ':'),
-                         lw=1.8)
-    ax2.axhline(1.0, color='k', lw=0.8)
-    ax2.fill_between(k, 0.95, 1.05, color='0.85', zorder=0)
-    ax2.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-    # Validation is a near-1 comparison, so a tighter range; production has to
-    # accommodate a correction that may be large.
-    ax2.set_ylim(0.6, 1.5) if Delta_P_exact is not None else ax2.set_ylim(0.0, 2.0)
-    ax2.set_ylabel(ratio_label)
-    ax2.set_xlabel(r'$k$ [h/cMpc]')
- 
-    stem3 = stem.replace('expA_shape', 'expA_reconstruction')
-    p3 = plot_path('pme_reconstruction', cfg.feedback, stem=stem3)
-    ensure_parents(p3)
-    fig.savefig(p3, bbox_inches='tight', dpi=300)
-    plt.close(fig)
-    print(f"[A][plot] {p3}")
+        # Production has no hidden bins to score the correction against, so it
+        # scores the whole reconstruction against the measured R* + U* instead.
+        # Measures and caches on a first run, a pure lookup thereafter. The
+        # k-grid check and the shot subtraction both live in that module.
+        tot, upath = ru.load_totals(cfg, data, tracer)
+        if tot is not None:
+            d.R_star, d.U_star = tot['R_star'], tot['U_star']
+            p_main = _save(pl.production_panel(d),
+                           stem.replace('expA_shape', 'expA_production_panel'))
+        else:
+            # Only reachable when the cache exists but sits on a different k
+            # grid from the bundle -- a missing cache is measured, not skipped.
+            print(f"[A] R*/U* at\n      {upath}\n"
+                  f"    is unusable with this bundle; falling back to the two "
+                  f"separate figures. Rebuild it with\n"
+                  f"      python -m Pmx_reconstruction.pmxlib.rstar_ustar "
+                  f"--recompute")
+            p_main = _save(pl.shape_figure(d, title=shape_title), stem)
+            _save(pl.reconstruction_figure(d, title=rec_title),
+                  stem.replace('expA_shape', 'expA_reconstruction'))
+
+    # --- the ansatz itself, bin by bin ------------------------------------------
+    if np.any(hidden):
+        idx = np.flatnonzero(hidden)
+        show = idx[:: max(1, idx.size // 6)]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            curves = [(rf'logM$={logM_cen[j]:.2f}$',
+                       P_halo_x[j] / P_halo_x_ref,      # what we want
+                       P_halo_dm[j] / P_halo_dm[ref])   # the proxy we use
+                      for j in show]
+        _save(pl.ansatz_figure(k, k_Ny, curves,
+                               title='Experiment A ansatz: does the tracer '
+                                     'cancel in the ratio?'),
+              stem.replace('expA_shape', 'expA_ansatz'))
 
     # --- save everything --------------------------------------------------------
     payload = {
@@ -548,7 +490,7 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     if hm is not None:
         payload['b_tinker10'] = hm.bias(M_i)
         payload['dndM_tinker08'] = hm.dndM(M_i)
-    save_plot_data(p1, payload,
+    save_plot_data(p_main, payload,
                    description=('Experiment A: P_halo_x extrapolated below M_min by '
                                 'freezing the baryon response at a reference bin'))
     return results

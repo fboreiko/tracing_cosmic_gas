@@ -325,6 +325,7 @@ class ExperimentAOptions:
     fu: str = 'catalog'            # 'catalog' | 'model'
     int_logm_min: float = None
     power_spectrum: str = 'camb'   # 'camb' | 'eisenstein98'
+    compute_rstar: bool = True
 
     @classmethod
     def from_args(cls, args, **overrides):
@@ -364,6 +365,13 @@ def add_experiment_a_args(ap):
                         "1 - sum_i f_i and the shape from the model; 'model' "
                         "uses the HMF for both and exposes the amplitude "
                         "instability described above")
+    g.add_argument('--no-rstar', dest='compute_rstar', action='store_false',
+                   default=True,
+                   help="PRODUCTION mode: do not measure R*/U* if it is not "
+                        "already cached. The (R+U)/(R*+U*) panel is dropped "
+                        "and the two separate figures are written instead. "
+                        "Build the cache with "
+                        "python -m Pmx_reconstruction.pmxlib.rstar_ustar")
     g.add_argument('--int-logm-min', dest='int_logm_min', type=float, default=None,
                    help=f"lower limit of the unresolved-mass integral "
                         f"(default {INT_LOGM_LO}); see the f_u instability note")
