@@ -52,16 +52,16 @@ TRACER_OF_TARGET = {'matter_gas': 'gas',
 #                achievable agreement, not an error
 #   sym          latex symbol for the tracer in plot labels
 TRACER_INFO = {
-    'gas': dict(tag='gas', sym=r'\rm gas',
+    'gas': dict(tag='gas', sym=r'e',
                 halo_key='P_halo_gas',
                 truth_key='P_matter_gas',
                 dm_cross_key='P_dm_gas'),
-    'dm': dict(tag='dm', sym=r'\rm dm',
+    'dm': dict(tag='dm', sym=r'c',
                halo_key='P_halo_dm',
                truth_key='P_matter_dm',
                dm_cross_key='P_dm_dm'),
     # P(dm x matter) is P(matter x dm) by symmetry, hence the shared key.
-    'matter': dict(tag='matter', sym=r'\rm m',
+    'matter': dict(tag='matter', sym=r'm',
                    halo_key='P_halo_matter',
                    truth_key='P_matter_matter',
                    dm_cross_key='P_matter_dm'),
@@ -108,6 +108,11 @@ class PmxConfig:
     # Switching this to 'm200c' would make r200m_of_M inconsistent, hence the
     # guard in __post_init__.
     mass_def: str = 'm200b'
+    # Outer edge of the model NFW profile, in units of r200m. 1.0 truncates at
+    # r200m, which is the definition the catalogue mass and the rstar_ustar
+    # membership spheres both use. Raising it spreads the SAME mass over a
+    # larger radius (see u_nfw); it does not add mass.
+    nfw_trunc: float = 1.0
     logm_min: float = 11.0       # log10(M / [Msun/h])
     logm_max: float = 15.0
     nbins: int = 30              # log-spaced bins between logm_min and logm_max
@@ -226,6 +231,23 @@ class PmxConfig:
 _D = PmxConfig()
 
 
+def profile_tag(cfg) -> str:
+    """Filename token for the halo-profile switches, '' at the defaults.
+
+    Anything that changes u_m(k|M) -- and therefore the reconstruction --
+    belongs here, since two runs differing only in these would otherwise
+    overwrite each other. Empty when nothing is off-default, so turning a new
+    switch on does not rename every existing plot and orphan the ones already
+    written.
+    """
+    bits = []
+    if cfg.concentration_source != PmxConfig.concentration_source:
+        bits.append(f'conc-{cfg.concentration_source}')
+    if cfg.nfw_trunc != PmxConfig.nfw_trunc:
+        bits.append(f'trunc{cfg.nfw_trunc:g}')
+    return ('_' + '_'.join(bits)) if bits else ''
+
+
 def add_target_args(ap):
     ap.add_argument('--target', dest='target_mode', default=_D.target_mode,
                     choices=list(TRACER_OF_TARGET),
@@ -255,7 +277,13 @@ def add_binning_args(ap):
 
 
 def add_concentration_args(ap):
-    g = ap.add_argument_group('Concentration-mass relation')
+    g = ap.add_argument_group('Halo profile')
+    g.add_argument('--nfw-trunc', dest='nfw_trunc', type=float,
+                   default=_D.nfw_trunc,
+                   help=f"truncate the model NFW profile at this multiple of "
+                        f"r200m (default {_D.nfw_trunc}). The same mass is "
+                        f"redistributed, not added. Note the R*/U* membership "
+                        f"spheres stay at r200m.")
     g.add_argument('--concentration', dest='concentration_source',
                    default=_D.concentration_source,
                    choices=['powerlaw', 'colossus'],
@@ -325,7 +353,6 @@ class ExperimentAOptions:
     fu: str = 'catalog'            # 'catalog' | 'model'
     int_logm_min: float = None
     power_spectrum: str = 'camb'   # 'camb' | 'eisenstein98'
-    compute_rstar: bool = True
 
     @classmethod
     def from_args(cls, args, **overrides):
@@ -365,13 +392,6 @@ def add_experiment_a_args(ap):
                         "1 - sum_i f_i and the shape from the model; 'model' "
                         "uses the HMF for both and exposes the amplitude "
                         "instability described above")
-    g.add_argument('--no-rstar', dest='compute_rstar', action='store_false',
-                   default=True,
-                   help="PRODUCTION mode: do not measure R*/U* if it is not "
-                        "already cached. The (R+U)/(R*+U*) panel is dropped "
-                        "and the two separate figures are written instead. "
-                        "Build the cache with "
-                        "python -m Pmx_reconstruction.pmxlib.rstar_ustar")
     g.add_argument('--int-logm-min', dest='int_logm_min', type=float, default=None,
                    help=f"lower limit of the unresolved-mass integral "
                         f"(default {INT_LOGM_LO}); see the f_u instability note")

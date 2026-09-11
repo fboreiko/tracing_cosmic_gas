@@ -185,7 +185,8 @@ from Pmx_reconstruction.pmxlib.config import (PmxConfig,
                                               TRACER_INFO, add_binning_args,
                                               add_concentration_args,
                                               add_experiment_a_args,
-                                              add_selfpair_args, add_target_args)
+                                              add_selfpair_args, add_target_args,
+                                              profile_tag)
 from Pmx_reconstruction.pmxlib.nfw import concentration, u_nfw
 from Pmx_reconstruction.pmxlib.self_pairs import use_self_pair_corrected
 
@@ -220,7 +221,7 @@ def reconstruct_P_matter_x(cfg, k, P_halo_x, M_i, n_i, z):
     c_i = concentration(M_i, z, source=cfg.concentration_source,
                         colossus_model=cfg.colossus_conc_model,
                         sim_params=cfg.sim_params, sim_name=cfg.sim_name)
-    u_im = np.array([u_nfw(k, M_i[i], c_i[i], cfg.rhobar_m)
+    u_im = np.array([u_nfw(k, M_i[i], c_i[i], cfg.rhobar_m, trunc=cfg.nfw_trunc)
                      for i in range(M_i.size)])
     weight = (n_i * M_i)[:, None] / cfg.rhobar_m          # (nbins, 1)
     return np.sum(weight * u_im * P_halo_x, axis=0)       # sum over mass bins
@@ -421,6 +422,7 @@ def main():
         stem=(
             f'P_matter_{tag}_from_P_halo_{tag}_{cfg.mass_def}_nb{cfg.nbins}_'
             f'logMmin{args.logm_min:.2f}_logMmax{args.logm_max:.2f}'
+            f'{profile_tag(cfg)}'
             f'{"" if shot_removed else "_noshot"}'
         )
     )
@@ -433,6 +435,8 @@ def main():
         'k_center': k,
         'target_mode': cfg.target_mode,
         'tracer': tracer,
+        'nfw_trunc': float(cfg.nfw_trunc),
+        'concentration_source': cfg.concentration_source,
         'P_matter_x_true': P_matter_x_true,
         'P_dm_x': P_dm_x,
         'P_dmgas_reference': P_dm_gas_ref,
@@ -478,6 +482,7 @@ def main():
             stem=(
                 f'P_matter_{tag}_missing_mass_check_{cfg.mass_def}_nb{cfg.nbins}_'
                 f'logMmin{args.logm_min:.2f}_logMmax{args.logm_max:.2f}'
+                f'{profile_tag(cfg)}'
                 f'{"" if shot_removed else "_noshot"}'
             )
         )

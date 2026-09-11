@@ -48,7 +48,7 @@ __all__ = [
 # ==============================================================================
 # 'flat' is the control and stays grey-dashed; black is reserved for the target,
 # and the measured "exact" curve is orange wherever it appears.
-MODE_COLOURS = {'flat': '0.35', 'simhc': 'C3', 'bias': 'C0', 'halomodel': 'C2'}
+MODE_COLOURS = {'flat': '0.35', 'simhc': 'C3', 'bias': 'C2', 'halomodel': 'C0'}
 MODE_STYLES = {'flat': '--', 'simhc': '-', 'bias': '--', 'halomodel': '-.'}
 MODE_FALLBACK = ('C4', ':')
 
@@ -68,12 +68,12 @@ LABEL_TOTAL_ERR = r'$(R + U)\,/\,(R_\star + U_\star) - 1$'
 # own colour so the panel reads as one model's budget, separated by dash
 # pattern and alpha rather than by hue.
 COMPONENT_STYLE = {
-    'total':    dict(ls='-',  lw=2.4, alpha=1.0),
-    'profile':  dict(ls='--', lw=1.8, alpha=0.65),
-    'template': dict(ls=':',  lw=2.2, alpha=0.65),
+    'total':    dict(ls='-',  lw=2.4, alpha=0.55),
+    'profile':  dict(color='red',    ls='-', lw=1.8, alpha=0.55),
+    'template': dict(color='purple', ls='-', lw=2.0, alpha=0.55),
 }
-LABEL_PROFILE_ERR = r'profile, $(R-R_\star)/(R_\star+U_\star)$'
-LABEL_TEMPLATE_ERR = r'template, $(U-U_\star)/(R_\star+U_\star)$'
+LABEL_PROFILE_ERR = r'$(R-R_\star)/(R_\star+U_\star)$'
+LABEL_TEMPLATE_ERR = r'$(U-U_\star)/(R_\star+U_\star)$'
 # The only fontsize outside PANEL_RC: these three labels carry their formulae,
 # and at the panel's legend.fontsize they crowd the curves.
 TOTAL_ERR_LEGEND_FONTSIZE = 12
@@ -327,7 +327,7 @@ def panel_total_error(ax, d: PanelData, legend=True):
         total = (d.P_rec_resolved + res['Delta_P']) / denom - 1.0
 
     base = mode_style(d.error_mode)
-    for curve, key, label in ((total, 'total', f'{d.error_mode} total'),
+    for curve, key, label in ((total, 'total', LABEL_TOTAL_ERR),
                               (profile, 'profile', LABEL_PROFILE_ERR),
                               (template, 'template', LABEL_TEMPLATE_ERR)):
         style = dict(base, **COMPONENT_STYLE[key])   # mode colour, own dashes
@@ -367,7 +367,7 @@ def panel_reconstruction(ax, d: PanelData, title=None, legend=True):
         ax.loglog(d.k, np.abs(d.P_rec_resolved + res['Delta_P']),
                   label=f'+ {mode}', **mode_style(mode))
     ax.axvline(d.k_Ny, c='grey', ls=':', lw=1.2)
-    ax.set_ylabel(rf'$P_{{\rm m,{d.tag}}}(k)\,L_{{\rm box}}^2$')
+    ax.set_ylabel(rf'$P^{{\,m{d.tag}}}(k)\,L_{{\rm box}}^2$')
     if legend:
         ax.legend(frameon=False)
     if title:
@@ -389,7 +389,7 @@ def panel_rec_ratio(ax, d: PanelData):
     # Validation is a near-1 comparison, so a tighter range; production has to
     # accommodate a correction that may be large.
     ax.set_ylim(0.6, 1.5) if d.has_exact else ax.set_ylim(0.0, 2.0)
-    ax.set_ylabel(LABEL_REC_RATIO if d.has_exact else 'rec / truth')
+    ax.set_ylabel(LABEL_REC_RATIO if d.has_exact else rf'$R + U / P^{{\,m{d.tag}}}$')
     ax.set_xlabel(LABEL_K)
 
 

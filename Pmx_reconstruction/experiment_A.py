@@ -76,7 +76,8 @@ from Pmx_reconstruction.pmxlib.config import (INT_LOGM_LO, INT_NODES,
                                               TRACER_INFO, add_binning_args,
                                               add_concentration_args,
                                               add_experiment_a_args,
-                                              add_selfpair_args, add_target_args)
+                                              add_selfpair_args, add_target_args,
+                                              profile_tag)
 from Pmx_reconstruction.pmxlib.halo_model import HaloModel, _conc, _trapz_weights
 from Pmx_reconstruction.pmxlib import plotting as pl
 from Pmx_reconstruction.pmxlib import rstar_ustar as ru
@@ -150,7 +151,8 @@ def delta_P_experimentA(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=Non
     T = transfer_T(k, M_nodes, M_ref, mode, hm=hm, T_sim=T_sim)
 
     if use_um and mode != 'flat':
-        u = np.array([u_nfw(k, m, _conc(cfg, m, z), cfg.rhobar_m) for m in M_nodes])
+        u = np.array([u_nfw(k, m, _conc(cfg, m, z), cfg.rhobar_m,
+                            trunc=cfg.nfw_trunc) for m in M_nodes])
     else:
         u = np.ones((M_nodes.size, k.size))
 
@@ -283,7 +285,8 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     f_u_hidden = None
     if np.any(hidden):
         idx = np.flatnonzero(hidden)
-        u_hidden = np.array([u_nfw(k, M_i[j], _conc(cfg, M_i[j], z), cfg.rhobar_m) for j in idx])
+        u_hidden = np.array([u_nfw(k, M_i[j], _conc(cfg, M_i[j], z), cfg.rhobar_m,
+                                   trunc=cfg.nfw_trunc) for j in idx])
         Delta_P_exact = np.sum(f_i[idx][:, None] * u_hidden * P_halo_x[idx], axis=0)
         f_u_hidden = float(np.sum(f_i[idx]))
         print(f"[A] exact hidden contribution built from the measured bins; "
@@ -401,15 +404,8 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
 
     stem = (f'expA_shape_{tag}_{cfg.mass_def}_nb{cfg.nbins}'
             f'_split{"none" if opts.split_logm is None else f"{opts.split_logm:.2f}"}'
-            f'_ref{logM_cen[ref]:.2f}_hmf{opts.hmf}_fu{opts.fu}'
-            f'{"" if bool(data.get("self_pairs_removed", False)) else "_noshot"}')
-
-    # Production only: those two figures are standalone, so they keep a title.
-    # The validation panel is deliberately bare -- see below.
-    rec_title = (rf'Experiment A, {mode_label} mode, FLAMINGO {cfg.feedback}, '
-                 rf'$z={z}$')
-    shape_title = (rf'Experiment A shape factor, $M_{{\rm min}}={M_min:.2e}$, '
-                   rf'ref logM$={logM_cen[ref]:.2f}$, $z={z}$')
+            f'_ref{logM_cen[ref]:.2f}_hmf{opts.hmf}_fu{opts.fu}{profile_tag(cfg)}'
+            f'{"" if bool(data.get("self_pairs_removed", False)) else "_shotpresent"}')
 
     # Each figure below is then three lines: build, save, report. Saving goes
     # through pl.save_figure so the tick labels are rendered under the same
@@ -423,10 +419,9 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
 
     d = pl.PanelData(k=k, k_Ny=k_Ny, results=results,
                      P_rec_resolved=P_rec_resolved, P_target=P_target,
-                     P_matter_x_true=P_matter_x_true, tag=tag, x_sym=x_sym,
+                     P_matter_x_true=P_matter_x_true, tag=cfg.tracer_info['sym'], x_sym=x_sym,
                      Delta_P_exact=Delta_P_exact, S_exact=S_exact)
 
-    print()
     if has_exact:
         # Validation puts both halves of the split test on one canvas.
         p_main = _save(pl.validation_panel(d),
@@ -436,7 +431,7 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         # scores the whole reconstruction against the measured R* + U* instead.
         # Measures and caches on a first run, a pure lookup thereafter. The
         # k-grid check and the shot subtraction both live in that module.
-        tot, upath = ru.load_totals(cfg, data, tracer)
+        tot, _ = ru.load_totals(cfg, data, tracer)
         if tot is not None:
             d.R_star, d.U_star = tot['R_star'], tot['U_star']
             p_main = _save(pl.production_panel(d),
@@ -444,14 +439,9 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         else:
             # Only reachable when the cache exists but sits on a different k
             # grid from the bundle -- a missing cache is measured, not skipped.
-            print(f"[A] R*/U* at\n      {upath}\n"
-                  f"    is unusable with this bundle; falling back to the two "
-                  f"separate figures. Rebuild it with\n"
-                  f"      python -m Pmx_reconstruction.pmxlib.rstar_ustar "
-                  f"--recompute")
-            p_main = _save(pl.shape_figure(d, title=shape_title), stem)
-            _save(pl.reconstruction_figure(d, title=rec_title),
-                  stem.replace('expA_shape', 'expA_reconstruction'))
+            raise SystemExit(f"[A] cannot score the reconstruction against R*/U* because "
+                             f"the cache is missing or unusable; run "
+                             f"predict_Pmx_from_Phx.py --measure-rstar-ustar first")
 
     # --- the ansatz itself, bin by bin ------------------------------------------
     if np.any(hidden):
@@ -474,6 +464,8 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         'M_min': M_min, 'split_logm': (np.nan if opts.split_logm is None
                                        else float(opts.split_logm)),
         'hmf_source': opts.hmf, 'fu_source': opts.fu,
+        'nfw_trunc': float(cfg.nfw_trunc),
+        'concentration_source': cfg.concentration_source,
         'int_logm_min': float(int_logm_lo),
         'f_u_cat': f_u_cat, 'f_resolved': f_resolved,
         'self_pairs_removed': bool(data.get('self_pairs_removed', False)),

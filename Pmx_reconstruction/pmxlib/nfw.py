@@ -39,20 +39,34 @@ def r200m_of_M(M, rhobar_m):
     return (3.0 * M / (4.0 * np.pi * delta_vir_200m() * rhobar_m)) ** (1.0 / 3.0)
 
 
-def u_nfw(k, M, c, rhobar_m):
+def u_nfw(k, M, c, rhobar_m, trunc=1.0):
     """Normalized Fourier transform of an NFW halo of mass M, concentration c.
 
     k [h/Mpc] (array), M [Msun/h] (scalar), c [-] (scalar). Returns u(k).
+
+    `trunc` moves the outer edge to trunc * r200m. Since rs is fixed by
+    c = r200m/rs, a truncation radius of trunc * r200m is trunc * c in units of
+    rs, so the whole generalisation is c -> c_t = trunc * c -- but it has to be
+    made in ALL FOUR places c appears, the three integrand terms and the mass
+    normalisation mc, since mc is what makes u -> 1 as k -> 0. Changing the
+    radius alone would normalise the profile to the wrong mass.
+
+    NOTE what trunc does and does not mean. The halo still contains M: the same
+    mass is spread over a larger radius, so rho_s falls as trunc grows. It does
+    NOT bolt extra mass onto an unchanged inner profile -- that would break the
+    sum rule, where the weight is n_i M_i with M_i the catalogue M200b. The
+    profile shape changes; the mass budget does not.
     """
     r200 = r200m_of_M(M, rhobar_m)
     rs = r200 / c
-    mc = np.log(1.0 + c) - c / (1.0 + c)     # mass normalisation
+    c_t = trunc * c                          # truncation radius in units of rs
+    mc = np.log(1.0 + c_t) - c_t / (1.0 + c_t)     # mass normalisation
     kr = np.asarray(k, dtype=float) * rs
     kr = np.where(kr > 0, kr, 1e-12)         # k=0 mode is never used, keep sici finite
-    si_1c, ci_1c = sici((1.0 + c) * kr)
+    si_1c, ci_1c = sici((1.0 + c_t) * kr)
     si_0, ci_0 = sici(kr)
     term = (np.sin(kr) * (si_1c - si_0)
-            - np.sin(c * kr) / ((1.0 + c) * kr)
+            - np.sin(c_t * kr) / ((1.0 + c_t) * kr)
             + np.cos(kr) * (ci_1c - ci_0))
     return term / mc
 
