@@ -123,7 +123,8 @@ class HaloModel:
             return self._I2h_cache[key]
         M = np.logspace(6.0, 16.0, 300)
         w = M * self.dndM(M) * self.bias(M) * M / self.cfg.rhobar_m
-        u = np.array([u_nfw(k, m, _conc(self.cfg, m, self.z), self.cfg.rhobar_m) for m in M])
+        u = np.array([u_nfw(k, m, _conc(self.cfg, m, self.z), self.cfg.rhobar_m)
+                      for m in M])
         num = np.trapezoid(w[:, None] * u, np.log(M), axis=0)
         out = num / np.trapezoid(w, np.log(M))
         self._I2h_cache[key] = out
@@ -133,7 +134,8 @@ class HaloModel:
         """Halo-CDM cross spectrum, (nM, nk). Units are arbitrary but internally
         consistent: only ratios of this quantity are ever used."""
         M = np.atleast_1d(np.asarray(M, dtype=float))
-        u = np.array([u_nfw(k, m, _conc(self.cfg, m, self.z), self.cfg.rhobar_m) for m in M])
+        u = np.array([u_nfw(k, m, _conc(self.cfg, m, self.z), self.cfg.rhobar_m)
+                      for m in M])
         one_halo = (M / self.cfg.rhobar_m)[:, None] * u
         two_halo = self.bias(M)[:, None] * (self.Plin(k) * self.I2h(k))[None, :]
         return one_halo + two_halo

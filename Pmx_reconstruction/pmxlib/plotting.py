@@ -42,12 +42,6 @@ __all__ = [
     'reconstruction_figure', 'ansatz_figure',
 ]
 
-
-# ==============================================================================
-# Palette
-# ==============================================================================
-# 'flat' is the control and stays grey-dashed; black is reserved for the target,
-# and the measured "exact" curve is orange wherever it appears.
 MODE_COLOURS = {'flat': '0.35', 'simhc': 'C3', 'bias': 'C2', 'halomodel': 'C0'}
 MODE_STYLES = {'flat': '--', 'simhc': '-', 'bias': '--', 'halomodel': '-.'}
 MODE_FALLBACK = ('C4', ':')
@@ -57,16 +51,12 @@ REF_STYLE = {
     'target':   dict(color='k',   ls='-', lw=2.8),
     'resolved': dict(color='0.5', ls='-', lw=1.8),
     'exact':    dict(color='C1',  ls=':', lw=2.8),
+    'seff':     dict(color='red',  ls=(0, (6, 2)), lw=2.0, alpha=0.55),
 }
 
-# R is the reconstruction from the resolved (above-split) bins, U the correction
-# standing in for the unresolved ones.
 LABEL_REC_RATIO = r'$(R + U_{\rm model})\,/\,(R + U_{\rm exact})$'
 LABEL_DP_RATIO = r'$U_{\rm model}\,/\,U_{\rm exact}$'
 LABEL_TOTAL_ERR = r'$(R + U)\,/\,(R_\star + U_\star) - 1$'
-# The two halves of that error, which add to it exactly. Drawn in the mode's
-# own colour so the panel reads as one model's budget, separated by dash
-# pattern and alpha rather than by hue.
 COMPONENT_STYLE = {
     'total':    dict(ls='-',  lw=2.4, alpha=0.55),
     'profile':  dict(color='red',    ls='-', lw=1.8, alpha=0.55),
@@ -74,17 +64,12 @@ COMPONENT_STYLE = {
 }
 LABEL_PROFILE_ERR = r'$(R-R_\star)/(R_\star+U_\star)$'
 LABEL_TEMPLATE_ERR = r'$(U-U_\star)/(R_\star+U_\star)$'
-# The only fontsize outside PANEL_RC: these three labels carry their formulae,
-# and at the panel's legend.fontsize they crowd the curves.
 TOTAL_ERR_LEGEND_FONTSIZE = 12
 LABEL_K = r'$k$ [h/cMpc]'
 
-# The Eq. (59) total error is a near-zero comparison; band and range are set
-# for the accuracy the reconstruction is aiming at, not for the data.
+
 TOTAL_ERR_YLIM = (-0.5, 0.5)
 TOTAL_ERR_BAND = 0.05
-# Which extrapolation the production panel scores. One mode only -- overlaying
-# four makes the panel unreadable at this y range.
 ERROR_MODE = 'halomodel'
 
 
@@ -94,23 +79,6 @@ def mode_style(mode, lw=2.0):
                 ls=MODE_STYLES.get(mode, MODE_FALLBACK[1]), lw=lw)
 
 
-# ==============================================================================
-# Type and fonts
-# ==============================================================================
-# Applied through a rc_context inside each figure builder rather than a global
-# rcParams update, so importing this module does not silently restyle every
-# other plot in the pipeline -- and so the settings survive imports that DO
-# mutate the global rcParams (predict_Pmx_from_Phx.py sets text.usetex at
-# import time). Panels set no fontsize of their own: this is the one place.
-#
-# On fonts: 'Computer Modern' is NOT a family matplotlib can resolve (the face
-# it ships is registered as 'cmr10'), and font.serif governs plain text only --
-# everything in $...$, including the log tick labels, goes through mathtext.
-# So getting CM without LaTeX takes the cmr10 + mathtext.fontset pair below.
-# Flip USE_TEX to True to hand the typesetting to LaTeX instead, which is what
-# HATF/replot_HATF_from_bundle.py does; it needs latex and dvipng on PATH, so
-# it is off by default for the compute nodes (cf. the note in
-# utils/power_spectrum_utils.py).
 USE_TEX = False
 
 PANEL_RC = {
@@ -136,13 +104,6 @@ PANEL_RC = {
     'legend.handlelength': 2.6,
 }
 
-
-# ==============================================================================
-# Layout knobs
-# ==============================================================================
-# The 2x2 validation panel. Columns carry different height ratios -- the left
-# is a spectrum with a thin residual strip, the right is two comparably
-# interesting panels -- which is why it is built from nested gridspecs.
 PANEL_FIGSIZE = (19, 10.5)
 PANEL_WIDTH_RATIOS = [1.3, 1]
 PANEL_WSPACE = 0.19
@@ -155,21 +116,9 @@ PANEL_HSPACE_RIGHT = 0.08
 SINGLE_FIGSIZE = (9.5, 9.5)
 ANSATZ_FIGSIZE = (9.5, 6)
 
-# Horizontal position of the ylabels, in axes-fraction coordinates: 0 is the
-# spine, more negative is further out. Set by hand rather than measured, so a
-# column's labels line up by construction -- but nothing adapts if the tick
-# labels change width, so revisit these after changing ylim or tick formatting.
-#
-# One knob, YLABEL_X_RIGHT, plus a conversion. Axes fractions are fractions of
-# each panel's OWN width, and the left column is PANEL_WIDTH_RATIOS wider, so
-# the same number would put its label visibly further from the spine. Scaling
-# by the width ratio makes the two columns' gaps equal on the page, which is
-# what the eye actually compares.
 YLABEL_X_RIGHT = -0.140
 YLABEL_X_LEFT = YLABEL_X_RIGHT * PANEL_WIDTH_RATIOS[1] / PANEL_WIDTH_RATIOS[0]
 
-# The standalone production figures are single-column and unrelated to the
-# ratios above, so they get their own value.
 YLABEL_X_SINGLE = -0.067
 
 DPI = 300
@@ -223,14 +172,9 @@ class PanelData:
     x_sym: str = 'x'
     Delta_P_exact: Optional[np.ndarray] = None
     S_exact: Optional[np.ndarray] = None
-    # Production only, from pmxlib.rstar_ustar: R_star is the summed true
-    # contribution of the occupied bins and U_star that of everything not
-    # assigned to one. Their sum closes on the measured cross spectrum by
-    # construction, so it is the denominator the reconstruction is scored
-    # against when there is no split. They are kept apart rather than summed
-    # because the error decomposition needs each one separately.
     R_star: Optional[np.ndarray] = None
     U_star: Optional[np.ndarray] = None
+    S_eff: Optional[np.ndarray] = None
     error_mode: str = ERROR_MODE
 
     @property
@@ -249,23 +193,41 @@ class PanelData:
 # ==============================================================================
 # Panels
 # ==============================================================================
-# Each takes an axes and draws into it. Keeping them separate is what lets the
-# validation panel assemble four of them onto one canvas while production mode
-# emits the same panels as two smaller figures, with no curve drawn twice from
-# two different pieces of code.
 def panel_shape(ax, d: PanelData, title=None, legend=True):
-    """The shape factor S(k) = <u_m T>_w, one curve per mode."""
+    """The shape factor S(k) = <u_m T>_w, one curve per mode.
+
+    In production the measured S_eff is overlaid when available: it is the
+    shape the correction would need in order to be exact, so the gap between
+    it and a mode's S(k) is that mode's template error with the amplitude
+    divided out.
+    """
     for mode, res in d.results.items():
         ax.loglog(d.k, np.abs(res['S']), label=rf'$S(k)$, {mode}',
                   **mode_style(mode))
     if d.S_exact is not None:
         ax.loglog(d.k, np.abs(d.S_exact), label=r'$S(k)$ exact (measured)',
                   **REF_STYLE['exact'])
+    if d.S_eff is not None:
+        ax.loglog(d.k, np.abs(d.S_eff),
+                  label=r'$S_{\rm eff}=U_\star/(\tilde f_u \, P^{\,h_rx})$, measured',
+                  **REF_STYLE['seff'])
     ax.axvline(d.k_Ny, c='grey', ls=':', lw=1.2)
     ax.axhline(1.0, c='grey', lw=0.6)
     ax.set_ylabel(r'$S(k)=\langle u_m T\rangle_w$')
+    # Scale to the resolved range only. S_eff is a ratio of measured spectra
+    # and both can cross zero beyond the Nyquist frequency, where |.| on a log
+    # axis produces excursions of several decades; left to autoscale they
+    # flatten everything below k_Ny into a line.
+    below = np.asarray(d.k) <= d.k_Ny
+    vals = [np.abs(res['S'])[below] for res in d.results.values()]
+    for extra in (d.S_exact, d.S_eff):
+        if extra is not None:
+            vals.append(np.abs(np.asarray(extra))[below])
+    finite = np.concatenate([v[np.isfinite(v) & (v > 0)] for v in vals])
+    if finite.size:
+        ax.set_ylim(0.5 * finite.min(), 2.0 * finite.max())
     if legend:
-        ax.legend(frameon=False)
+        ax.legend(frameon=False, fontsize=12)
     if title:
         ax.set_title(title)
 
@@ -466,10 +428,10 @@ def production_panel(d: PanelData):
     The right column is what differs. Production has no hidden bins, so there
     is no U_exact to divide the correction by; the top panel instead scores the
     whole reconstruction against the measured decomposition, Eq. (59), for
-    d.error_mode alone. The shape factor moves down to the bottom panel, where
-    it still shows all four modes: it is the model-side quantity and needs no
-    exact counterpart, so keeping it preserves the diagnostic and keeps this
-    figure readable next to the validation one.
+    d.error_mode alone. The shape factor moves down to the bottom panel, which
+    shows every mode's S(k) together with the measured S_eff when the caller
+    supplies it, so that the modelled and required shapes can be read off the
+    same axes.
     """
     if not d.has_ustar:
         raise ValueError('production_panel needs R_star and U_star from the '
@@ -482,7 +444,10 @@ def production_panel(d: PanelData):
         panel_reconstruction(ax_lt, d)
         panel_rec_ratio(ax_lb, d)
         panel_total_error(ax_rt, d)          # keeps its one-entry legend
-        panel_shape(ax_rb, d, legend=False)
+        # Legend on: with S_eff overlaid this panel now carries the measured
+        # curve as well as the modelled ones, and the reader has to be able to
+        # tell which is which without consulting the caption.
+        panel_shape(ax_rb, d, legend=True)
         ax_rb.set_xlabel(LABEL_K)            # bottom of its column now
 
         _finish_panel(axes)

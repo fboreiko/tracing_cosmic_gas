@@ -47,16 +47,17 @@ measured -- which is the point: it tests the ansatz ALONE.
 'halomodel' T from the full 1-halo + 2-halo model.
 
 THE MASS INTEGRAL, AND WHY ITS AMPLITUDE IS NOT TAKEN FROM THE MODEL
-f_u from an analytic HMF is badly determined: integrating Tinker+08 from
+f_(i) from an analytic HMF is badly determined: integrating Tinker+08 from
 10^10 rather than 10^6 Msun/h changes it by a factor of two, because the
 low-mass end contributes mass logarithmically and never converges. The
 SHAPE S(k), by contrast, moves by only a few per cent over the same range,
 since it is a ratio of two integrals against the same weight. So the
 default (--fu catalog) takes the amplitude from the measured catalogue
-deficit f_u^cat = 1 - sum_i f_i and the shape from the model. --fu model
+deficit f_u = 1 - sum_i f_i and the shape from the model. --fu model
 uses the HMF for both and is there to expose exactly this instability.
 
-Note that f_u^cat is NOT the f_u of the integral: it also collects mass
+Note that f_u is NOT f_(i), the integral below M_min (f_smallhalo in code,
+since f_i is taken by the per-bin mass fraction): f_u also collects mass
 outside r200b of resolved halos, halos above the top bin, and the
 dm+gas-vs-total bookkeeping residue. Experiment A improves the treatment
 of component (i) only, and carries the rest along with the same template.
@@ -109,10 +110,19 @@ def transfer_T(k, M_nodes, M_ref, mode, hm=None, T_sim=None):
     raise ValueError(f"unknown extrapolation mode {mode!r}")
 
 
+def _lowk(k, y, kmax=0.08):
+    """Mean of y over k < kmax, for one-line reporting."""
+    sel = np.asarray(k) < kmax
+    if np.count_nonzero(sel) < 3:
+        sel = np.zeros_like(k, dtype=bool); sel[:5] = True
+    y = np.asarray(y, dtype=float)[sel]
+    return float(np.nanmean(y[np.isfinite(y)]))
+
+
 def delta_P_experimentA(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=None,
                         cat_M=None, cat_w=None, T_sim=None,
                         int_logm_lo=INT_LOGM_LO, n_nodes=INT_NODES,
-                        f_u=None, use_um=True):
+                        f_u=None, use_um=True, trunc=1.0):
     """The Experiment A correction.
 
         Delta_P(k) = f_u * S(k) * P_halo_x(k|M_r),   S(k) = <u_m(k|M) T(k,M)>_w
@@ -132,9 +142,28 @@ def delta_P_experimentA(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=Non
         Overrides the model's own mass integral, i.e. the amplitude is taken
         from the catalogue deficit and only the SHAPE S(k) from the model.
 
+    trunc
+        Multiple of r200m at which u_m is truncated. Experiment A always runs
+        at 1: the halo extends to r200m, which is the radius its M200b is
+        defined at and the radius the R*/U* membership spheres use, so any
+        other value would put the model and the measurement on different
+        definitions of where a halo stops. It is a parameter rather than a
+        constant only because experiment_B calls this function while sweeping
+        the aperture, and passes the sweep value explicitly.
+
     Returns a dict with S, Delta_P, f_u used, f_u from the integral, and the
     per-node T for inspection.
     """
+    if mode == 'flat' and cat_M is None and hm is None:
+        if f_u is None:
+            raise ValueError("mode 'flat' without a HaloModel needs f_u to be "
+                             "given: the mass integral is the only thing the "
+                             "model was supplying.")
+        S = np.ones_like(np.asarray(k, dtype=float))
+        return dict(S=S, Delta_P=float(f_u) * S * P_halo_x_ref,
+                    f_u_used=float(f_u), f_smallhalo_integral=np.nan,
+                    M_nodes=np.array([]), w=np.array([]), T=None, mode=mode)
+
     if cat_M is not None:
         M_nodes = np.asarray(cat_M, dtype=float)
         w = np.asarray(cat_w, dtype=float)
@@ -152,16 +181,17 @@ def delta_P_experimentA(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=Non
 
     if use_um and mode != 'flat':
         u = np.array([u_nfw(k, m, _conc(cfg, m, z), cfg.rhobar_m,
-                            trunc=cfg.nfw_trunc) for m in M_nodes])
+                            trunc=trunc) for m in M_nodes])
     else:
         u = np.ones((M_nodes.size, k.size))
 
     S = np.sum(w[:, None] * u * T, axis=0) / np.sum(w)
-    f_u_int = float(np.sum(w) / cfg.rhobar_m)
-    f_u_used = f_u_int if f_u is None else float(f_u)
+    f_smallhalo_int = float(np.sum(w) / cfg.rhobar_m)
+    f_u_used = f_smallhalo_int if f_u is None else float(f_u)
 
     return dict(S=S, Delta_P=f_u_used * S * P_halo_x_ref, f_u_used=f_u_used,
-                f_u_integral=f_u_int, M_nodes=M_nodes, w=w, T=T, mode=mode)
+                f_smallhalo_integral=f_smallhalo_int, M_nodes=M_nodes, w=w,
+                T=T, mode=mode)
 
 
 def measured_bias_per_bin(data, kmax_fit=0.08):
@@ -269,12 +299,12 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
 
     f_i = n_i * M_i / cfg.rhobar_m
     f_resolved = float(np.sum(f_i[resolved]))
-    f_u_cat = 1.0 - f_resolved
+    f_u = 1.0 - f_resolved
 
     print(f"[A] {mode_label} mode; reference bin {ref} at logM = "
           f"{logM_cen[ref]:.2f} (<M> = {M_ref:.3e} Msun/h)")
     print(f"[A] resolved mass fraction {f_resolved:.4f}, catalogue deficit "
-          f"f_u^cat = {f_u_cat:.4f}")
+          f"f_u = {f_u:.4f}")
     if np.any(hidden):
         print(f"[A] hiding {np.count_nonzero(hidden)} bins below logM = "
               f"{opts.split_logm}, carrying f = {float(np.sum(f_i[hidden])):.4f} "
@@ -285,8 +315,11 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     f_u_hidden = None
     if np.any(hidden):
         idx = np.flatnonzero(hidden)
-        u_hidden = np.array([u_nfw(k, M_i[j], _conc(cfg, M_i[j], z), cfg.rhobar_m,
-                                   trunc=cfg.nfw_trunc) for j in idx])
+        # trunc = 1 (the u_nfw default): this is the TRUTH the estimators are
+        # scored against, built from the measured bins, so it is tied to r200m
+        # and must not move with anything.
+        u_hidden = np.array([u_nfw(k, M_i[j], _conc(cfg, M_i[j], z),
+                                   cfg.rhobar_m) for j in idx])
         Delta_P_exact = np.sum(f_i[idx][:, None] * u_hidden * P_halo_x[idx], axis=0)
         f_u_hidden = float(np.sum(f_i[idx]))
         print(f"[A] exact hidden contribution built from the measured bins; "
@@ -317,7 +350,7 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
 
     # --- the amplitude ----------------------------------------------------------
     if opts.fu == 'catalog':
-        f_u_amp = f_u_hidden if f_u_hidden is not None else f_u_cat
+        f_u_amp = f_u_hidden if f_u_hidden is not None else f_u
     else:
         f_u_amp = None      # let each mode use its own mass integral
     print(f"[A] amplitude source: --fu {opts.fu}"
@@ -360,7 +393,7 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         )
         results[mode] = res
         S = res['S']
-        print(f"[A] mode {mode:10s}: f_u(int) = {res['f_u_integral']:.4f}, "
+        print(f"[A] mode {mode:10s}: f_(i) = {res['f_smallhalo_integral']:.4f}, "
               f"f_u(used) = {res['f_u_used']:.4f}, "
               f"S(k_min) = {S[0]:.3f}, S(k=1) = {np.interp(1.0, k, S):.3f}, "
               f"S(k_Ny) = {S[-1]:.3g}")
@@ -434,14 +467,26 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         tot, _ = ru.load_totals(cfg, data, tracer)
         if tot is not None:
             d.R_star, d.U_star = tot['R_star'], tot['U_star']
+            # The measured shape factor, on the same template the models are
+            # normalised to. f_out = 1 - sum_i f_part is the mass really
+            # outside every membership sphere, so this is exactly the S each
+            # mode is trying to reproduce; the gap is the template error with
+            # the amplitude divided out.
+            with np.errstate(divide='ignore', invalid='ignore'):
+                d.S_eff = tot['U_star'] / (tot['f_out'] * P_halo_x_ref)
+            print(f"[A] measured S_eff: {_lowk(k, d.S_eff):.3f} at k -> 0, "
+                  + ", ".join(f"{kk:g}: {float(np.interp(kk, k, d.S_eff)):.3f}"
+                              for kk in (1.0, 3.0) if kk <= k[-1]))
             p_main = _save(pl.production_panel(d),
                            stem.replace('expA_shape', 'expA_production_panel'))
         else:
             # Only reachable when the cache exists but sits on a different k
             # grid from the bundle -- a missing cache is measured, not skipped.
-            raise SystemExit(f"[A] cannot score the reconstruction against R*/U* because "
-                             f"the cache is missing or unusable; run "
-                             f"predict_Pmx_from_Phx.py --measure-rstar-ustar first")
+            raise SystemExit(
+                "[A] cannot score the reconstruction against R*/U*: the cache "
+                "exists but sits on a different k grid from the bundle. "
+                "Rebuild it with\n"
+                "      python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute")
 
     # --- the ansatz itself, bin by bin ------------------------------------------
     if np.any(hidden):
@@ -464,10 +509,10 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         'M_min': M_min, 'split_logm': (np.nan if opts.split_logm is None
                                        else float(opts.split_logm)),
         'hmf_source': opts.hmf, 'fu_source': opts.fu,
-        'nfw_trunc': float(cfg.nfw_trunc),
+        'nfw_trunc': 1.0,          # fixed; the sweep lives in experiment_B
         'concentration_source': cfg.concentration_source,
         'int_logm_min': float(int_logm_lo),
-        'f_u_cat': f_u_cat, 'f_resolved': f_resolved,
+        'f_u': f_u, 'f_resolved': f_resolved,
         'self_pairs_removed': bool(data.get('self_pairs_removed', False)),
         'b_measured': b_meas, 'logM_cen': logM_cen, 'M_mean': M_i, 'n_i': n_i,
         'P_halo_x_ref': P_halo_x_ref, 'P_rec_resolved': P_rec_resolved, 'P_matter_x_true': P_matter_x_true,
@@ -478,7 +523,9 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     for mode, res in results.items():
         payload[f'S_{mode}'] = res['S']
         payload[f'Delta_P_{mode}'] = res['Delta_P']
-        payload[f'f_u_integral_{mode}'] = res['f_u_integral']
+        payload[f'f_smallhalo_integral_{mode}'] = res['f_smallhalo_integral']
+    if getattr(d, 'S_eff', None) is not None:
+        payload['S_eff'] = d.S_eff
     if hm is not None:
         payload['b_tinker10'] = hm.bias(M_i)
         payload['dndM_tinker08'] = hm.dndM(M_i)

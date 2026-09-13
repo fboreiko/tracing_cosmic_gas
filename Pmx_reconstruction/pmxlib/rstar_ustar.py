@@ -37,7 +37,10 @@ WHAT IS IN THE CACHE
     Binning:    k_center, k_bins, counts, f_i, f_part, M_mean, logM_cen,
                 logM_edges
     Provenance: box, ngrid, nkbins, nbins, logm_min, logm_max, redshift,
-                feedback, mass_def, centrals_only, f_c, f_g, version
+                feedback, mass_def, centrals_only, aperture, f_c, f_g, version
+
+    'aperture' is the membership radius in units of r200m. Caches written
+    before it existed do not carry the key; read it with .get(..., 1.0).
 
     'tracer' is gas, dm or matter; 'species' is only gas or dm, since matter is
     a mass-weighted combination formed at read time, never painted separately.
@@ -89,20 +92,26 @@ TRACERS = ('gas', 'dm', 'matter')
 # ==============================================================================
 # 1.  Path
 # ==============================================================================
-def cache_path(cfg):
-    """Companion to bundle_path: same binning knobs in the stem."""
+def cache_path(cfg, aperture=1.0):
+    """Companion to bundle_path: same binning knobs in the stem.
+
+    `aperture` is the membership radius in units of r200m (see
+    compute_R_star_U_star). It only enters the filename when it is off the
+    default, so every cache written before it existed is still found.
+    """
     nk = 'default' if cfg.nkbins is None else str(cfg.nkbins)
+    ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
     stem = (f'rstar_ustar_{CACHE_VERSION}_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{cfg.logm_min:g}-{cfg.logm_max:g}_nb{cfg.nbins}'
             f'_ngrid{cfg.grid}_nk{nk}'
-            f'_{"cen" if cfg.centrals_only else "all"}.npz')
+            f'_{"cen" if cfg.centrals_only else "all"}{ap}.npz')
     return DATA_ROOT / cfg.sim_name / 'pme_inputs' / stem
 
 
 # ==============================================================================
 # 2.  Halo catalogue, binned exactly as measure_spectra does it
 # ==============================================================================
-def load_binned_centrals(cfg):
+def load_binned_centrals(cfg, aperture=1.0):
     """Positions, masses, radii and bin index of the in-range centrals.
 
     The binning is pmxlib.binning's, the same code measure_spectra uses, so bin
@@ -110,15 +119,24 @@ def load_binned_centrals(cfg):
     comment. r200b is NOT taken from the catalogue but recomputed from M200b
     with r200m_of_M, i.e. with exactly the truncation radius the NFW profile
     assumes; the catalogue value is loaded only for a units check.
+
+    `aperture` scales that radius: the membership sphere becomes
+    aperture * r200m. At aperture = 1 this is the default everything else in
+    the pipeline assumes. Above 1 the spheres of neighbouring halos overlap
+    heavily and the "first assignment wins, most massive first" rule in
+    assign_particles turns the result into a PARTITION of the particles rather
+    than a set of independent spherical apertures -- see experiment_B.py.
     """
     pos, mass, bin_index, logM_edges, extras = load_binned_halos(
         cfg, extra_props=('r200b',), restrict_to_range=True)
     r_cat = extras['r200b']
-    r_use = r200m_of_M(mass, cfg.rhobar_m)           # cMpc/h, comoving
+    r_use = float(aperture) * r200m_of_M(mass, cfg.rhobar_m)   # cMpc/h, comoving
 
     finite = np.isfinite(r_cat) & (r_cat > 0)
     if np.any(finite):
-        ratio = np.median(r_cat[finite] / r_use[finite])
+        # Divided by the aperture so the check tests the units and the mass
+        # definition, not the knob: it must read 1 whatever the aperture is.
+        ratio = np.median(r_cat[finite] / r_use[finite]) * float(aperture)
         print(f"  catalogue r200b / r200m_of_M(M200b): median {ratio:.4f} "
               f"(1 = same units and convention; {cfg.h:.3f} or "
               f"{1 / cfg.h:.3f} = cMpc vs cMpc/h)")
@@ -126,6 +144,7 @@ def load_binned_centrals(cfg):
     pos = np.mod(pos, cfg.box)                       # cKDTree boxsize wants [0, L)
     order = np.argsort(-mass, kind='stable')         # descending mass
     print(f"  {mass.size} centrals in [{cfg.logm_min}, {cfg.logm_max}), "
+          f"aperture = {float(aperture):g} r200m, "
           f"r_max = {r_use.max():.3f} cMpc/h")
     return pos[order], mass[order], r_use[order], bin_index[order], logM_edges
 
@@ -134,7 +153,8 @@ def load_binned_centrals(cfg):
 # 3.  Particle membership
 # ==============================================================================
 def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass,
-                     m_particle_msun_h, chunk_particles=5e7, nthread=4):
+                     m_particle_msun_h, chunk_particles=5e7, nthread=4,
+                     aperture=1.0):
     """label[p] = index of the most massive central whose r200m sphere contains
     particle p, or -1.
 
@@ -151,7 +171,11 @@ def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass,
                    compact_nodes=False)
     print(f"    KD-tree on {n_p:.3e} particles: {time.time() - t0:.1f} s")
 
-    expected = halo_mass / m_particle_msun_h          # rough member count
+    # Rough member count. The aperture^3 is what keeps the chunking honest at
+    # aperture > 1: query_ball_point builds a Python list per halo, so an
+    # eightfold rise in members at aperture = 2 would otherwise be an eightfold
+    # rise in peak transient memory rather than in the number of chunks.
+    expected = float(aperture) ** 3 * halo_mass / m_particle_msun_h
     cum = np.cumsum(expected)
     edges = np.searchsorted(cum, np.arange(0.0, cum[-1], chunk_particles))
     edges = np.unique(np.append(edges, halo_mass.size))
@@ -210,8 +234,17 @@ def _shot_terms(counts_size, nk, f_c, f_g, P_shot, m2_bin, m2_tot, tracer):
 # ==============================================================================
 # 5.  The measurement
 # ==============================================================================
-def compute_R_star_U_star(cfg, data, chunk_particles=5e7):
-    """Measure R*_i, U* and the shot terms. Returns the cache dict."""
+def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
+    """Measure R*_i, U* and the shot terms. Returns the cache dict.
+
+    `aperture` is the membership radius in units of r200m. It changes WHICH
+    particles carry a halo label and therefore how the exact identity
+    P_matter_x = sum_i R*_i + U* is split between the two terms; it does not
+    change the identity, the spectra bundle, or anything on the model side.
+    The mass bins are still labelled by the catalogue's M200b whatever the
+    aperture is, so bin i is the same set of halos and R*_i stays comparable
+    across apertures bin by bin.
+    """
     ngrid, nthread, nbins = cfg.grid, cfg.threads, cfg.nbins
     k_bins = np.asarray(data['k_bins'])
     k_min = 2.0 * np.pi / cfg.box
@@ -232,7 +265,8 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7):
 
     # --- centrals -------------------------------------------------------------
     print("\nHalo catalogue:")
-    h_pos, h_mass, h_r, h_bin, logM_edges = load_binned_centrals(cfg)
+    h_pos, h_mass, h_r, h_bin, logM_edges = load_binned_centrals(
+        cfg, aperture=aperture)
     if not np.allclose(logM_edges, data['logM_edges']):
         raise SystemExit("Mass-bin edges differ from the spectra bundle; "
                          "use the same --nbins/--logm-min/--logm-max.")
@@ -282,9 +316,6 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7):
               f"{np.nanmedian(P_shot_species[species]):.4e} (median over k), "
               f"{time.time() - t0:.1f} s")
 
-        # Particle-mass unit, self-calibrated: the species' total should be its
-        # cosmological share of rhobar_m L^3 (short by the stellar mass). Only
-        # used to size the membership chunks, so a few per cent is fine.
         omega_b = float(cfg.sim_params.get('omega_b'))
         share = ((cfg.omega_m - omega_b) / cfg.omega_m if species == 'dm'
                  else omega_b / cfg.omega_m)
@@ -295,7 +326,7 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7):
         print(f"[{species}] membership ...")
         label = assign_particles(cfg, pos, h_pos, h_r, h_mass, m_p,
                                  chunk_particles=chunk_particles,
-                                 nthread=nthread)
+                                 nthread=nthread, aperture=aperture)
         member = label >= 0
         mass_halo_assigned += np.bincount(label[member], weights=mass[member],
                                           minlength=n_halo)
@@ -351,10 +382,6 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7):
     # --- spectra --------------------------------------------------------------
     print("\nPer-bin cross spectra R*_i ...")
     dens_avg = M_tot / ngrid ** 2                    # global mean per cell
-    # Length from the binning function, not from k_bins: bin_power_spectrum_2d
-    # applies its own k_min/k_max clipping, so len(k_bins) - 1 is an assumption
-    # that silently holds until someone changes --nkbins or the box. P_shot was
-    # binned through the same path above, so its length is the right one.
     nk = int(P_shot_species['dm'].size)
     R_star = {x: np.zeros((nbins, nk)) for x in tracer_fft}
     sum_fft = np.zeros_like(m_fft)
@@ -417,7 +444,7 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7):
         box=cfg.box, ngrid=ngrid, nkbins=(-1 if cfg.nkbins is None else cfg.nkbins),
         nbins=nbins, logm_min=cfg.logm_min, logm_max=cfg.logm_max,
         redshift=cfg.z, feedback=cfg.feedback, mass_def=cfg.mass_def,
-        centrals_only=cfg.centrals_only,
+        centrals_only=cfg.centrals_only, aperture=float(aperture),
     )
     # The shot terms themselves, assembled once and stored alongside the raw
     # spectra. Storing both is the point: the ingredients let the convention be
@@ -435,13 +462,13 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7):
 # 6.  Cache
 # ==============================================================================
 def load_or_compute(cfg, data, recompute=False, chunk_particles=5e7,
-                    allow_compute=True):
+                    allow_compute=True, aperture=1.0):
     """Read the cache, or measure and write it. None if absent and not allowed.
 
     `allow_compute=False` turns this into a pure lookup, for callers that would
     rather degrade than trigger a full particle pass inside a plotting run.
     """
-    path = cache_path(cfg)
+    path = cache_path(cfg, aperture=aperture)
     if path.exists() and not recompute:
         print(f"R*/U* cache:\n  {path}")
         with np.load(path, allow_pickle=False) as f:
@@ -450,7 +477,8 @@ def load_or_compute(cfg, data, recompute=False, chunk_particles=5e7,
         return None
     print(f"No R*/U* cache at\n  {path}\nMeasuring (one particle pass per "
           f"species) ...")
-    cache = compute_R_star_U_star(cfg, data, chunk_particles=chunk_particles)
+    cache = compute_R_star_U_star(cfg, data, chunk_particles=chunk_particles,
+                                  aperture=aperture)
     ensure_parents(path)
     np.savez_compressed(path, **cache)
     print(f"\nR*/U* cache saved:\n  {path}")
@@ -487,20 +515,23 @@ def totals(cfg, cache, data, tracer, subtract_shot=None):
 
     occ = np.asarray(data['counts']) > 0
     R_star = R_star_i[occ].sum(axis=0)
+    f_part = np.asarray(cache['f_part'], dtype=float)
     return dict(R_star_i=R_star_i, R_star=R_star, U_star=U_star,
-                total=R_star + U_star, shot_subtracted=subtract_shot)
+                total=R_star + U_star, shot_subtracted=subtract_shot,
+                f_part=f_part, f_out=1.0 - float(f_part.sum()))
 
 
-def load_totals(cfg, data, tracer, recompute=False, allow_compute=True):
+def load_totals(cfg, data, tracer, recompute=False, allow_compute=True,
+                aperture=1.0):
     """What plotting callers want: the totals dict for `tracer`, or None.
 
     R_star and U_star are returned separately, not summed: the error
     decomposition needs each one. Second return value is the cache path either
     way, so a caller can name it when telling the user what to run.
     """
-    path = cache_path(cfg)
+    path = cache_path(cfg, aperture=aperture)
     cache = load_or_compute(cfg, data, recompute=recompute,
-                            allow_compute=allow_compute)
+                            allow_compute=allow_compute, aperture=aperture)
     if cache is None:
         return None, path
     k_c = np.asarray(cache['k_center'], dtype=float)
@@ -528,6 +559,9 @@ def main():
                     help="measure even if the cache exists")
     ap.add_argument('--chunk-particles', type=float, default=5e7,
                     help="expected member particles per membership chunk")
+    ap.add_argument('--aperture', type=float, default=1.0,
+                    help="membership radius in units of r200m (default 1). "
+                         "Values above 1 are what experiment_B.py sweeps.")
     args = ap.parse_args()
     cfg = PmxConfig.from_args(args)
 
@@ -542,7 +576,8 @@ def main():
     derive_P_halo_matter(cfg, data)
 
     cache = load_or_compute(cfg, data, recompute=args.recompute,
-                            chunk_particles=args.chunk_particles)
+                            chunk_particles=args.chunk_particles,
+                            aperture=args.aperture)
     for x in TRACERS:
         t = totals(cfg, cache, data, x)
         frac = np.nanmedian(t['U_star'] / t['total'])

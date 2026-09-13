@@ -112,6 +112,12 @@ class PmxConfig:
     # r200m, which is the definition the catalogue mass and the rstar_ustar
     # membership spheres both use. Raising it spreads the SAME mass over a
     # larger radius (see u_nfw); it does not add mass.
+    # Kept at 1 everywhere. There is deliberately no CLI flag for it: a global
+    # truncation knob would move u_m in the reconstruction while leaving the
+    # R*/U* membership spheres, M200b and the halo model at r200m, i.e. it
+    # would put the model and the measurement on different definitions of where
+    # a halo ends. The truncation radius is varied properly, together with the
+    # membership radius and the mass weight, in experiment_B.py.
     nfw_trunc: float = 1.0
     logm_min: float = 11.0       # log10(M / [Msun/h])
     logm_max: float = 15.0
@@ -278,12 +284,6 @@ def add_binning_args(ap):
 
 def add_concentration_args(ap):
     g = ap.add_argument_group('Halo profile')
-    g.add_argument('--nfw-trunc', dest='nfw_trunc', type=float,
-                   default=_D.nfw_trunc,
-                   help=f"truncate the model NFW profile at this multiple of "
-                        f"r200m (default {_D.nfw_trunc}). The same mass is "
-                        f"redistributed, not added. Note the R*/U* membership "
-                        f"spheres stay at r200m.")
     g.add_argument('--concentration', dest='concentration_source',
                    default=_D.concentration_source,
                    choices=['powerlaw', 'colossus'],
@@ -334,7 +334,19 @@ def add_selfpair_args(ap):
 # plain run. run_experiment_A itself is still imported inside the branch.
 
 # Integration range for the unresolved-mass integral, log10(M / [Msun/h]).
-INT_LOGM_LO = 8.0             # see the f_u instability note above
+# --------------------------------------------------------------------------
+# Naming of the mass fractions, since several of them are easy to confuse:
+#
+#   f_i          per-bin catalogue mass fraction, n_i M_i / rhobar_m
+#   f_part       per-bin mass actually inside the membership spheres
+#                (\tilde f_i in the notes)
+#   f_u          the catalogue deficit, 1 - sum_i f_i
+#   f_out        the measured deficit, 1 - sum_i f_part  (\tilde f_u)
+#   f_smallhalo  component (i): the integral of M n(M) below M_min, written
+#                f_(i) in the notes. NOT called f_i in code, because that name
+#                is taken by the per-bin fraction above.
+# --------------------------------------------------------------------------
+INT_LOGM_LO = 8.0             # see the f_(i) instability note above
 INT_NODES = 256
 
 
@@ -387,14 +399,14 @@ def add_experiment_a_args(ap):
                         "the measured counts")
     g.add_argument('--fu', default=ExperimentAOptions.fu,
                    choices=['catalog', 'model'],
-                   help="where the amplitude f_u comes from: 'catalog' "
+                   help="where the amplitude of U comes from: 'catalog' "
                         "(default) takes it from the measured deficit "
                         "1 - sum_i f_i and the shape from the model; 'model' "
                         "uses the HMF for both and exposes the amplitude "
                         "instability described above")
     g.add_argument('--int-logm-min', dest='int_logm_min', type=float, default=None,
                    help=f"lower limit of the unresolved-mass integral "
-                        f"(default {INT_LOGM_LO}); see the f_u instability note")
+                        f"(default {INT_LOGM_LO}); see the f_(i) instability note")
     g.add_argument('--power-spectrum', dest='power_spectrum',
                    default=ExperimentAOptions.power_spectrum,
                    choices=['camb', 'eisenstein98'],

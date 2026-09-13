@@ -155,14 +155,16 @@ def measure_shot_spectra(cfg, nkbins, nreal=None, seed=None,
         acc = None
         for r in range(nreal):
             print(f"[{species}] painting random realisation {r + 1}/{nreal} ...")
-            dens = paint_uniform_random_2d(mass, cfg.grid, cfg.threads, rng, chunk=chunk)
+            dens = paint_uniform_random_2d(
+                mass, cfg.box, cfg.grid, cfg.threads, rng, chunk=chunk)
             # Exactly the normalisation the real fields use: rho / rhobar - 1,
             # with rhobar the GLOBAL mean of this species per cell.
             delta = dens / (M_tot / cfg.grid ** 2) - 1.0
             del dens
             fft_r = compute_2d_fft(delta, cfg.grid)
             del delta
-            k_bins, k_center, Pk = binned_spectrum(np.abs(fft_r) ** 2, k_grid, nkbins)
+            k_bins, k_center, Pk = binned_spectrum(
+                cfg, np.abs(fft_r) ** 2, k_grid, nkbins)
             del fft_r
             gc.collect()
             acc = Pk if acc is None else acc + Pk
