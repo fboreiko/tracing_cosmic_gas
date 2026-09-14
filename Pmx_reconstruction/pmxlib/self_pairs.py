@@ -2,19 +2,6 @@
 # -*- coding: utf-8 -*-
 """Self-pair (shot-noise) spectra and their subtraction.
 
-Was section 3b of predict_Pmx_from_Phx.py. The derivation below is the whole
-reason the bundle format looks the way it does, so it travels with the code.
-
-==============================================================================
-3b.  SELF-PAIR (SHOT-NOISE) SPECTRA AND THEIR SUBTRACTION
-==============================================================================
-WHY THERE IS ANYTHING TO SUBTRACT
-The tracer fields and the matter field are not built from independent
-samples: delta_m = f_c delta_dm + f_g delta_gas is made of the SAME
-particles as delta_dm and delta_gas. Crossing two fields that share
-particles leaves a self-pair term -- every particle correlating with
-itself -- which is a discreteness artefact, not clustering:
-
 <delta_m delta_gas*>   = f_c P_dm_gas + f_g P_gas_gas
 ... and P_gas_gas carries P^shot_gg
 <delta_m delta_dm*>    = f_c P_dm_dm + f_g P_dm_gas
@@ -29,62 +16,12 @@ P_matter_dm     : f_c   P^shot_dd
 P_matter_matter : f_c^2 P^shot_dd + f_g^2 P^shot_gg
 P_dm_dm         :       P^shot_dd
 P_gas_gas       :       P^shot_gg
-P_dm_gas        :       0        (disjoint particle sets)
-P_halo_gas/dm   :       0        (halo centres are not particles)
-
-The last two are zero IDENTICALLY, not approximately: a self-pair term is
-an object correlating with itself, and no dm particle is a gas particle,
-nor is any halo centre a particle. They get no entry in the stored block
-at all -- an array of zeros and a '_corrected' copy of the raw would just
-be two ways of saying nothing happened.
-
-The right-hand side of the halo-model identity contains no self-pairs at
-all -- it is built from P_halo_x, which has none -- so scoring it against
-an un-subtracted truth charges the identity for a floor it never claimed
-to produce. At the high-k end of a 2048^2 grid that floor is not a
-rounding error, and in 'matter_matter' mode it enters at full weight.
 
 HOW P^shot IS MEASURED
-Not from a formula. The painted fields carry a TSC assignment window and
-its aliases, the masses are not equal, and the L^2 / binning conventions
-are this repo's own; writing down sum m^2 / (sum m)^2 * L^2 and hoping
-would be a guess. Instead each species is painted at UNIFORMLY RANDOM
-positions with its real per-particle masses and the auto spectrum of the
-resulting field is taken through binned_spectrum(). A random catalogue has
-no clustering, so in expectation that auto spectrum IS the self-pair term
-of the real field, measured through exactly the same window, normalisation
-and k bins. This is the same estimator measure_u_tilde.py uses for its
-R_star / U_star correction, with the same seed.
-
-WHAT IS STORED, AND WHERE
-Two files, with different lifetimes.
-
-P^shot_dd and P^shot_gg depend only on (feedback, ngrid, box, k binning,
-seed, realisations) -- NOT on the mass binning -- so they live in their own
-small npz, shotnoise_v1_*.npz, and are shared by every --nbins / --logm-*
-/ --target run. The measurement is the expensive part (one particle-mass
-read plus one paint + FFT per species) and it happens exactly once.
-
-The spectra bundle then carries the whole correction, resolved against its
-own spectra. For every spectrum with a self-pair term it holds three
-arrays rather than one:
-
-<key>              the raw measurement
-<key>_selfpair     the self-pair term computed for it
-<key>_corrected    the difference
-
-together with P_shot_dm, P_shot_gas and the seed / realisation count that
-produced them. So the bundle is self-describing: the correction is a
-stored, auditable quantity rather than something re-derived from two files
-on every run, and a bundle can be read either way after the fact -- by
-this script, by measure_u_tilde.py, or by hand -- without re-running
-anything. Nothing is overwritten: the canonical name is always the RAW
-spectrum, which is also what keeps a bundle readable by code written
-before any of this existed.
-
-Which variant a given RUN works with is a separate decision, taken once by
-use_self_pair_corrected() and controlled by --no-shot-subtract. What is on
-disk does not depend on the command line.
+Each species is painted at uniformly random 2D positions with its real
+per-particle masses and the auto spectrum of the resulting field is taken
+through binned_spectrum(). A random catalogue has no clustering, so in
+expectation that auto spectrum IS the self-pair term of the real field.
 ------------------------------------------------------------------------------
 """
 import gc
@@ -102,13 +39,7 @@ from Pmx_reconstruction.pmxlib.painting import (binned_spectrum, mass_moments,
 SHOT_SPECIES = ('dm', 'gas')
 
 def shot_path(cfg, ngrid, nkbins, nreal=None, seed=None):
-    """Cache for the self-pair spectra, beside the spectra bundle.
-
-    The mass binning is deliberately absent from the name: P^shot depends on the
-    particles and the grid, not on how halos were binned, so one file serves
-    every bundle built on the same grid and k binning. Everything that DOES
-    change the numbers is in the name, so a stale file can never be picked up.
-    """
+    """Cache for the self-pair spectra, beside the spectra bundle."""
     nreal = cfg.shot_nreal if nreal is None else nreal
     seed = cfg.shot_seed if seed is None else seed
     nk = 'default' if nkbins is None else str(nkbins)
@@ -119,11 +50,7 @@ def shot_path(cfg, ngrid, nkbins, nreal=None, seed=None):
 
 def measure_shot_spectra(cfg, nkbins, nreal=None, seed=None,
                          chunk=None):
-    """Measure P^shot_dd and P^shot_gg in this pipeline's own convention.
-
-    One particle-mass read per species (positions are never loaded: they are
-    replaced by randoms), then nreal paint + FFT + bin passes, averaged.
-    """
+    """Measure P^shot_dd and P^shot_gg in this pipeline's own convention."""
     nreal = cfg.shot_nreal if nreal is None else nreal
     seed = cfg.shot_seed if seed is None else seed
     chunk = cfg.shot_chunk if chunk is None else chunk
@@ -157,8 +84,6 @@ def measure_shot_spectra(cfg, nkbins, nreal=None, seed=None,
             print(f"[{species}] painting random realisation {r + 1}/{nreal} ...")
             dens = paint_uniform_random_2d(
                 mass, cfg.box, cfg.grid, cfg.threads, rng, chunk=chunk)
-            # Exactly the normalisation the real fields use: rho / rhobar - 1,
-            # with rhobar the GLOBAL mean of this species per cell.
             delta = dens / (M_tot / cfg.grid ** 2) - 1.0
             del dens
             fft_r = compute_2d_fft(delta, cfg.grid)
@@ -177,21 +102,6 @@ def measure_shot_spectra(cfg, nkbins, nreal=None, seed=None,
         out['k_bins'] = np.asarray(k_bins)
         out['k_center'] = np.asarray(k_center)
 
-        # Convention check, informational only. IF compute_2d_fft normalises so
-        # that a Poisson field has <|delta_k|^2> = sum m^2 / (sum m)^2, then the
-        # low-k plateau should sit at L^2 sum m^2 / (sum m)^2. A ratio far from
-        # unity does not invalidate anything below -- the MEASURED curve is what
-        # gets subtracted, precisely so that no such assumption is needed -- but
-        # it does say the convention is not the naive one, which is worth
-        # knowing before quoting P^shot in a paper.
-        expect = cfg.box ** 2 * M2 / M_tot ** 2
-        lo = np.isfinite(P_shot) & (k_center < 0.3)
-        if np.any(lo):
-            print(f"    P^shot_{species}{species}: {np.nanmedian(P_shot):.6e} "
-                  f"(median over k), {np.nanmedian(P_shot[lo]):.6e} at k < 0.3")
-            print(f"    convention check, plateau / (L^2 sum m^2/(sum m)^2) = "
-                  f"{np.nanmedian(P_shot[lo]) / expect:.4f} "
-                  f"(1 = the naive normalisation)")
         del mass
         gc.collect()
 
@@ -203,12 +113,7 @@ _SHOT_REQUIRED_KEYS = ('k_center', 'P_shot_dm', 'P_shot_gas')
 
 def load_or_measure_shot(cfg, nkbins, recompute=False, nreal=None,
                          seed=None, chunk=None, allow_measure=True):
-    """Load the cached self-pair spectra, otherwise measure and write them.
-
-    With allow_measure=False a missing cache returns None instead of triggering
-    the (expensive) measurement -- used when the subtraction is switched off and
-    the spectra are wanted only for the diagnostic printout.
-    """
+    """Load the cached self-pair spectra, otherwise measure and write them."""
     nreal = cfg.shot_nreal if nreal is None else nreal
     seed = cfg.shot_seed if seed is None else seed
     chunk = cfg.shot_chunk if chunk is None else chunk
@@ -239,24 +144,7 @@ def load_or_measure_shot(cfg, nkbins, recompute=False, nreal=None,
 
 
 def self_pair_terms(cfg, data, shot):
-    """The self-pair content of every spectrum that HAS one, keyed by its name.
-
-    This is the whole physics of section 3b in one table. f_c and f_g are the
-    bundle's own particle-mass fractions, so the weights here are consistent
-    with the delta_m that was actually built.
-
-    P_dm_gas is deliberately absent, and so are P_halo_gas / P_halo_dm. Those
-    correlate DISJOINT point sets -- no dm particle is also a gas particle, and
-    no halo centre is a particle -- so no object ever pairs with itself and
-    there is no self-pair term to write down. Not "a term that happens to be
-    small", and not "a term we are choosing to neglect": zero identically. They
-    are left out of the block entirely rather than stored as arrays of zeros,
-    so that the presence of a '<key>_corrected' array always means a correction
-    was actually made.
-
-    (They still carry shot VARIANCE, of course -- a finite sample is noisy. But
-    variance is not bias, and there is nothing to subtract from the mean.)
-    """
+    """The self-pair content of every spectrum"""
     f_c, f_g = float(data['f_c']), float(data['f_g'])
     P_dd = np.asarray(shot['P_shot_dm'], dtype=float)
     P_gg = np.asarray(shot['P_shot_gas'], dtype=float)
@@ -276,20 +164,12 @@ def has_self_pair_block(data):
 
 
 def self_pair_keys(data):
-    """Which of the bundle's spectra have a self-pair term at all.
-
-    See self_pair_terms(cfg, ): P_dm_gas and the halo cross spectra are not on this
-    list because they cross disjoint point sets and their term is identically
-    zero.
-    """
+    """Which of the bundle's spectra have a self-pair term at all."""
     return [key for key in ('P_matter_gas', 'P_matter_dm', 'P_matter_matter',
                             'P_dm_dm', 'P_gas_gas')
             if key in data]
 
 
-# Written by an earlier version of this file, which stored an all-zeros block
-# for P_dm_gas. Purged on sight so that a bundle never carries a '_corrected'
-# array that corrects nothing.
 _LEGACY_BLOCK_KEYS = ('P_dm_gas_selfpair', 'P_dm_gas_corrected')
 
 

@@ -156,21 +156,21 @@ def set_ylabel_x(axes, x):
 class PanelData:
     """Everything the Experiment A figures plot, already computed.
 
-    `results` is the driver's dict of mode -> {'S', 'Delta_P', ...}. The two
+    `results` is the driver's dict of mode -> {'S', 'U', ...}. The two
     optional fields are what validation mode has and production mode does not:
-    `Delta_P_exact` is the measured contribution of the hidden bins and
+    `U_exact` is the measured contribution of the hidden bins and
     `S_exact` the shape factor implied by it. `has_exact` keys every branch in
     this module off their presence, so a caller never passes a mode flag.
     """
     k: np.ndarray
     k_Ny: float
     results: dict
-    P_rec_resolved: np.ndarray
+    R: np.ndarray
     P_target: np.ndarray
     P_matter_x_true: np.ndarray
     tag: str = 'x'
     x_sym: str = 'x'
-    Delta_P_exact: Optional[np.ndarray] = None
+    U_exact: Optional[np.ndarray] = None
     S_exact: Optional[np.ndarray] = None
     R_star: Optional[np.ndarray] = None
     U_star: Optional[np.ndarray] = None
@@ -179,7 +179,7 @@ class PanelData:
 
     @property
     def has_exact(self) -> bool:
-        return self.Delta_P_exact is not None
+        return self.U_exact is not None
 
     @property
     def has_ustar(self) -> bool:
@@ -236,7 +236,7 @@ def panel_dP_ratio(ax, d: PanelData, legend=True):
     """U_model / U_exact: the correction scored on its own. Validation only."""
     for mode, res in d.results.items():
         with np.errstate(divide='ignore', invalid='ignore'):
-            ax.semilogx(d.k, res['Delta_P'] / d.Delta_P_exact, label=mode,
+            ax.semilogx(d.k, res['U'] / d.U_exact, label=mode,
                         **mode_style(mode))
     ax.axhline(1.0, c='k', lw=0.8)
     ax.fill_between(d.k, 0.9, 1.1, color='0.85', zorder=0)
@@ -251,7 +251,7 @@ def panel_dP_ratio(ax, d: PanelData, legend=True):
 def panel_dP_abs(ax, d: PanelData, legend=True):
     """Production stand-in for the panel above: no exact target to divide by."""
     for mode, res in d.results.items():
-        ax.loglog(d.k, np.abs(res['Delta_P']), label=mode, **mode_style(mode))
+        ax.loglog(d.k, np.abs(res['U']), label=mode, **mode_style(mode))
     ax.axvline(d.k_Ny, c='grey', ls=':', lw=1.2)
     ax.set_ylabel(r'$\Delta P(k)\,L_{\rm box}^2$')
     ax.set_xlabel(LABEL_K)
@@ -284,9 +284,9 @@ def panel_total_error(ax, d: PanelData, legend=True):
 
     denom = d.R_star + d.U_star
     with np.errstate(divide='ignore', invalid='ignore'):
-        profile = (d.P_rec_resolved - d.R_star) / denom
-        template = (res['Delta_P'] - d.U_star) / denom
-        total = (d.P_rec_resolved + res['Delta_P']) / denom - 1.0
+        profile = (d.R - d.R_star) / denom
+        template = (res['U'] - d.U_star) / denom
+        total = (d.R + res['U']) / denom - 1.0
 
     base = mode_style(d.error_mode)
     for curve, key, label in ((total, 'total', LABEL_TOTAL_ERR),
@@ -317,16 +317,16 @@ def panel_reconstruction(ax, d: PanelData, title=None, legend=True):
                         rf'(incl. mass below the catalogue)', **REF_STYLE['truth'])
         ax.loglog(d.k, np.abs(d.P_target), label='target: all occupied bins',
                   **REF_STYLE['target'])
-        ax.loglog(d.k, np.abs(d.P_rec_resolved),
+        ax.loglog(d.k, np.abs(d.R),
                   label='bins above the split only', **REF_STYLE['resolved'])
     else:
         ax.loglog(d.k, np.abs(d.P_matter_x_true),
                   label=rf'truth $\delta_m\times\delta_{{{d.x_sym}}}$',
                   **REF_STYLE['target'])
-        ax.loglog(d.k, np.abs(d.P_rec_resolved), label='resolved bins only',
+        ax.loglog(d.k, np.abs(d.R), label='resolved bins only',
                   **REF_STYLE['resolved'])
     for mode, res in d.results.items():
-        ax.loglog(d.k, np.abs(d.P_rec_resolved + res['Delta_P']),
+        ax.loglog(d.k, np.abs(d.R + res['U']),
                   label=f'+ {mode}', **mode_style(mode))
     ax.axvline(d.k_Ny, c='grey', ls=':', lw=1.2)
     ax.set_ylabel(rf'$P^{{\,m{d.tag}}}(k)\,L_{{\rm box}}^2$')
@@ -341,9 +341,9 @@ def panel_rec_ratio(ax, d: PanelData):
     with np.errstate(divide='ignore', invalid='ignore'):
         if d.has_exact:
             ax.semilogx(d.k, d.P_matter_x_true / d.P_target, **REF_STYLE['truth'])
-        ax.semilogx(d.k, d.P_rec_resolved / d.P_target, **REF_STYLE['resolved'])
+        ax.semilogx(d.k, d.R / d.P_target, **REF_STYLE['resolved'])
         for mode, res in d.results.items():
-            ax.semilogx(d.k, (d.P_rec_resolved + res['Delta_P']) / d.P_target,
+            ax.semilogx(d.k, (d.R + res['U']) / d.P_target,
                         **mode_style(mode))
     ax.axhline(1.0, color='k', lw=0.8)
     ax.fill_between(d.k, 0.95, 1.05, color='0.85', zorder=0)
@@ -403,7 +403,7 @@ def validation_panel(d: PanelData):
     colour/dash pairing is shared across all four.
     """
     if not d.has_exact:
-        raise ValueError('validation_panel needs Delta_P_exact; use '
+        raise ValueError('validation_panel needs U_exact; use '
                          'production_panel when there is no split')
     with plt.rc_context(PANEL_RC):
         fig = plt.figure(figsize=PANEL_FIGSIZE, dpi=DPI)

@@ -1,73 +1,52 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """==============================================================================
-6.  EXPERIMENT A  --  extrapolating P_halo_x(k|M) below M_min
+EXPERIMENT A  --  extrapolating P_halo_x(k|M) below M_min
 ==============================================================================
-The baseline missing-mass correction applied in main() is the flat template
+This code computes the unresolved cross-power spectrum U:
 
-Delta_P(k) = f_u * P_halo_x(k | M_min),                                    (*)
-
-i.e. "the unresolved mass cross-correlates with e exactly like the lowest
-resolved bin does". Experiment A replaces (*) by the integral it is standing
-in for,
-
-Delta_P(k) = (1/rhobar_m) int_0^Mmin dM M n(M) u_m(k|M) P_halo_x(k|M),
+U(k) = (1/rhobar_m) int_0^Mmin dM M n(M) u_m(k|M) P_halo_x(k|M),
 
 with the unmeasurable integrand P_halo_x(k|M) supplied by an extrapolation off a
 reference bin h_r -- the lowest bin we do have measurements for:
 
 P_halo_x(k|M)  ~  [P_h_r_e(k) / P_h_r_c(k)] * P_hc(k|M).
 
-c is cold dark matter, which we trust; the bracket freezes the baryonic
-response in at the reference scale.
+c is cold dark matter, the bracket freezes the baryonic response in at the
+reference scale.
 
-WHAT ACTUALLY GETS COMPUTED
 Define the mass transfer function
-T(k,M) = P_hc(k|M) / P_hc(k|M_r)                          [dimensionless]
-so that P_halo_x(k|M) = T(k,M) * P_halo_x(k|M_r) and the measured P_h_r_c cancels
-out of the final expression entirely. Then
+T(k,M) = P_hc(k|M) / P_hc(k|M_r)
+so that P_halo_x(k|M) = T(k,M) * P_halo_x(k|M_r)
 
-Delta_P(k) = f_u * <u_m(k|M) T(k,M)>_w * P_halo_x(k|M_r)
+U(k) = f_u * <u_m(k|M) T(k,M)>_w * P_halo_x(k|M_r)
 = f_u * S(k) * P_halo_x(k|M_r),
 
-which is (*) multiplied by a single shape factor S(k). The old formula is
-the S = 1 special case, and in the limit u_m -> 1 with both 1-halo terms
-dropped S -> <b>_w / b(M_r), which is exactly Equation (eq:plateau) of the
-notes. Experiment A is thus a strict generalisation, not a competitor.
-
 THE FOUR WAYS OF SUPPLYING T
-'flat'      T = 1 and u_m = 1. Reproduces (*) bit for bit. The control.
+'flat'      T = 1 and u_m = 1.
 'simhc'     T = P_halo_dm(k;M_i) / P_halo_dm(k;M_r), straight from the measured
-halo-DM cross spectra. This is the literal reading of the
-ansatz with "P_hc taken from simulations", and it needs no
-cosmology, no mass function and no bias model. Only available
-in validation mode, where the "unresolved" bins are really
-measured -- which is the point: it tests the ansatz ALONE.
+            halo-DM cross spectra. Only available in validation mode (for now).
 'bias'      T = b(M)/b(M_r) from Tinker+10, u_m kept. The 2-halo limit.
 'halomodel' T from the full 1-halo + 2-halo model.
 
-THE MASS INTEGRAL, AND WHY ITS AMPLITUDE IS NOT TAKEN FROM THE MODEL
 f_(i) from an analytic HMF is badly determined: integrating Tinker+08 from
 10^10 rather than 10^6 Msun/h changes it by a factor of two, because the
 low-mass end contributes mass logarithmically and never converges. The
 SHAPE S(k), by contrast, moves by only a few per cent over the same range,
 since it is a ratio of two integrals against the same weight. So the
 default (--fu catalog) takes the amplitude from the measured catalogue
-deficit f_u = 1 - sum_i f_i and the shape from the model. --fu model
-uses the HMF for both and is there to expose exactly this instability.
+deficit f_u = 1 - sum_i f_i and the shape from the model.
 
-Note that f_u is NOT f_(i), the integral below M_min (f_smallhalo in code,
-since f_i is taken by the per-bin mass fraction): f_u also collects mass
-outside r200b of resolved halos, halos above the top bin, and the
-dm+gas-vs-total bookkeeping residue. Experiment A improves the treatment
-of component (i) only, and carries the rest along with the same template.
+Note that f_u is NOT f_(i), the integral below M_min (f_smallhalo in code):
+f_u also collects mass outside r200b of resolved halos. This code improves
+the treatment of component (i) only.
 ------------------------------------------------------------------------------
 """
 import argparse
 
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')   # headless; must precede the pyplot import in pmxlib.plotting
+matplotlib.use('Agg')
 
 from utils.pipeline_paths import ensure_parents, plot_path
 from utils.plot_data import save_plot_data
@@ -119,13 +98,11 @@ def _lowk(k, y, kmax=0.08):
     return float(np.nanmean(y[np.isfinite(y)]))
 
 
-def delta_P_experimentA(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=None,
+def compute_U(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=None,
                         cat_M=None, cat_w=None, T_sim=None,
                         int_logm_lo=INT_LOGM_LO, n_nodes=INT_NODES,
                         f_u=None, use_um=True, trunc=1.0):
-    """The Experiment A correction.
-
-        Delta_P(k) = f_u * S(k) * P_halo_x(k|M_r),   S(k) = <u_m(k|M) T(k,M)>_w
+    """U(k) = f_u * S(k) * P_halo_x(k|M_r),   S(k) = <u_m(k|M) T(k,M)>_w
 
     Two ways of supplying the mass weight w = M n(M):
 
@@ -143,15 +120,11 @@ def delta_P_experimentA(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=Non
         from the catalogue deficit and only the SHAPE S(k) from the model.
 
     trunc
-        Multiple of r200m at which u_m is truncated. Experiment A always runs
-        at 1: the halo extends to r200m, which is the radius its M200b is
-        defined at and the radius the R*/U* membership spheres use, so any
-        other value would put the model and the measurement on different
-        definitions of where a halo stops. It is a parameter rather than a
-        constant only because experiment_B calls this function while sweeping
-        the aperture, and passes the sweep value explicitly.
+        Multiple of r200m at which u_m is truncated. This code always runs
+        at 1. This parameter is present because experiment_B calls this function
+        and changes the value.
 
-    Returns a dict with S, Delta_P, f_u used, f_u from the integral, and the
+    Returns a dict with S, U, f_u used, f_u from the integral, and the
     per-node T for inspection.
     """
     if mode == 'flat' and cat_M is None and hm is None:
@@ -160,7 +133,7 @@ def delta_P_experimentA(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=Non
                              "given: the mass integral is the only thing the "
                              "model was supplying.")
         S = np.ones_like(np.asarray(k, dtype=float))
-        return dict(S=S, Delta_P=float(f_u) * S * P_halo_x_ref,
+        return dict(S=S, U=float(f_u) * S * P_halo_x_ref,
                     f_u_used=float(f_u), f_smallhalo_integral=np.nan,
                     M_nodes=np.array([]), w=np.array([]), T=None, mode=mode)
 
@@ -189,22 +162,14 @@ def delta_P_experimentA(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=Non
     f_smallhalo_int = float(np.sum(w) / cfg.rhobar_m)
     f_u_used = f_smallhalo_int if f_u is None else float(f_u)
 
-    return dict(S=S, Delta_P=f_u_used * S * P_halo_x_ref, f_u_used=f_u_used,
+    return dict(S=S, U=f_u_used * S * P_halo_x_ref, f_u_used=f_u_used,
                 f_smallhalo_integral=f_smallhalo_int, M_nodes=M_nodes, w=w,
                 T=T, mode=mode)
 
 
 def measured_bias_per_bin(data, kmax_fit=0.08):
-    """Large-scale halo bias per mass bin, b_i = <P_halo_dm / P_dm,dm> over k < kmax.
-
-    Purely a diagnostic: it is what the Tinker+10 curve is checked against
-    before b(M) is trusted below M_min. Averaging over the lowest k bins keeps
-    it in the linear regime where the ratio is genuinely constant.
-
-    The denominator P_dm_dm is an AUTO spectrum and so carries a self-pair term;
-    it arrives here already corrected if section 3b ran, which is the right
-    thing -- an uncorrected denominator biases b_i low, mildly at these k and
-    badly if kmax_fit is ever pushed up.
+    """
+    Large-scale halo bias per mass bin, b_i = <P_halo_dm / P_dm,dm> over k < kmax.
     """
     k = data['k_center']
     sel = k < kmax_fit
@@ -217,11 +182,9 @@ def measured_bias_per_bin(data, kmax_fit=0.08):
     return b, float(k[sel][-1])
 
 
-# ------------------------------------------------------------------------------
-# 6b.  The driver
-# ------------------------------------------------------------------------------
 def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
-    """Run and plot Experiment A.
+    """
+    Run Experiment A.
 
     Two configurations, chosen by --split-logm:
 
@@ -245,8 +208,6 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     k = data['k_center']
     P_halo_x = data[info['halo_key']]
     P_matter_x_true = data[info['truth_key']]
-    # P_halo_dm is the extrapolation's CDM proxy (the P_hc of the ansatz) and is
-    # the same array whatever the target is -- it is not the tracer here.
     P_halo_dm = data['P_halo_dm']
     counts = data['counts']
     M_i = data['M_mean']
@@ -311,16 +272,13 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
               f"of the mass")
 
     # --- the exact target, when we have one ------------------------------------
-    Delta_P_exact = None
+    U_exact = None
     f_u_hidden = None
     if np.any(hidden):
         idx = np.flatnonzero(hidden)
-        # trunc = 1 (the u_nfw default): this is the TRUTH the estimators are
-        # scored against, built from the measured bins, so it is tied to r200m
-        # and must not move with anything.
         u_hidden = np.array([u_nfw(k, M_i[j], _conc(cfg, M_i[j], z),
                                    cfg.rhobar_m) for j in idx])
-        Delta_P_exact = np.sum(f_i[idx][:, None] * u_hidden * P_halo_x[idx], axis=0)
+        U_exact = np.sum(f_i[idx][:, None] * u_hidden * P_halo_x[idx], axis=0)
         f_u_hidden = float(np.sum(f_i[idx]))
         print(f"[A] exact hidden contribution built from the measured bins; "
               f"f_u(hidden) = {f_u_hidden:.4f}")
@@ -358,11 +316,6 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
              " -> from the Tinker+08 integral, per mode"))
 
     # --- catalogue weights for the integral, in validation mode -----------------
-    # The per-mode nodes and weights are picked inside the loop below; all that
-    # is needed up here is the guard and the measured T_sim, which 'simhc' reads.
-    # Note that 'simhc' only knows T at the measured bin masses, so it is always
-    # evaluated on the catalogue nodes even when the other modes integrate over a
-    # continuous mass function.
     T_sim = None
     if opts.hmf == 'catalog' and not np.any(hidden):
         raise SystemExit("--hmf catalog needs --split-logm: outside validation "
@@ -384,7 +337,7 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
             cm, cw = M_i[idx], n_i[idx] * M_i[idx]
         else:
             cm = cw = None
-        res = delta_P_experimentA(
+        res = compute_U(
             cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=hm, z=z,
             cat_M=cm, cat_w=cw,
             T_sim=T_sim if mode == 'simhc' else None,
@@ -397,11 +350,11 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
               f"f_u(used) = {res['f_u_used']:.4f}, "
               f"S(k_min) = {S[0]:.3f}, S(k=1) = {np.interp(1.0, k, S):.3f}, "
               f"S(k_Ny) = {S[-1]:.3g}")
-        if Delta_P_exact is not None:
+        if U_exact is not None:
             with np.errstate(divide='ignore', invalid='ignore'):
-                r = res['Delta_P'] / Delta_P_exact
+                r = res['U'] / U_exact
             good = np.isfinite(r) & (k < k_Ny)
-            print(f"                 Delta_P/exact: {r[good][0]:.3f} at k_min, "
+            print(f"                 U/U_exact: {r[good][0]:.3f} at k_min, "
                   f"{np.interp(1.0, k, r):.3f} at k=1, "
                   f"median |1-r| = {np.nanmedian(np.abs(r[good] - 1.0)):.3f}")
 
@@ -421,28 +374,23 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
                   f"--split-logm validation can decide.")
 
     # --- the figures ------------------------------------------------------------
-    # One-way script-to-script import, no cycle: predict_Pmx_from_Phx only
-    # imports run_experiment_A inside its --experiment A branch.
-    from Pmx_reconstruction.predict_Pmx_from_Phx import reconstruct_P_matter_x
+    from Pmx_reconstruction.predict_Pmx_from_Phx import compute_R
     n_use = np.where(resolved, n_i, 0.0)
-    P_rec_resolved = reconstruct_P_matter_x(cfg, k, P_halo_x, M_i, n_use, z)
+    R = compute_R(cfg, k, P_halo_x, M_i, n_use, z)
 
-    has_exact = Delta_P_exact is not None
-    P_target = (P_rec_resolved + Delta_P_exact) if has_exact else P_matter_x_true
+    has_exact = U_exact is not None
+    P_target = (R + U_exact) if has_exact else P_matter_x_true
 
     S_exact = None
     if has_exact and f_u_hidden:
         with np.errstate(divide='ignore', invalid='ignore'):
-            S_exact = Delta_P_exact / (f_u_hidden * P_halo_x_ref)
+            S_exact = U_exact / (f_u_hidden * P_halo_x_ref)
 
     stem = (f'expA_shape_{tag}_{cfg.mass_def}_nb{cfg.nbins}'
             f'_split{"none" if opts.split_logm is None else f"{opts.split_logm:.2f}"}'
             f'_ref{logM_cen[ref]:.2f}_hmf{opts.hmf}_fu{opts.fu}{profile_tag(cfg)}'
             f'{"" if bool(data.get("self_pairs_removed", False)) else "_shotpresent"}')
 
-    # Each figure below is then three lines: build, save, report. Saving goes
-    # through pl.save_figure so the tick labels are rendered under the same
-    # rcParams the panels were built with -- see its docstring.
     def _save(fig, this_stem):
         path = plot_path('pme_reconstruction', cfg.feedback, stem=this_stem)
         ensure_parents(path)
@@ -451,9 +399,9 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         return path
 
     d = pl.PanelData(k=k, k_Ny=k_Ny, results=results,
-                     P_rec_resolved=P_rec_resolved, P_target=P_target,
+                     R=R, P_target=P_target,
                      P_matter_x_true=P_matter_x_true, tag=cfg.tracer_info['sym'], x_sym=x_sym,
-                     Delta_P_exact=Delta_P_exact, S_exact=S_exact)
+                     U_exact=U_exact, S_exact=S_exact)
 
     if has_exact:
         # Validation puts both halves of the split test on one canvas.
@@ -461,17 +409,10 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
                        stem.replace('expA_shape', 'expA_validation_panel'))
     else:
         # Production has no hidden bins to score the correction against, so it
-        # scores the whole reconstruction against the measured R* + U* instead.
-        # Measures and caches on a first run, a pure lookup thereafter. The
-        # k-grid check and the shot subtraction both live in that module.
+        # scores the whole reconstruction against the measured P^me.
         tot, _ = ru.load_totals(cfg, data, tracer)
         if tot is not None:
             d.R_star, d.U_star = tot['R_star'], tot['U_star']
-            # The measured shape factor, on the same template the models are
-            # normalised to. f_out = 1 - sum_i f_part is the mass really
-            # outside every membership sphere, so this is exactly the S each
-            # mode is trying to reproduce; the gap is the template error with
-            # the amplitude divided out.
             with np.errstate(divide='ignore', invalid='ignore'):
                 d.S_eff = tot['U_star'] / (tot['f_out'] * P_halo_x_ref)
             print(f"[A] measured S_eff: {_lowk(k, d.S_eff):.3f} at k -> 0, "
@@ -480,27 +421,11 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
             p_main = _save(pl.production_panel(d),
                            stem.replace('expA_shape', 'expA_production_panel'))
         else:
-            # Only reachable when the cache exists but sits on a different k
-            # grid from the bundle -- a missing cache is measured, not skipped.
             raise SystemExit(
                 "[A] cannot score the reconstruction against R*/U*: the cache "
                 "exists but sits on a different k grid from the bundle. "
                 "Rebuild it with\n"
                 "      python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute")
-
-    # --- the ansatz itself, bin by bin ------------------------------------------
-    if np.any(hidden):
-        idx = np.flatnonzero(hidden)
-        show = idx[:: max(1, idx.size // 6)]
-        with np.errstate(divide='ignore', invalid='ignore'):
-            curves = [(rf'logM$={logM_cen[j]:.2f}$',
-                       P_halo_x[j] / P_halo_x_ref,      # what we want
-                       P_halo_dm[j] / P_halo_dm[ref])   # the proxy we use
-                      for j in show]
-        _save(pl.ansatz_figure(k, k_Ny, curves,
-                               title='Experiment A ansatz: does the tracer '
-                                     'cancel in the ratio?'),
-              stem.replace('expA_shape', 'expA_ansatz'))
 
     # --- save everything --------------------------------------------------------
     payload = {
@@ -509,23 +434,26 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         'M_min': M_min, 'split_logm': (np.nan if opts.split_logm is None
                                        else float(opts.split_logm)),
         'hmf_source': opts.hmf, 'fu_source': opts.fu,
-        'nfw_trunc': 1.0,          # fixed; the sweep lives in experiment_B
+        'nfw_trunc': 1.0,
         'concentration_source': cfg.concentration_source,
         'int_logm_min': float(int_logm_lo),
         'f_u': f_u, 'f_resolved': f_resolved,
         'self_pairs_removed': bool(data.get('self_pairs_removed', False)),
         'b_measured': b_meas, 'logM_cen': logM_cen, 'M_mean': M_i, 'n_i': n_i,
-        'P_halo_x_ref': P_halo_x_ref, 'P_rec_resolved': P_rec_resolved, 'P_matter_x_true': P_matter_x_true,
+        'P_halo_x_ref': P_halo_x_ref, 'R': R, 'P_matter_x_true': P_matter_x_true,
     }
-    if Delta_P_exact is not None:
-        payload['Delta_P_exact'] = Delta_P_exact
+    if U_exact is not None:
+        payload['U_exact'] = U_exact
+        payload['S_exact'] = S_exact
         payload['f_u_hidden'] = f_u_hidden
+    if tot is not None:
+        payload['R_star'] = d.R_star
+        payload['U_star'] = d.U_star
+        payload['S_eff'] = d.S_eff
     for mode, res in results.items():
         payload[f'S_{mode}'] = res['S']
-        payload[f'Delta_P_{mode}'] = res['Delta_P']
+        payload[f'U_{mode}'] = res['U']
         payload[f'f_smallhalo_integral_{mode}'] = res['f_smallhalo_integral']
-    if getattr(d, 'S_eff', None) is not None:
-        payload['S_eff'] = d.S_eff
     if hm is not None:
         payload['b_tinker10'] = hm.bias(M_i)
         payload['dndM_tinker08'] = hm.dndM(M_i)
@@ -535,10 +463,6 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     return results
 
 
-
-# ==============================================================================
-# Standalone entry point
-# ==============================================================================
 def main():
     ap = argparse.ArgumentParser(
         description="Experiment A: extrapolate P_halo_x(k|M) below the "
@@ -556,8 +480,6 @@ def main():
     cfg = PmxConfig.from_args(args)
     opts = ExperimentAOptions.from_args(args)
 
-    # Same bundle, same filename as predict_Pmx_from_Phx.py, so a bundle written
-    # there is picked straight up and nothing is re-measured.
     from Pmx_reconstruction.pmxlib.bundle import load_or_measure
     from Pmx_reconstruction.pmxlib.self_pairs import use_self_pair_corrected
 
