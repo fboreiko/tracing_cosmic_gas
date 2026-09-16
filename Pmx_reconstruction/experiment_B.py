@@ -76,13 +76,10 @@ from Pmx_reconstruction.pmxlib.self_pairs import use_self_pair_corrected
 from Pmx_reconstruction.pmxlib import plotting as pl
 from Pmx_reconstruction.pmxlib import rstar_ustar as ru
 
-from Pmx_reconstruction.experiment_A import delta_P_experimentA
+from Pmx_reconstruction.experiment_A import compute_U
 
 KMAX_LOWK = 0.08
 K_TABLE = (0.1, 0.3, 1.0, 3.0, 10.0)
-APERTURE_CMAP = plt.cm.plasma
-
-
 def _lowk_mean(k, y, kmax=KMAX_LOWK):
     sel = k < kmax
     if np.count_nonzero(sel) < 3:
@@ -108,33 +105,9 @@ def _U_of(run, mode):
     return run['errors'][mode]['U']
 
 
-def _panel_axes(fig):
-    """The plotting module's 2x2 skeleton, with the right column UNSHARED."""
-    outer = fig.add_gridspec(1, 2, width_ratios=pl.PANEL_WIDTH_RATIOS,
-                             wspace=pl.PANEL_WSPACE)
-    gs_l = outer[0, 0].subgridspec(2, 1,
-                                   height_ratios=pl.PANEL_HEIGHT_RATIOS_LEFT,
-                                   hspace=pl.PANEL_HSPACE_LEFT)
-    gs_r = outer[0, 1].subgridspec(2, 1,
-                                   height_ratios=pl.PANEL_HEIGHT_RATIOS_RIGHT,
-                                   hspace=0.30)     # room for two x labels
-    ax_lt = fig.add_subplot(gs_l[0])
-    ax_lb = fig.add_subplot(gs_l[1], sharex=ax_lt)
-    ax_rt = fig.add_subplot(gs_r[0])
-    ax_rb = fig.add_subplot(gs_r[1])
-    plt.setp(ax_lt.get_xticklabels(), visible=False)
-    return ax_lt, ax_lb, ax_rt, ax_rb
-
-
-def _aperture_colours(apertures):
-    n = max(len(apertures), 2)
-    return {x: APERTURE_CMAP(0.08 + 0.78 * i / (n - 1))
-            for i, x in enumerate(apertures)}
-
-
 def measure_aperture(cfg, data, aperture, tracer, weights='aperture',
                      allow_compute=True, recompute=False,
-                     chunk_particles=5e7):
+                     chunk_particles=5e7, resolved=None):
     """Everything one aperture contributes, measured and modelled.
 
     Measured, from the R*/U* cache at this aperture:
@@ -189,9 +162,26 @@ def measure_aperture(cfg, data, aperture, tracer, weights='aperture',
     tot = ru.totals(cfg, cache, data, tracer)
     counts = np.asarray(data['counts'], float)
     occ = counts > 0
+    if resolved is None:
+        resolved = occ
+    resolved = np.asarray(resolved, bool) & occ
+    hidden = occ & ~resolved
 
-    f_part = np.asarray(cache['f_part'], float)
+    # A raised M_r is applied to the MEASURED partition as well, not only to the
+    # model. R* must contain exactly the bins the reconstruction sums over, so
+    # the hidden bins' halo-bound matter is moved back into U*, which is then
+    # "matter outside every RESOLVED sphere". This stays an exact partition:
+    # assignment is to the most massive host, and every resolved halo outranks
+    # every hidden one, so nothing is double counted and nothing is dropped.
+    # Because the cache is per bin, the split costs no particle pass.
+    f_part = np.where(resolved, np.asarray(cache['f_part'], float), 0.0)
     f_out = 1.0 - float(np.sum(f_part))
+    if np.any(hidden):
+        R_star_i = np.asarray(tot['R_star_i'], float)
+        tot = dict(tot)
+        tot['U_star'] = tot['U_star'] + np.sum(R_star_i[hidden], axis=0)
+        tot['R_star'] = tot['R_star'] - np.sum(R_star_i[hidden], axis=0)
+        tot['R_star_i'] = np.where(resolved[:, None], R_star_i, 0.0)
 
     # Mean mass inside the aperture per halo of the bin, in Msun/h. Only used
     # for reporting: the model weight is f_part directly.
@@ -215,9 +205,11 @@ def measure_aperture(cfg, data, aperture, tracer, weights='aperture',
         u_i[j] = u_nfw(k, M_i[j], conc[j], cfg.rhobar_m, trunc=aperture)
 
     # The catalogue-side weight, for comparison and for weights='catalogue'.
-    f_i = np.where(occ, counts / cfg.box ** 3 * M_i / cfg.rhobar_m, 0.0)
-    f_cat = np.where(occ, f_i * nfw_mass_ratio(np.where(occ, conc, 1.0),
-                                               aperture), 0.0)
+    # Both weights are zeroed on the hidden bins so that R sums over exactly the
+    # bins R* now contains.
+    f_i = np.where(resolved, counts / cfg.box ** 3 * M_i / cfg.rhobar_m, 0.0)
+    f_cat = np.where(resolved, f_i * nfw_mass_ratio(np.where(occ, conc, 1.0),
+                                                    aperture), 0.0)
 
     if weights == 'aperture':
         w_model = f_part
@@ -230,6 +222,7 @@ def measure_aperture(cfg, data, aperture, tracer, weights='aperture',
     return dict(aperture=float(aperture), cache=cache, k=k, weights=weights,
                 R_star_i=tot['R_star_i'], R_star=tot['R_star'],
                 U_star=tot['U_star'], total=tot['total'],
+                resolved=resolved, hidden=hidden,
                 f_part=f_part, f_out=f_out, M_ap=M_ap, u_i=u_i, conc=conc,
                 f_i=f_i, f_cat=f_cat, w_model=w_model,
                 R_model=R_model,
@@ -253,9 +246,29 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
     logM_cen = np.asarray(data['logM_cen'], float)
     M_i = np.asarray(data['M_mean'], float)
     occ = counts > 0
-    ref = int(np.flatnonzero(occ)[0])
+
+    # --- choose M_r, exactly as experiment_A does ------------------------------
+    if opts.split_logm is not None:
+        resolved = occ & (logM_cen >= opts.split_logm)
+        hidden = occ & ~resolved
+        if not np.any(resolved):
+            raise SystemExit(f"--split-logm {opts.split_logm} leaves no "
+                             f"occupied bin resolved.")
+        if not np.any(hidden):
+            raise SystemExit(f"--split-logm {opts.split_logm} hides no occupied "
+                             f"bin; omit it to use the whole catalogue.")
+    else:
+        resolved = occ.copy()
+        hidden = np.zeros_like(occ)
+
+    ref = int(np.flatnonzero(resolved)[0]) if opts.ref_logm is None else \
+        int(np.argmin(np.abs(logM_cen - opts.ref_logm)))
+    if not resolved[ref]:
+        raise SystemExit(f"--ref-logm {opts.ref_logm} selects bin {ref}, which "
+                         f"is not in the resolved set.")
     M_ref = float(M_i[ref])
-    M_min = 10.0 ** float(data['logM_edges'][ref])
+    boundary = int(np.flatnonzero(resolved)[0])
+    M_min = 10.0 ** float(data['logM_edges'][boundary])
 
     # x = 1 is the baseline every difference is taken against, so it is never
     # optional. Sorted so the shell differences are monotone in x.
@@ -268,6 +281,13 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
           f"{', '.join(f'{x:g}' for x in apertures)}, weights = {weights}")
     print(f"  reference bin {ref} at logM = {logM_cen[ref]:.2f}, "
           f"r200m = {r200m_of_M(M_ref, cfg.rhobar_m):.3f} cMpc/h")
+    if np.any(hidden):
+        f_i_all = np.where(occ, counts / cfg.box ** 3 * M_i / cfg.rhobar_m, 0.0)
+        print(f"  M_r raised to logM = {opts.split_logm:.2f}: "
+              f"{int(np.count_nonzero(hidden))} of "
+              f"{int(np.count_nonzero(occ))} occupied bins hidden, "
+              f"carrying f = {float(np.sum(f_i_all[hidden])):.4f} of the matter")
+        print("  their halo-bound particles are counted in U*, not R*")
 
     # --- the halo model, only if a U mode needs it -----------------------------
     modes = [m for m in opts.extrap if m != 'simhc']
@@ -289,19 +309,17 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
         runs[x] = measure_aperture(cfg, data, x, tracer, weights=weights,
                                    allow_compute=allow_compute,
                                    recompute=recompute,
-                                   chunk_particles=chunk_particles)
+                                   chunk_particles=chunk_particles,
+                                   resolved=resolved)
 
         runs[x]['U_models'] = {}
         for mode in modes:
-            res = delta_P_experimentA(
+            res = compute_U(
                 cfg, k, P_halo_x[ref], M_ref, M_min, mode, hm=hm, z=z,
                 f_u=runs[x]['f_out'], trunc=float(x))
             runs[x]['U_models'][mode] = res
 
     # --- the two weights, side by side -----------------------------------------
-    # This is a measurement in its own right: f_part is the mass really inside
-    # the sphere, f_cat is what NFW says should be, and the ratio folds sphere
-    # overlap together with the failure of NFW beyond r200m.
     print("\n" + "=" * 70)
     print("WEIGHTS      sum_i f_part (measured)  vs  sum_i f_i m(xc)/m(c) (NFW)")
     print("=" * 70)
@@ -359,7 +377,7 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
         for x in apertures:
             r = runs[x]
             denom = r['total']
-            U = r['U_models'][mode]['Delta_P']
+            U = r['U_models'][mode]['U']
             with np.errstate(divide='ignore', invalid='ignore'):
                 prof = (r['R_model'] - r['R_star']) / denom
                 tmpl = (U - r['U_star']) / denom
@@ -416,6 +434,8 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
     # --- figures ---------------------------------------------------------------
     stem = (f'expB_aperture_{tag}_{cfg.mass_def}_nb{cfg.nbins}'
             f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
+            f'{"" if opts.split_logm is None else f"_Mr{opts.split_logm:.2f}"}'
+            f'{"" if opts.ref_logm is None else f"_ref{logM_cen[ref]:.2f}"}'
             f'_ap{"-".join(f"{x:g}" for x in apertures)}'
             f'_mode{"-".join(modes)}_w{weights}{profile_tag(cfg)}'
             f'{"" if bool(data.get("self_pairs_removed", False)) else "_shotpresent"}')
@@ -428,10 +448,16 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
         return path
 
     err_mode = modes[-1] if modes else None
-    p_main = _save(sweep_figure(cfg, data, runs, apertures, tracer, err_mode),
-                   stem)
-    _save(shell_figure(cfg, data, runs, apertures, tracer),
-          stem.replace('expB_aperture', 'expB_shell'))
+    pdata = pl.ApertureData(
+        k=k, k_Ny=k_Ny, apertures=apertures, runs=runs, P_true=P_true,
+        logM_cen=logM_cen, occupied=occ, x_sym=x_sym, error_mode=err_mode,
+        P_halo_ref=P_halo_x[ref],
+        r200m=np.array([r200m_of_M(m, cfg.rhobar_m) if m > 0 else np.nan
+                        for m in M_i]))
+
+    p_main = _save(pl.aperture_panel(pdata), stem)
+    _save(pl.shell_mass_figure(pdata),
+          stem.replace('expB_aperture', 'expB_shellmass'))
 
     # --- save ------------------------------------------------------------------
     payload = dict(
@@ -440,6 +466,9 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
             runs[1.0]['f_i'], float),
         logM_cen=logM_cen, M_mean=M_i, counts=counts, ref_bin=ref,
         M_ref=M_ref, P_true=P_true, P_halo_x_ref=P_halo_x[ref],
+        resolved=resolved, M_min=M_min,
+        split_logm=(np.nan if opts.split_logm is None
+                    else float(opts.split_logm)),
         modes=np.array(modes, dtype=object).astype(str),
         self_pairs_removed=bool(data.get('self_pairs_removed', False)),
     )
@@ -475,164 +504,6 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
 # ==============================================================================
 # 7c.  Figures
 # ==============================================================================
-def sweep_figure(cfg, data, runs, apertures, tracer, err_mode):
-    """2x2: reconstruction, its ratio, the error split, and f_out/beta_out."""
-    info = TRACER_INFO[tracer]
-    k = np.asarray(data['k_center'], float)
-    k_Ny = float(data['k_Nyquist'])
-    P_true = np.asarray(data[info['truth_key']], float)
-    sym = info['sym']
-    cols = _aperture_colours(apertures)
-
-    with plt.rc_context(pl.PANEL_RC):
-        fig = plt.figure(figsize=pl.PANEL_FIGSIZE, dpi=pl.DPI)
-        axes = _panel_axes(fig)
-        ax_lt, ax_lb, ax_rt, ax_rb = axes
-
-        # --- left: the reconstruction at each aperture -------------------------
-        ax_lt.loglog(k, np.abs(P_true), label=rf'truth $\delta_m\times'
-                     rf'\delta_{{{sym}}}$', **pl.REF_STYLE['target'])
-        for x in apertures:
-            r = runs[x]
-            tot = r['R_model'] + _U_of(r, err_mode)
-            ax_lt.loglog(k, np.abs(tot), color=cols[x], lw=2.0,
-                         label=rf'$R+U$, $x={x:g}$')
-            ax_lt.loglog(k, np.abs(r['R_model']), color=cols[x], ls=':', lw=1.2)
-        ax_lt.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-        ax_lt.set_ylabel(rf'$P^{{\,m{sym}}}(k)\,L_{{\rm box}}^2$')
-        ax_lt.legend(frameon=False, fontsize=12)
-        ax_lt.set_title(rf'dotted: $R$ alone; mode {err_mode} for $U$',
-                        fontsize=13)
-
-        with np.errstate(divide='ignore', invalid='ignore'):
-            for x in apertures:
-                r = runs[x]
-                tot = r['R_model'] + _U_of(r, err_mode)
-                ax_lb.semilogx(k, tot / r['total'], color=cols[x], lw=2.0)
-        ax_lb.axhline(1.0, color='k', lw=0.8)
-        ax_lb.fill_between(k, 0.95, 1.05, color='0.85', zorder=0)
-        ax_lb.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-        ax_lb.set_ylim(0.6, 1.4)
-        ax_lb.set_ylabel(r'$(R+U)/(R_\star+U_\star)$')
-        ax_lb.set_xlabel(pl.LABEL_K)
-
-        # --- right top: the two error terms, aperture by aperture --------------
-        if err_mode:
-            for x in apertures:
-                e = runs[x]['errors'][err_mode]   # set in run_experiment_B
-                ax_rt.semilogx(k, e['profile'], color=cols[x], ls='--', lw=1.8,
-                               alpha=0.85)
-                ax_rt.semilogx(k, e['template'], color=cols[x], ls='-', lw=2.2)
-        ax_rt.axhline(0.0, c='k', lw=0.8)
-        ax_rt.fill_between(k, -pl.TOTAL_ERR_BAND, pl.TOTAL_ERR_BAND,
-                           color='0.85', zorder=0)
-        ax_rt.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-        ax_rt.set_ylim(*pl.TOTAL_ERR_YLIM)
-        ax_rt.set_ylabel('error terms')
-        ax_rt.set_xlabel(pl.LABEL_K)
-        # One legend for the linestyle, one colourbar-by-proxy for the aperture.
-        handles = [plt.Line2D([], [], color='0.3', ls='-', lw=2.2,
-                              label=pl.LABEL_TEMPLATE_ERR),
-                   plt.Line2D([], [], color='0.3', ls='--', lw=1.8,
-                              label=pl.LABEL_PROFILE_ERR)]
-        handles += [plt.Line2D([], [], color=cols[x], lw=2.2,
-                               label=rf'$x={x:g}$') for x in apertures]
-        ax_rt.legend(handles=handles, frameon=False, ncol=2,
-                     fontsize=pl.TOTAL_ERR_LEGEND_FONTSIZE)
-
-        # --- right bottom: what the aperture recovers --------------------------
-        xs = np.array(apertures, float)
-        f_out = np.array([runs[x]['f_out'] for x in apertures])
-        beta = np.array([runs[x]['beta_out_lowk'] for x in apertures])
-        ax_rb.set_xscale('linear')
-        ax_rb.set_xlim(min(xs) - 0.05, max(xs) + 0.05)
-        ax_rb.plot(xs, f_out / f_out[0], 'o-', color='C0', lw=2.0,
-                   label=r'$f_{\rm out}(x)/f_{\rm out}(1)$')
-        ax_rb.plot(xs, beta / beta[0], 's--', color='C3', lw=2.0,
-                   label=r'$\beta_{\rm out}(x)/\beta_{\rm out}(1)$, $k\to0$')
-        ax_rb.axhline(1.0, c='k', lw=0.8)
-        ax_rb.set_xlabel(r'aperture $x$ [$r_{200m}$]')
-        ax_rb.set_ylabel('relative to $x=1$')
-        ax_rb.legend(frameon=False)
-        ax_rb.set_title('both falling: the deficit was resolved-halo outskirts',
-                        fontsize=13)
-
-        pl._finish_panel(axes)
-    return fig
-
-
-def shell_figure(cfg, data, runs, apertures, tracer):
-    """The shell cross-spectra and where they sit in mass."""
-    info = TRACER_INFO[tracer]
-    k = np.asarray(data['k_center'], float)
-    k_Ny = float(data['k_Nyquist'])
-    logM_cen = np.asarray(data['logM_cen'], float)
-    M_i = np.asarray(data['M_mean'], float)
-    occ = np.asarray(data['counts']) > 0
-    base = runs[1.0]
-    cols = _aperture_colours(apertures)
-    sym = info['sym']
-
-    with plt.rc_context(pl.PANEL_RC):
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), dpi=pl.DPI)
-
-        # (1) the shell spectrum against the thing it is supposed to explain
-        for x in apertures:
-            if x == 1.0 or 'shell' not in runs[x]:
-                continue
-            with np.errstate(divide='ignore', invalid='ignore'):
-                ax1.semilogx(k, runs[x]['shell'] / base['total'],
-                             color=cols[x], lw=2.2,
-                             label=rf'$U_\star(1)-U_\star({x:g})$')
-        # the residual the reconstruction is missing at x = 1, for comparison
-        if base.get('errors'):
-            mode = list(base['errors'])[-1]
-            with np.errstate(divide='ignore', invalid='ignore'):
-                ax1.semilogx(k, -base['errors'][mode]['template'], 'k--', lw=2.0,
-                             label=rf'$-(U-U_\star)/(R_\star+U_\star)$, {mode}')
-        ax1.axhline(0.0, c='k', lw=0.8)
-        ax1.axvline(k_Ny, c='grey', ls=':', lw=1.2)
-        ax1.set_xlabel(pl.LABEL_K)
-        ax1.set_ylabel(rf'fraction of $P^{{\,m{sym}}}$')
-        ax1.set_xlim(k[0], k_Ny)
-        ax1.set_ylim(-0.5, 0.5)
-        ax1.legend(frameon=False, fontsize=12)
-        ax1.set_title('shell matter vs the power the template is missing',
-                      fontsize=14)
-
-        # (2) which hosts the shell belongs to, at k where it matters
-        x_top = apertures[-1]
-        if x_top > 1.0 and 'shell_per_bin' in runs[x_top]:
-            shell_i = runs[x_top]['shell_per_bin']
-            for kk, ls in ((0.1, ':'), (1.0, '-'), (3.0, '--')):
-                if kk > k[-1]:
-                    continue
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    vals = np.array([np.interp(kk, k, shell_i[j] / base['total'])
-                                     for j in range(shell_i.shape[0])])
-                ax2.step(logM_cen[occ], vals[occ], where='mid', ls=ls, lw=2.0,
-                         color=cols[x_top], label=rf'$k={kk:g}$')
-            ax2.axhline(0.0, c='k', lw=0.8)
-            ax2.set_xlabel(r'$\log_{10} M_{200b}$ of the host bin')
-            ax2.set_ylabel(rf'$(R_{{\star i}}({x_top:g})-R_{{\star i}}(1))'
-                           rf'/P^{{\,m{sym}}}$')
-            ax2.legend(frameon=False)
-            ax2.set_title(rf'where the recovered matter lives, $x={x_top:g}$',
-                          fontsize=14)
-            # r200m of the bins, as a secondary read of the same axis
-            axt = ax2.twiny()
-            axt.set_xlim(ax2.get_xlim())
-            ticks = logM_cen[occ][:: max(1, np.count_nonzero(occ) // 5)]
-            axt.set_xticks(ticks)
-            axt.set_xticklabels(
-                [f'{np.pi / r200m_of_M(10.0 ** t, cfg.rhobar_m):.1f}'
-                 for t in ticks], fontsize=11)
-            axt.set_xlabel(r'$\pi/r_{200m}$ [h/cMpc]', fontsize=13)
-
-        fig.tight_layout()
-    return fig
-
-
 def main():
     ap = argparse.ArgumentParser(
         description="Experiment B: grow the halo membership sphere to x r200m "
