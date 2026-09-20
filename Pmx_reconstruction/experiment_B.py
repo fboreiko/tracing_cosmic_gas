@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """==============================================================================
-7.  EXPERIMENT B  --  growing the halo aperture beyond r200b
+EXPERIMENT B  --  growing the halo aperture beyond r200b
 ==============================================================================
 Experiment A studies the halos below the catalogue's mass limit. This one 
 studies the matter that belongs to a resolved halo but lies outside its 
 r200b sphere and is therefore counted in f_u along with everything else.
-
-THE ONE-LINE VERSION
-    Run the whole machinery at a sequence of apertures x, where the halo's
-    sphere is x * r200m instead of r200m, and watch where the error goes.
 
 WHAT MOVES WITH x AND WHAT DOES NOT
     Nothing about the halos changes: the catalogue, the mass bins, the bin
@@ -26,19 +22,18 @@ WHAT MOVES WITH x AND WHAT DOES NOT
 THE TWO THINGS THAT HAVE TO BE KEPT CONSISTENT
 
     1. The weight is the mass inside the sphere, NOT M200b. Growing the
-       aperture adds mass to the halo, and f_i^part(x) is measured,
-       not extrapolated with m(xc)/m(c): at x > 1 the spheres of neighbouring
-       halos overlap heavily and the NFW extrapolation would double-count the
-       shared matter. The measurement does not, because assign_particles gives
-       each particle to exactly one halo (the most massive whose sphere
-       contains it).
+       aperture adds mass to the halo, and f_i's need to be recomputed: either
+       from measured f_i^part(x), or extrapolated from f_i(x=1) with m(xc)/m(c).
+    The latter is tricky: at x > 1 the spheres of neighbouring halos overlap
+    more and the NFW extrapolation would double-count the shared matter.
+    The measurement does not, because assign_particles gives each particle
+    to exactly one halo (the most massive whose sphere contains it), however
+       it is not availiable to the model side.
 
     2. The profile is truncated at the same radius, via the explicit trunc
        argument of u_nfw. r_s is still r200m/c with r200m and c from the
        CATALOGUE mass -- the aperture does not change the halo's concentration,
-       only where the profile is cut off and renormalised. The aperture is
-       never written into the config: everything else in the pipeline, and the
-       halo model in particular, keeps working at r200m.
+       only where the profile is cut off and renormalised.
 
 USAGE
         # the standard sweep
@@ -100,13 +95,7 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
     Modelled, from a profile truncated to match the aperture:
         R = sum_i w_i u_m(k|M_i, trunc=x) P_halo_gas(k; M_i)
 
-    The weight w and the truncation are a MATCHED PAIR and cannot be chosen
-    separately. u_nfw(trunc=x) is normalised by m(xc), so u -> 1 at k -> 0
-    means "all of the mass I am weighting by". Pairing it with the M200b weight
-    would hold the halo's mass fixed and merely smear it out to x r200m -- the
-    density would fall, which is a test of whether the profile is too
-    concentrated, not of whether there is mass outside it. Growing the aperture
-    has to grow the weight, and `weights` says how:
+    Growing the aperture has to grow the weight, and `weights` says how:
 
       'aperture'  (default) w = f_part(x), the mass actually inside the sphere.
                   Exact, no double counting, but it is measured, so R is a
@@ -120,25 +109,11 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
                   experiment A's production run -- but it double counts
                   overlapping spheres and leans on NFW where NFW is least
                   trustworthy.
-
-    Both are computed and returned whichever is selected, so the difference
-    between them is always available and is reported by run_experiment_B.
-
-    The amplitude of U is part of the same pair. Whatever weight R runs on, the
-    mass U stands in for is what that weight leaves over -- f_out = 1 - sum
-    f_part for 'aperture', f_u_cat = 1 - sum f_i m(xc)/m(c) for 'catalogue'.
-    Mixing them would give the two halves of the reconstruction different mass
-    budgets: 'catalogue' would double count the overlap in R and then stand in
-    for it a second time in U. `f_u_model` is the matching one and is what
-    run_experiment_B passes to compute_U; at x = 1 it is mr.f_u either way for
-    'catalogue', so that run reduces exactly to the production reconstruction.
-
-    `mr` (MassRange) re-splits the measured partition at M_r / M_max.
     """
-    cache = ru.load_or_compute(cfg, data, aperture=aperture,
-                               allow_compute=allow_compute,
-                               recompute=recompute,
-                               chunk_particles=chunk_particles)
+    cache = ru.load_or_measure_rstar_ustar(cfg, data, aperture=aperture,
+                                           allow_compute=allow_compute,
+                                           recompute=recompute,
+                                           chunk_particles=chunk_particles)
     if cache is None:
         raise SystemExit(
             f"No R*/U* cache at aperture {aperture:g} and --no-measure was "
@@ -155,7 +130,7 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
 
     if mr is None:
         mr = MassRange.from_config(cfg, data)
-    tot = ru.totals(cfg, cache, data, mr=mr)
+    tot = ru.measured_partition(cfg, cache, data, mr=mr)
     counts = np.asarray(data['counts'], float)
     occ = counts > 0
     resolved = mr.resolved
@@ -170,8 +145,6 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
     with np.errstate(divide='ignore', invalid='ignore'):
         M_ap = np.where(occ, mass_bin * unit / np.maximum(counts, 1.0), 0.0)
 
-    # The model side. M_mean (the catalogue M200b) fixes r200m and c; the
-    # aperture only moves the truncation radius.
     P_halo_gas = np.asarray(data['P_halo_gas'], float)
     M_i = np.asarray(data['M_mean'], float)
     z = float(data['redshift'])
@@ -181,9 +154,6 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
         conc[j] = conc_of(cfg, M_i[j], z)
         u_i[j] = u_nfw(k, M_i[j], conc[j], cfg.rhobar_m, trunc=aperture)
 
-    # Both weights zeroed outside [M_r, M_max], matching R*. f_cat_all keeps
-    # the bins outside it, because the U amplitude below has to discount them
-    # the same way f_out does: bins above M_max are V*, not U.
     f_i = np.where(resolved, mr.f_i, 0.0)
     mu = nfw_mass_ratio(np.where(occ, conc, 1.0), aperture)
     f_cat_all = np.where(occ, mr.f_i * mu, 0.0)
@@ -214,7 +184,7 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
 def run_experiment_B(cfg, data, apertures,
                      weights='aperture', allow_compute=True, recompute=False,
                      chunk_particles=5e7):
-    """Sweep the aperture, score each one, and write the two figures."""
+    """Go through the apertures, score each one, and write the two figures."""
     k = np.asarray(data['k_center'], float)
     k_Ny = float(data['k_Nyquist'])
     z = float(data['redshift'])
@@ -229,8 +199,6 @@ def run_experiment_B(cfg, data, apertures,
     mr = MassRange.from_config(cfg, data)
     ref, M_ref = mr.r, mr.M_ref
 
-    # x = 1 is the baseline every difference is taken against, so it is never
-    # optional. Sorted so the shell differences are monotone in x.
     apertures = sorted({1.0} | {float(x) for x in apertures})
 
     print("\n" + "=" * 70)
@@ -340,19 +308,20 @@ def run_experiment_B(cfg, data, apertures,
                 prof = (r['R_model'] - r['R_star']) / denom
                 tmpl = (U - r['U_star']) / denom
                 totl = (r['R_model'] + U) / denom - 1.0
-                abv = -r['V_star'] / denom
             err = dict(profile=prof, template=tmpl, total=totl, U=U)
-            if mr.above.any():
-                err['above'] = abv
+            tail = ""
+            if r['V_star'] is not None:
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    err['above'] = -r['V_star'] / denom
+                tail = (f"   -V*/total(k=1) = "
+                        f"{float(np.interp(1.0, k, err['above'])):+.3f}")
             r.setdefault('errors', {})[mode] = err
             cells = "".join(
                 f"   {float(np.interp(kk, k, prof)):+.3f}/"
                 f"{float(np.interp(kk, k, tmpl)):+.3f}/"
                 f"{float(np.interp(kk, k, totl)):+.3f}"
                 for kk in (0.1, 1.0, 3.0))
-            print(f"  {x:4.2f}  {cells}"
-                  + (f"   -V*/total(k=1) = {float(np.interp(1.0, k, abv)):+.3f}"
-                     if mr.above.any() else ""))
+            print(f"  {x:4.2f}  {cells}{tail}")
 
     print("\n  The signature to look for: the TEMPLATE term at k ~ 1-3 shrinks "
           "with x while\n  the PROFILE term grows (NFW is a poor description "
@@ -399,18 +368,7 @@ def run_experiment_B(cfg, data, apertures,
 
     # --- figures ---------------------------------------------------------------
     def _save(fig, kind):
-        """Save one of this run's figures, under a stem naming the whole run.
-
-        Everything that would make two runs differ has to appear here, or the
-        second would overwrite the first -- which for this experiment means the
-        apertures, the weights and the extrapolation modes as well as the
-        binning. `conc` is empty at the default so that adding a profile switch
-        does not rename every existing plot.
-        """
-        # Every model choice that moves the answer has to be in the name, or
-        # two runs overwrite each other: c(M,z) enters u_m, and the linear
-        # P(k) enters T(k,M) through the halo model. Empty at the defaults,
-        # so turning a knob does not rename every existing plot.
+        """Save one of this run's figures, under a stem naming the whole run."""
         models = ''
         if cfg.concentration_source != PmxConfig.concentration_source:
             models += f'_conc-{cfg.concentration_source}'
@@ -463,7 +421,8 @@ def run_experiment_B(cfg, data, apertures,
         payload[f'R_star_{key}'] = r['R_star']
         payload[f'R_star_i_{key}'] = r['R_star_i']
         payload[f'U_star_{key}'] = r['U_star']
-        payload[f'V_star_{key}'] = r['V_star']
+        if r['V_star'] is not None:
+            payload[f'V_star_{key}'] = r['V_star']
         payload[f'R_model_{key}'] = r['R_model']
         payload[f'beta_out_lowk_{key}'] = r['beta_out_lowk']
         if 'shell' in r:
@@ -482,9 +441,6 @@ def run_experiment_B(cfg, data, apertures,
     return runs
 
 
-# ==============================================================================
-# 7c.  Figures
-# ==============================================================================
 def main():
     # --extrap and --power-spectrum come from base_parser: U is built by the
     # same pmxlib.reconstruction.compute_U at every aperture.

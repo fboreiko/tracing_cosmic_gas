@@ -1,7 +1,6 @@
 """Figure construction for the Pmx reconstruction scripts.
 
-Everything about how the figures LOOK lives here; what goes in them lives in
-the scripts. Three layers, coarsest last:
+Three layers, coarsest last:
 
     constants   MODE_COLOURS / MODE_STYLES / REF_STYLE / PANEL_RC / YLABEL_X_*
                 A mode keeps the same colour AND dash pattern in every panel.
@@ -17,11 +16,6 @@ the scripts. Three layers, coarsest last:
                 aperture), stacked_figure (spectrum-over-residual or
                 shape-over-correction), ansatz_figure, shell_mass_figure.
                 Each returns an UNSAVED Figure; the caller owns the path.
-
-The old per-experiment names (validation_panel, production_panel,
-aperture_panel, shape_figure, reconstruction_figure) survive as thin aliases.
-
-Imports matplotlib and numpy only -- no CAMB, no colossus, no config.
 """
 
 from dataclasses import dataclass
@@ -31,10 +25,6 @@ from typing import Optional, Sequence
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Latex symbol for the tracer in every axis label and legend entry, as in
-# P^{m e}. The pipeline reconstructs P(matter x gas) and nothing else, so this
-# is a constant rather than a field on the dataclasses; it lives here, not in
-# pmxlib.config, to keep this module free of pipeline imports (see above).
 TRACER_SYM = 'e'
 
 __all__ = [
@@ -64,10 +54,6 @@ REF_STYLE = {
     'resolved': dict(color='0.5', ls='-', lw=1.8),
     'exact':    dict(color='C1',  ls=':', lw=2.8),
     'seff':     dict(color='red', ls=(0, (6, 2)), lw=2.0, alpha=0.55),
-    # Two diagnostics rather than competitors, so both are drawn thin and grey:
-    # what P(dm x gas) shows is the definitional mismatch the identity cannot
-    # close, and what the self-pair curve shows is where the truth stops being
-    # clustering.
     'mismatch': dict(color='0.55', ls='-', lw=1.0),
     'selfpair': dict(color='C3',   ls=':', lw=1.2),
 }

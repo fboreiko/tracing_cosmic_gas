@@ -225,7 +225,7 @@ def run_experiment_A(cfg, data):
             S_exact = U_exact / (f_u_hidden * P_halo_gas_ref)
 
     # measured partition, re-split at M_r / M_max
-    tot, _ = ru.load_totals(cfg, data, mr=mr,
+    tot, _ = ru.load_measured_partition(cfg, data, mr=mr,
                             allow_compute=not mr.validate)
     if tot is None and not mr.validate:
         raise SystemExit(
@@ -234,16 +234,7 @@ def run_experiment_A(cfg, data):
             "      python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute")
 
     def _save(fig, kind):
-        """Save one of this run's figures, under a stem naming the whole run.
-
-        Everything that would make two runs differ has to appear here, or the
-        second would overwrite the first. `conc` is empty at the default so
-        that adding a profile switch does not rename every existing plot.
-        """
-        # Every model choice that moves the answer has to be in the name, or
-        # two runs overwrite each other: c(M,z) enters u_m, and the linear
-        # P(k) enters T(k,M) through the halo model. Empty at the defaults,
-        # so turning a knob does not rename every existing plot.
+        """Save one of this run's figures, under a stem naming the whole run."""
         models = ''
         if cfg.concentration_source != PmxConfig.concentration_source:
             models += f'_conc-{cfg.concentration_source}'
@@ -267,8 +258,7 @@ def run_experiment_A(cfg, data):
                      P_selfpair=data['P_matter_gas_selfpair'])
     if tot is not None:
         d.R_star, d.U_star = tot['R_star'], tot['U_star']
-        if mr.above.any():
-            d.V_star = tot['V_star']
+        d.V_star = tot['V_star']          # None unless bins sit above M_max
         with np.errstate(divide='ignore', invalid='ignore'):
             d.S_eff = tot['U_star'] / (tot['f_out'] * P_halo_gas_ref)
         print(f"[A] measured S_eff: {_lowk(k, d.S_eff):.3f} at k -> 0, "
@@ -298,7 +288,8 @@ def run_experiment_A(cfg, data):
     if tot is not None:
         payload['R_star'] = d.R_star
         payload['U_star'] = d.U_star
-        payload['V_star'] = tot['V_star']
+        if tot['V_star'] is not None:
+            payload['V_star'] = tot['V_star']
         payload['f_out'] = tot['f_out']
         payload['S_eff'] = d.S_eff
     for mode, res in results.items():

@@ -23,7 +23,7 @@ SHOT NOISE
     here carries a self-pair term. P^shot_gg comes from the bundle, which
     measured it in this same convention (TSC window, L^2 factor, k binning);
     here it is split over the bins by sum m^2. The cache stores the raw
-    spectra and the ingredients; load_or_compute subtracts on the way out, so
+    spectra and the ingredients; the loader subtracts on the way out, so
     this file and the bundle are on the same footing and the spectra they hold
     can be differenced without anyone checking which variant is which.
 
@@ -45,8 +45,8 @@ WHAT IS IN THE CACHE
 
 USAGE
     from Pmx_reconstruction.pmxlib import rstar_ustar as ru
-    cache = ru.load_or_compute(cfg, data)        # measures if not cached
-    tot = ru.totals(cfg, cache, data)['total']   # R* + U*, shot removed
+    cache = ru.load_or_measure_rstar_ustar(cfg, data)   # measures if absent
+    tot = ru.measured_partition(cfg, cache, data)['total']   # shot removed
 
     python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute
 """
@@ -71,7 +71,8 @@ from Pmx_reconstruction.pmxlib.self_pairs import (rstar_self_pair_terms,
 
 __all__ = ['CACHE_VERSION', 'SPECIES', 'cache_path',
            'load_binned_centrals', 'assign_particles', 'compute_R_star_U_star',
-           'load_or_compute', 'totals', 'load_totals']
+           'load_or_measure_rstar_ustar', 'measured_partition',
+           'load_measured_partition']
 
 CACHE_VERSION = 'v1'
 
@@ -387,48 +388,38 @@ def load_or_measure_rstar_ustar(cfg, data, recompute=False, chunk_particles=5e7,
 
 
 # Read-time assembly
-def totals(cfg, cache, data, mr=None):
-    """The measured partition P_matter_gas = R* + U* + V*.
+def measured_partition(cfg, cache, data, mr=None):
+    """The measured partition P_matter_gas = R* + U* (+ V*).
 
-    R*   bins in [M_r, M_max]
+    R*   bins in [M_r, M_max] -- what the reconstruction claims to model
     U*   matter outside every sphere, plus the bins below M_r
-    V*   bins above M_max (zero by default)
-
-    Moving a bin between the three is exact (hosts are ranked by mass) and
-    needs no particle pass. mr=None puts every occupied bin in R*.
-
-    The self-pair terms are already off: load_or_compute removes them, exactly
-    as load_or_measure does for the bundle. All that happens here is the
-    partition.
+    V*   bins above M_max, which nothing models
     """
     R_i = np.array(cache['R_star_gas'], dtype=float)
     U = np.array(cache['U_star_gas'], dtype=float)
 
     occ = np.asarray(data['counts']) > 0
     if mr is None:
-        resolved, hidden, above = occ, np.zeros_like(occ), np.zeros_like(occ)
+        resolved = occ
+        hidden = above = np.zeros_like(occ)
     else:
         resolved, hidden, above = mr.resolved, mr.hidden, mr.above
     f_part = np.asarray(cache['f_part'], dtype=float)
 
     R_star = R_i[resolved].sum(axis=0)
     U_star = U + R_i[hidden].sum(axis=0)
-    V_star = R_i[above].sum(axis=0)
+    V_star = R_i[above].sum(axis=0) if above.any() else None
     return dict(R_star_i=np.where(resolved[:, None], R_i, 0.0),
                 R_star=R_star, U_star=U_star, V_star=V_star,
-                total=R_star + U_star + V_star,
+                total=R_star + U_star if V_star is None
+                      else R_star + U_star + V_star,
                 f_part=np.where(resolved, f_part, 0.0),
                 f_out=1.0 - float(f_part[resolved | above].sum()))
 
 
-def load_totals(cfg, data, recompute=False, allow_compute=True,
-                aperture=1.0, mr=None):
-    """What plotting callers want: the totals dict, or None.
-
-    R_star and U_star are returned separately, not summed: the error
-    decomposition needs each one. Second return value is the cache path either
-    way, so a caller can name it when telling the user what to run.
-    """
+def load_measured_partition(cfg, data, recompute=False, allow_compute=True,
+                            aperture=1.0, mr=None):
+    """What plotting callers want: the partition dict, or None."""
     path = cache_path(cfg, aperture=aperture)
     cache = load_or_measure_rstar_ustar(cfg, data, recompute=recompute,
                             allow_compute=allow_compute, aperture=aperture)
@@ -440,20 +431,14 @@ def load_totals(cfg, data, recompute=False, allow_compute=True,
         print(f"[R*/U*] cache k grid does not match the bundle's "
               f"({k_c.size} vs {k_b.size} bins); ignoring it")
         return None, path
-    return totals(cfg, cache, data, mr=mr), path
+    return measured_partition(cfg, cache, data, mr=mr), path
 
 
-# ==============================================================================
-# 8.  Standalone entry point
-# ==============================================================================
+# Standalone entry point
 def main():
     from Pmx_reconstruction.pmxlib.bundle import bundle_path
     from Pmx_reconstruction.pmxlib.config import PmxConfig, base_parser
 
-    # base_parser brings --recompute and the binning group; the mass-range and
-    # extrapolation groups it also brings are harmless here, since this entry
-    # point only measures and caches. It is the same parser both experiments
-    # use, so a cache can never be built on a different binning from theirs.
     ap = base_parser("Measure R*_i, U* and the self-pair terms; cache them.",
                      validate=False)
     ap.add_argument('--chunk-particles', type=float, default=5e7,
@@ -476,8 +461,8 @@ def main():
     cache = load_or_measure_rstar_ustar(cfg, data, recompute=args.recompute,
                             chunk_particles=args.chunk_particles,
                             aperture=args.aperture)
-    t = totals(cfg, cache, data)
-    frac = np.nanmedian(t['U_star'] / t['total'])
+    part = measured_partition(cfg, cache, data)
+    frac = np.nanmedian(part['U_star'] / part['total'])
     print(f"  median U*/(R*+U*) = {frac:.4f}")
 
 
