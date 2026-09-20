@@ -31,9 +31,15 @@ from typing import Optional, Sequence
 import numpy as np
 import matplotlib.pyplot as plt
 
+# Latex symbol for the tracer in every axis label and legend entry, as in
+# P^{m e}. The pipeline reconstructs P(matter x gas) and nothing else, so this
+# is a constant rather than a field on the dataclasses; it lives here, not in
+# pmxlib.config, to keep this module free of pipeline imports (see above).
+TRACER_SYM = 'e'
+
 __all__ = [
     'MODE_COLOURS', 'MODE_STYLES', 'REF_STYLE', 'PANEL_RC', 'USE_TEX',
-    'labels', 'LABEL_K', 'LABEL_DP_RATIO', 'LABEL_SHAPE', 'SHAPE_YLIM',
+    'TRACER_SYM', 'labels', 'LABEL_K', 'LABEL_DP_RATIO', 'LABEL_SHAPE', 'SHAPE_YLIM',
     'YLABEL_X_LEFT', 'YLABEL_X_RIGHT',
     'YLABEL_X_SINGLE', 'mode_style', 'set_ylabel_x', 'save_figure',
     'PanelData', 'ApertureData', 'APERTURE_CMAP', 'aperture_colours',
@@ -58,11 +64,18 @@ REF_STYLE = {
     'resolved': dict(color='0.5', ls='-', lw=1.8),
     'exact':    dict(color='C1',  ls=':', lw=2.8),
     'seff':     dict(color='red', ls=(0, (6, 2)), lw=2.0, alpha=0.55),
+    # Two diagnostics rather than competitors, so both are drawn thin and grey:
+    # what P(dm x gas) shows is the definitional mismatch the identity cannot
+    # close, and what the self-pair curve shows is where the truth stops being
+    # clustering.
+    'mismatch': dict(color='0.55', ls='-', lw=1.0),
+    'selfpair': dict(color='C3',   ls=':', lw=1.2),
 }
 COMPONENT_STYLE = {
     'total':    dict(ls='-', lw=2.4, alpha=0.55),
     'profile':  dict(color='red',    ls='-', lw=1.8, alpha=0.55),
     'template': dict(color='purple', ls='-', lw=2.0, alpha=0.55),
+    'above':    dict(color='0.4',    ls=':', lw=1.6, alpha=0.8),
 }
 
 LABEL_K = r'$k$ [h/cMpc]'
@@ -72,8 +85,8 @@ LABEL_HOST_BIN = r'$\log_{10} M_{200b}$ of the host bin'
 LABEL_PI_OVER_R200M = r'$\pi/r_{200m}$ [h/cMpc]'
 
 
-def labels(d) -> dict:
-    """Every label that names the measured truth, for one dataset.
+def labels() -> dict:
+    """Every label that names the measured truth.
 
     R_star + U_star IS the measured truth, so it is written P^{m x} here
     rather than as its decomposition: the reader has already met P^{m x} on
@@ -84,10 +97,9 @@ def labels(d) -> dict:
 
     Both experiments read their labels from here, keyed identically, so a
     panel cannot be called one thing in Experiment A and another in
-    Experiment B, and the tracer symbol cannot drift between panels of the
-    same figure.
+    Experiment B.
     """
-    P = rf'P^{{\,m{d.tag}}}'
+    P = rf'P^{{\,m{TRACER_SYM}}}'
     return {
         'spectrum':  rf'${P}(k)\,L_{{\rm box}}^2$',
         'rec_ratio': rf'$(R + U)\,/\,{P}$',
@@ -97,7 +109,8 @@ def labels(d) -> dict:
         'total':     rf'$(R + U)\,/\,{P} - 1$',
         'profile':   rf'$(R - R_\star)\,/\,{P}$',
         'template':  rf'$(U - U_\star)\,/\,{P}$',
-        'seff':      rf'$S_{{\rm eff}}=U_\star/(\tilde f_u \, P^{{\,h_r{d.tag}}})$',
+        'above':     rf'$-V_\star\,/\,{P}$ (above $M_{{\max}}$, unmodelled)',
+        'seff':      rf'$S_{{\rm eff}}=U_\star/(\tilde f_u \, P^{{\,h_r{TRACER_SYM}}})$',
         'shell':     rf'$(R_{{\star i}}(x)-R_{{\star i}}(1))\,/\,{P}$',
     }
 
@@ -240,14 +253,18 @@ class PanelData:
     results: dict
     R: np.ndarray
     P_target: np.ndarray
-    P_matter_x_true: np.ndarray
-    tag: str = 'x'
-    x_sym: str = 'x'
+    P_matter_gas_true: np.ndarray
     U_exact: Optional[np.ndarray] = None
+    # Diagnostics, drawn on the spectrum panel when given. P_dm_gas is the
+    # definitional-mismatch curve; P_selfpair is the term removed from the
+    # truth, on a log axis so it is obvious where it stops being a footnote.
+    P_dm_gas: Optional[np.ndarray] = None
+    P_selfpair: Optional[np.ndarray] = None
     S_exact: Optional[np.ndarray] = None
     R_star: Optional[np.ndarray] = None
     U_star: Optional[np.ndarray] = None
     S_eff: Optional[np.ndarray] = None
+    V_star: Optional[np.ndarray] = None
     error_mode: str = ERROR_MODE
 
     @property
@@ -277,7 +294,6 @@ class ApertureData:
     occupied: np.ndarray
     r200m: np.ndarray
     P_halo_ref: np.ndarray
-    x_sym: str = 'x'
     error_mode: Optional[str] = None
     colours: Optional[dict] = None
 
@@ -289,13 +305,6 @@ class ApertureData:
     @property
     def base(self) -> dict:
         return self.runs[1.0]
-
-    @property
-    def tag(self) -> str:
-        """The tracer symbol as it appears in P^{m x}. PanelData carries tag
-        and x_sym separately; here one symbol serves both, but labels() can
-        ask any dataset for `tag` and get the right letter."""
-        return self.x_sym
 
     @property
     def x_top(self) -> float:
@@ -342,7 +351,7 @@ def panel_reconstruction(ax, d, title=None, legend=True):
     split (U_exact) exists. ApertureData: R + U at every aperture, R alone
     dotted.
     """
-    sym, L = d.x_sym, labels(d)
+    sym, L = TRACER_SYM, labels()
     if _is_aperture(d):
         ax.loglog(d.k, np.abs(d.P_true),
                   label=rf'truth $\delta_m\times\delta_{{{sym}}}$',
@@ -355,23 +364,30 @@ def panel_reconstruction(ax, d, title=None, legend=True):
         legend_kw = dict(fontsize=SMALL_LEGEND)
     else:
         if d.has_exact:
-            ax.loglog(d.k, np.abs(d.P_matter_x_true),
+            ax.loglog(d.k, np.abs(d.P_matter_gas_true),
                       label=rf'full truth $\delta_m\times\delta_{{{sym}}}$ '
                             rf'(incl. mass below the catalogue)',
                       **REF_STYLE['truth'])
-            ax.loglog(d.k, np.abs(d.P_target), label='target: all occupied bins',
+            ax.loglog(d.k, np.abs(d.P_target), label='target: R + U_exact',
                       **REF_STYLE['target'])
-            ax.loglog(d.k, np.abs(d.R), label='bins above the split only',
+            ax.loglog(d.k, np.abs(d.R), label=r'R over $[M_r, M_{\max}]$',
                       **REF_STYLE['resolved'])
         else:
-            ax.loglog(d.k, np.abs(d.P_matter_x_true),
+            ax.loglog(d.k, np.abs(d.P_matter_gas_true),
                       label=rf'truth $\delta_m\times\delta_{{{sym}}}$',
                       **REF_STYLE['target'])
-            ax.loglog(d.k, np.abs(d.R), label='resolved bins only',
+            ax.loglog(d.k, np.abs(d.R), label=r'R over $[M_r, M_{\max}]$',
                       **REF_STYLE['resolved'])
         for mode, res in d.results.items():
             ax.loglog(d.k, np.abs(d.R + res['U']), label=f'+ {mode}',
                       **mode_style(mode))
+        if d.P_dm_gas is not None:
+            ax.loglog(d.k, np.abs(d.P_dm_gas),
+                      label=rf'$\delta_{{\rm dm}}\times\delta_{{{sym}}}$ '
+                            rf'(definitional mismatch)', **REF_STYLE['mismatch'])
+        if d.P_selfpair is not None and np.any(d.P_selfpair > 0):
+            ax.loglog(d.k, np.abs(d.P_selfpair), label='self-pair term (removed)',
+                      **REF_STYLE['selfpair'])
         legend_kw = {}
     _guides(ax, d, ylabel=L['spectrum'], title=title,
             legend=legend and legend_kw)
@@ -385,7 +401,7 @@ def panel_rec_ratio(ax, d):
     (R + U)/P^{m x} at every aperture -- the same quantity as the production
     case above, so it carries the same label.
     """
-    L = labels(d)
+    L = labels()
     with _quiet():
         if _is_aperture(d):
             for x in d.apertures:
@@ -394,7 +410,7 @@ def panel_rec_ratio(ax, d):
             ylim, ylabel = APERTURE_REC_RATIO_YLIM, L['rec_ratio']
         else:
             if d.has_exact:
-                ax.semilogx(d.k, d.P_matter_x_true / d.P_target,
+                ax.semilogx(d.k, d.P_matter_gas_true / d.P_target,
                             **REF_STYLE['truth'])
             ax.semilogx(d.k, d.R / d.P_target, **REF_STYLE['resolved'])
             for mode, res in d.results.items():
@@ -436,7 +452,7 @@ def panel_shape(ax, d, title=None, legend=True, ylim=_KEEP):
     Pass ylim=None to autoscale instead (see _scale_below_Ny). The x range is
     left alone either way.
     """
-    L = labels(d)
+    L = labels()
     if _is_aperture(d):
         curves = []
         for x in d.apertures:
@@ -505,7 +521,7 @@ def panel_error(ax, d, legend=True):
     (dashed) and template (solid) per aperture, the total omitted -- the y
     axis is still the total, so the two experiments name it the same way.
     """
-    L = labels(d)
+    L = labels()
     if _is_aperture(d):
         if d.error_mode:
             for x in d.apertures:
@@ -514,6 +530,9 @@ def panel_error(ax, d, legend=True):
                             lw=1.8, alpha=0.85)
                 ax.semilogx(d.k, e['template'], color=d.colours[x], ls='-',
                             lw=2.2)
+                if 'above' in e:
+                    ax.semilogx(d.k, e['above'], color=d.colours[x], ls=':',
+                                lw=1.4)
         handles = [_proxy(L['template'], color='0.3', ls='-', lw=2.2),
                    _proxy(L['profile'], color='0.3', ls='--', lw=1.8)]
         handles += [_proxy(rf'$x={x:g}$', color=d.colours[x], lw=2.2)
@@ -528,10 +547,14 @@ def panel_error(ax, d, legend=True):
         if res is None:
             raise KeyError(f'mode {d.error_mode!r} not among {list(d.results)}')
         denom = d.R_star + d.U_star
+        if d.V_star is not None:
+            denom = denom + d.V_star
         with _quiet():
             curves = {'total': (d.R + res['U']) / denom - 1.0,
                       'profile': (d.R - d.R_star) / denom,
                       'template': (res['U'] - d.U_star) / denom}
+            if d.V_star is not None:
+                curves['above'] = -d.V_star / denom
         base = mode_style(d.error_mode)
         for key, curve in curves.items():
             # zorder so the total stays visible where one term dominates.
@@ -563,7 +586,7 @@ def panel_shell_mass(ax, d: ApertureData):
                 color=d.colours[x_top], label=rf'$k={kk:g}$')
     ax.axhline(0.0, c='k', lw=0.8)
     ax.set_xlabel(LABEL_HOST_BIN)
-    ax.set_ylabel(labels(d)['shell'].replace('(x)', rf'({x_top:g})'))
+    ax.set_ylabel(labels()['shell'].replace('(x)', rf'({x_top:g})'))
     ax.legend(frameon=False, fontsize=BIG_LEGEND)
 
     axt = ax.twiny()

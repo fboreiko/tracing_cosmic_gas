@@ -2,11 +2,9 @@
 # -*- coding: utf-8 -*-
 """Halo catalogue loading and log-spaced mass binning.
 
-This was the invariant maintained by hand and by comment: measure_spectra built
-the bins in predict_Pmx_from_Phx.py, and load_binned_centrals in
-measure_u_tilde.py reproduced them "bit for bit (same edges, same right-edge
-rule, same centrals cut), so bin i here is bin i in the bundle". Now there is
-one definition and the invariant holds by construction.
+Bin i here is bin i in the spectra bundle and bin i in the R*/U* cache, by
+construction rather than by comment: there is one definition of the edges, the
+right-edge rule and the centrals cut, and every caller goes through it.
 """
 import gc
 
@@ -60,11 +58,7 @@ def check_mass_units(masses_msun_h, halo_mass_unit_msun_h):
 
 
 def load_halo_catalogue(cfg, extra_props=()):
-    """Positions and masses of the halos, with the centrals cut applied.
-
-    Any names in extra_props are loaded alongside and returned in the extras
-    dict, cut the same way. Nothing is binned here.
-    """
+    """Positions and masses of the halos, with the centrals cut applied."""
     halo_file = get_halo_file_path(cfg.feedback, sim_name=cfg.sim_name)
     print(f"  {halo_file}")
     requested = ['pos', cfg.mass_def] + list(extra_props)
@@ -94,9 +88,7 @@ def load_binned_halos(cfg, extra_props=(), restrict_to_range=False):
     """Load the catalogue, check the mass units, and bin by mass.
 
     Returns (pos, mass, bin_index, logM_edges, extras). With restrict_to_range
-    the arrays are cut down to the in-range halos, which is what the u~_m
-    membership search wants; measure_spectra keeps the full arrays and selects
-    per bin instead.
+    the arrays are cut down to the in-range halos.
     """
     pos, mass, extras = load_halo_catalogue(cfg, extra_props=extra_props)
     check_mass_units(mass, cfg.halo_mass_unit_msun_h)

@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """==============================================================================
-EXPERIMENT A  --  extrapolating P_halo_x(k|M) below M_min
+EXPERIMENT A  --  extrapolating P_halo_gas(k|M) below M_r
 ==============================================================================
 This code computes the unresolved cross-power spectrum U:
 
-U(k) = (1/rhobar_m) int_0^Mmin dM M n(M) u_m(k|M) P_halo_x(k|M),
+U(k) = (1/rhobar_m) int_0^M_r dM M n(M) u_m(k|M) P_halo_gas(k|M),
 
-with the unmeasurable integrand P_halo_x(k|M) supplied by an extrapolation off a
-reference bin h_r -- the lowest bin we do have measurements for:
+with the unmeasurable integrand P_halo_gas(k|M) supplied by an extrapolation off a
+reference bin h_r -- the M_r bin, the lowest one R sums over:
 
-P_halo_x(k|M)  ~  [P_h_r_e(k) / P_h_r_c(k)] * P_hc(k|M).
+P_halo_gas(k|M)  ~  [P_h_r_e(k) / P_h_r_c(k)] * P_hc(k|M).
 
 c is cold dark matter, the bracket freezes the baryonic response in at the
 reference scale.
 
 Define the mass transfer function
 T(k,M) = P_hc(k|M) / P_hc(k|M_r)
-so that P_halo_x(k|M) = T(k,M) * P_halo_x(k|M_r)
+so that P_halo_gas(k|M) = T(k,M) * P_halo_gas(k|M_r)
 
-U(k) = f_u * <u_m(k|M) T(k,M)>_w * P_halo_x(k|M_r)
-= f_u * S(k) * P_halo_x(k|M_r),
+U(k) = f_u * <u_m(k|M) T(k,M)>_w * P_halo_gas(k|M_r)
+= f_u * S(k) * P_halo_gas(k|M_r),
 
 THE FOUR WAYS OF SUPPLYING T
 'flat'      T = 1 and u_m = 1.
@@ -37,13 +37,13 @@ since it is a ratio of two integrals against the same weight. So the
 default (--fu catalog) takes the amplitude from the measured catalogue
 deficit f_u = 1 - sum_i f_i and the shape from the model.
 
-Note that f_u is NOT f_(i), the integral below M_min (f_smallhalo in code):
+Template mass is <M> of bin r; the integral stops at its lower edge.
+
+Note that f_u is NOT f_(i), the integral below M_r (f_smallhalo in code):
 f_u also collects mass outside r200b of resolved halos. This code improves
 the treatment of component (i) only.
 ------------------------------------------------------------------------------
 """
-import argparse
-
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -51,120 +51,22 @@ matplotlib.use('Agg')
 from utils.pipeline_paths import ensure_parents, plot_path
 from utils.plot_data import save_plot_data
 
-from Pmx_reconstruction.pmxlib.config import (INT_LOGM_LO, INT_NODES,
-                                              ExperimentAOptions, PmxConfig,
-                                              TRACER_INFO, add_binning_args,
-                                              add_concentration_args,
-                                              add_experiment_a_args,
-                                              add_selfpair_args, add_target_args,
-                                              profile_tag)
-from Pmx_reconstruction.pmxlib.halo_model import HaloModel, _conc, _trapz_weights
+from Pmx_reconstruction.pmxlib.config import (MassRange, PmxConfig,
+                                              base_parser)
+from Pmx_reconstruction.pmxlib.halo_model import HaloModel
 from Pmx_reconstruction.pmxlib import plotting as pl
 from Pmx_reconstruction.pmxlib import rstar_ustar as ru
-from Pmx_reconstruction.pmxlib.nfw import u_nfw
-
-def transfer_T(k, M_nodes, M_ref, mode, hm=None, T_sim=None):
-    """Mass transfer function T(k,M) = P_hc(k|M) / P_hc(k|M_r), shape (nM, nk).
-
-    'flat'      -> 1
-    'bias'      -> b(M)/b(M_r), the 2-halo limit
-    'halomodel' -> full 1-halo + 2-halo ratio
-    'simhc'     -> T_sim, supplied by the caller from measured P_halo_dm
-    """
-    nM, nk = M_nodes.size, k.size
-    if mode == 'flat':
-        return np.ones((nM, nk))
-    if mode == 'simhc':
-        if T_sim is None:
-            raise ValueError("mode 'simhc' needs measured P_halo_dm ratios (validation "
-                             "mode only)")
-        return T_sim
-    if hm is None:
-        raise ValueError(f"mode {mode!r} needs a HaloModel instance")
-    if mode == 'bias':
-        return (hm.bias(M_nodes) / float(hm.bias(np.array([M_ref]))[0]))[:, None] \
-            * np.ones((1, nk))
-    if mode == 'halomodel':
-        return hm.P_hc(k, M_nodes) / hm.P_hc(k, np.array([M_ref]))[0][None, :]
-    raise ValueError(f"unknown extrapolation mode {mode!r}")
-
+from Pmx_reconstruction.pmxlib.nfw import conc_of, u_nfw
+from Pmx_reconstruction.pmxlib.reconstruction import compute_R, compute_U
 
 def _lowk(k, y, kmax=0.08):
     """Mean of y over k < kmax, for one-line reporting."""
     sel = np.asarray(k) < kmax
     if np.count_nonzero(sel) < 3:
-        sel = np.zeros_like(k, dtype=bool); sel[:5] = True
+        sel = np.zeros_like(k, dtype=bool)
+        sel[:5] = True
     y = np.asarray(y, dtype=float)[sel]
     return float(np.nanmean(y[np.isfinite(y)]))
-
-
-def compute_U(cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=None, z=None,
-                        cat_M=None, cat_w=None, T_sim=None,
-                        int_logm_lo=INT_LOGM_LO, n_nodes=INT_NODES,
-                        f_u=None, use_um=True, trunc=1.0):
-    """U(k) = f_u * S(k) * P_halo_x(k|M_r),   S(k) = <u_m(k|M) T(k,M)>_w
-
-    Two ways of supplying the mass weight w = M n(M):
-
-    cat_M / cat_w given
-        The nodes and weights come from the halo CATALOGUE (w_i = n_i M_i).
-        Used in validation mode, where the pseudo-unresolved bins are really
-        measured, so that n(M) is exact and only T is under test.
-
-    cat_M / cat_w absent
-        Nodes are log-spaced on [10^int_logm_lo, M_min] and w = M n(M) comes
-        from Tinker+08.
-
-    f_u given
-        Overrides the model's own mass integral, i.e. the amplitude is taken
-        from the catalogue deficit and only the SHAPE S(k) from the model.
-
-    trunc
-        Multiple of r200m at which u_m is truncated. This code always runs
-        at 1. This parameter is present because experiment_B calls this function
-        and changes the value.
-
-    Returns a dict with S, U, f_u used, f_u from the integral, and the
-    per-node T for inspection.
-    """
-    if mode == 'flat' and cat_M is None and hm is None:
-        if f_u is None:
-            raise ValueError("mode 'flat' without a HaloModel needs f_u to be "
-                             "given: the mass integral is the only thing the "
-                             "model was supplying.")
-        S = np.ones_like(np.asarray(k, dtype=float))
-        return dict(S=S, U=float(f_u) * S * P_halo_x_ref,
-                    f_u_used=float(f_u), f_smallhalo_integral=np.nan,
-                    M_nodes=np.array([]), w=np.array([]), T=None, mode=mode)
-
-    if cat_M is not None:
-        M_nodes = np.asarray(cat_M, dtype=float)
-        w = np.asarray(cat_w, dtype=float)
-    else:
-        M_nodes = np.logspace(int_logm_lo, np.log10(M_min), n_nodes)
-        lnM = np.log(M_nodes)
-        w = M_nodes * hm.dndM(M_nodes) * M_nodes * _trapz_weights(lnM)
-
-    keep = w > 0
-    M_nodes, w = M_nodes[keep], w[keep]
-    if T_sim is not None:
-        T_sim = np.asarray(T_sim)[keep]
-
-    T = transfer_T(k, M_nodes, M_ref, mode, hm=hm, T_sim=T_sim)
-
-    if use_um and mode != 'flat':
-        u = np.array([u_nfw(k, m, _conc(cfg, m, z), cfg.rhobar_m,
-                            trunc=trunc) for m in M_nodes])
-    else:
-        u = np.ones((M_nodes.size, k.size))
-
-    S = np.sum(w[:, None] * u * T, axis=0) / np.sum(w)
-    f_smallhalo_int = float(np.sum(w) / cfg.rhobar_m)
-    f_u_used = f_smallhalo_int if f_u is None else float(f_u)
-
-    return dict(S=S, U=f_u_used * S * P_halo_x_ref, f_u_used=f_u_used,
-                f_smallhalo_integral=f_smallhalo_int, M_nodes=M_nodes, w=w,
-                T=T, mode=mode)
 
 
 def measured_bias_per_bin(data, kmax_fit=0.08):
@@ -182,32 +84,20 @@ def measured_bias_per_bin(data, kmax_fit=0.08):
     return b, float(k[sel][-1])
 
 
-def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
+def run_experiment_A(cfg, data):
     """
-    Run Experiment A.
+    Run Experiment A. R sums the bins in [M_r, M_max]; U models the mass
+    below M_r.
 
-    Two configurations, chosen by --split-logm:
-
-    VALIDATION (--split-logm given)
-        Bins above the split are declared resolved; bins below are hidden and
-        play the part of the unresolved population. Their exact contribution
-            Delta_P_exact(k) = sum_hidden f_i u_m(k|M_i) P_halo_x(k;M_i)
-        is known, so every extrapolation can be scored against a truth rather
-        than against the final reconstruction, where a dozen other errors are
-        superposed. This is the test the notes ask for.
-
-    PRODUCTION (no split)
-        Everything is resolved; the correction is applied below the catalogue
-        limit and there is no exact target. Only the effect on the final
-        reconstruction can be judged.
+    VALIDATION (--validate): the bins masked below M_r play the unresolved
+        population; U is integrated from the bundle edge and scored against
+        U_exact = sum_hidden f_i u_m(k|M_i) P_halo_gas(k;M_i).
+    PRODUCTION: U is integrated from 10^INT_LOGM_LO and the reconstruction is
+        scored against the measured R*/U*, re-split at M_r.
     """
-    tracer = cfg.tracer if tracer is None else tracer
-    info = TRACER_INFO[tracer]
-    tag = info['tag'] if tag is None else tag
-    x_sym = info['sym'] if x_sym is None else x_sym
     k = data['k_center']
-    P_halo_x = data[info['halo_key']]
-    P_matter_x_true = data[info['truth_key']]
+    P_halo_gas = data['P_halo_gas']
+    P_matter_gas_true = data['P_matter_gas']
     P_halo_dm = data['P_halo_dm']
     counts = data['counts']
     M_i = data['M_mean']
@@ -217,86 +107,42 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     n_i = counts / float(data['box']) ** 3
 
     print("\n" + "=" * 70)
-    print("EXPERIMENT A -- extrapolating P_halo_x(k|M) below M_min")
+    print("EXPERIMENT A -- extrapolating P_halo_gas(k|M) below M_r")
     print("=" * 70)
 
+    mr = MassRange.from_config(cfg, data)
+    mr.report('[A]')
+    mode_label = 'validation' if mr.validate else 'production'
     occupied = counts > 0
+    hidden = mr.hidden
+    ref = mr.r
+    P_halo_gas_ref = P_halo_gas[ref]
 
-    # --- split the catalogue ---------------------------------------------------
-    if opts.split_logm is not None:
-        hidden = occupied & (logM_cen < opts.split_logm)
-        resolved = occupied & (logM_cen >= opts.split_logm)
-        if not np.any(hidden):
-            raise SystemExit(f"--split-logm {opts.split_logm} hides no occupied "
-                             f"bin; nothing to validate against.")
-        mode_label = 'validation'
-    else:
-        hidden = np.zeros_like(occupied)
-        resolved = occupied
-        mode_label = 'production'
-
-    # The analytic integral must cover the SAME mass range as the exact target,
-    # or the two are simply not comparable. In validation mode that range is
-    # bounded below by the catalogue, not by 10^INT_LOGM_LO.
-    if opts.int_logm_min is not None: # practically never used?
-        int_logm_lo = float(opts.int_logm_min)
-    elif opts.split_logm is not None: # validation mode
-        int_logm_lo = float(data['logM_edges'][0])
-        print(f"[A] integral lower limit defaulted to the catalogue edge "
-              f"logM = {int_logm_lo:.2f}, to match the exact target's range")
-    else: # production mode
-        int_logm_lo = INT_LOGM_LO # 8.0 or something like that
-
-    ref = int(np.flatnonzero(resolved)[0]) if opts.ref_logm is None else \
-        int(np.argmin(np.abs(logM_cen - opts.ref_logm)))
-    if not resolved[ref]:
-        raise SystemExit(f"--ref-logm {opts.ref_logm} selects bin {ref}, which is "
-                         f"not in the resolved set.")
-
-    M_ref = float(M_i[ref])
-    P_halo_x_ref = P_halo_x[ref]
-    boundary = int(np.flatnonzero(resolved)[0])
-    M_min = 10.0 ** float(data['logM_edges'][boundary])
-
-    f_i = n_i * M_i / cfg.rhobar_m
-    f_resolved = float(np.sum(f_i[resolved]))
-    f_u = 1.0 - f_resolved
-
-    print(f"[A] {mode_label} mode; reference bin {ref} at logM = "
-          f"{logM_cen[ref]:.2f} (<M> = {M_ref:.3e} Msun/h)")
-    print(f"[A] resolved mass fraction {f_resolved:.4f}, catalogue deficit "
-          f"f_u = {f_u:.4f}")
-    if np.any(hidden):
-        print(f"[A] hiding {np.count_nonzero(hidden)} bins below logM = "
-              f"{opts.split_logm}, carrying f = {float(np.sum(f_i[hidden])):.4f} "
-              f"of the mass")
-
-    # --- the exact target, when we have one ------------------------------------
+    # --- the exact target, validation only --------------------------------------
     U_exact = None
     f_u_hidden = None
-    if np.any(hidden):
+    if mr.validate:
         idx = np.flatnonzero(hidden)
-        u_hidden = np.array([u_nfw(k, M_i[j], _conc(cfg, M_i[j], z),
-                                   cfg.rhobar_m) for j in idx])
-        U_exact = np.sum(f_i[idx][:, None] * u_hidden * P_halo_x[idx], axis=0)
-        f_u_hidden = float(np.sum(f_i[idx]))
-        print(f"[A] exact hidden contribution built from the measured bins; "
+        u_hidden = np.array([u_nfw(k, M_i[j], conc_of(cfg, M_i[j], z),
+                                   cfg.rhobar_m)
+                             for j in idx])
+        U_exact = np.sum(mr.f_i[idx][:, None] * u_hidden * P_halo_gas[idx], axis=0)
+        f_u_hidden = mr.f_hidden
+        print(f"[A] exact masked-bin contribution built; "
               f"f_u(hidden) = {f_u_hidden:.4f}")
 
     # --- halo model, only if a mode needs it -----------------------------------
-    modes = list(opts.extrap)
-    if 'simhc' in modes and not np.any(hidden):
-        print("[A] dropping mode 'simhc': it needs measured P_hc in the "
-              "unresolved range, which only exists in validation mode.")
+    modes = list(cfg.extrap)
+    if 'simhc' in modes and not mr.validate:
+        print("[A] dropping mode 'simhc': it needs --validate.")
         modes.remove('simhc')
-    # 'flat' needs it too whenever the mass integral is analytic, since that is
-    # where its f_u comes from.
+    # 'flat' needs it too whenever the mass integral is analytic.
     needs_hm = (any(m in ('bias', 'halomodel') for m in modes)
-                or (opts.hmf == 'tinker' and any(m != 'simhc' for m in modes)))
+                or (cfg.hmf == 'tinker' and any(m != 'simhc' for m in modes)))
     hm = None
     if needs_hm:
         print("[A] building the halo model ...")
-        hm = HaloModel(cfg, z, power_spectrum=opts.power_spectrum)
+        hm = HaloModel(cfg, z, power_spectrum=cfg.power_spectrum)
 
     # --- bias sanity check ------------------------------------------------------
     b_meas, k_fit = measured_bias_per_bin(data)
@@ -306,21 +152,21 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
             print(f"      logM={logM_cen[j]:5.2f}  b_meas={b_meas[j]:6.3f}  "
                   f"b_T10={float(hm.bias(np.array([M_i[j]]))[0]):6.3f}")
 
-    # --- the amplitude ----------------------------------------------------------
-    if opts.fu == 'catalog':
-        f_u_amp = f_u_hidden if f_u_hidden is not None else f_u
+    # --- the unresolved mass fraction ----------------------------------------------------------
+    if cfg.fu == 'catalog':
+        f_u_amp = f_u_hidden if mr.validate else mr.f_u
     else:
-        f_u_amp = None      # let each mode use its own mass integral
-    print(f"[A] amplitude source: --fu {opts.fu}"
+        f_u_amp = None
+    print(f"[A] f_u source: --fu {cfg.fu}"
           + (f" -> f_u = {f_u_amp:.4f}" if f_u_amp is not None else
              " -> from the Tinker+08 integral, per mode"))
 
-    # --- catalogue weights for the integral, in validation mode -----------------
+    # --- catalogue weights and T_sim, validation only ---------------------------
     T_sim = None
-    if opts.hmf == 'catalog' and not np.any(hidden):
-        raise SystemExit("--hmf catalog needs --split-logm: outside validation "
-                         "mode there is no catalogue below M_min.")
-    if np.any(hidden):
+    if cfg.hmf == 'catalog' and not mr.validate:
+        raise SystemExit("--hmf catalog needs --validate: there is no "
+                         "catalogue below M_r otherwise.")
+    if mr.validate:
         idx = np.flatnonzero(hidden)
         with np.errstate(divide='ignore', invalid='ignore'):
             T_sim_full = P_halo_dm[idx] / P_halo_dm[ref][None, :]
@@ -329,20 +175,16 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     # --- run every requested mode ----------------------------------------------
     results = {}
     for mode in modes:
-        use_cat = (opts.hmf == 'catalog') or (mode == 'simhc')
-        if use_cat and not np.any(hidden):
-            continue
+        use_cat = (cfg.hmf == 'catalog') or (mode == 'simhc')
         if use_cat:
             idx = np.flatnonzero(hidden)
             cm, cw = M_i[idx], n_i[idx] * M_i[idx]
         else:
             cm = cw = None
         res = compute_U(
-            cfg, k, P_halo_x_ref, M_ref, M_min, mode, hm=hm, z=z,
-            cat_M=cm, cat_w=cw,
-            T_sim=T_sim if mode == 'simhc' else None,
-            int_logm_lo=int_logm_lo, n_nodes=INT_NODES,
-            f_u=f_u_amp,
+            cfg, k, P_halo_gas_ref, mr.M_ref, mr.M_u_hi, mode, mr.int_logm_lo,
+            hm=hm, z=z, cat_M=cm, cat_w=cw,
+            T_sim=T_sim if mode == 'simhc' else None, f_u=f_u_amp,
         )
         results[mode] = res
         S = res['S']
@@ -358,41 +200,60 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
                   f"{np.interp(1.0, k, r):.3f} at k=1, "
                   f"median |1-r| = {np.nanmedian(np.abs(r[good] - 1.0)):.3f}")
 
-    # --- the bias/halomodel spread, as an error bar on the discarded term -------
+    # --- the bias/halomodel spread ----------------------------------------------
     if 'bias' in results and 'halomodel' in results:
         with np.errstate(divide='ignore', invalid='ignore'):
             spread = results['halomodel']['S'] / results['bias']['S'] - 1.0
-        print("[A] spread halomodel/bias - 1 (this is the size of the 1-halo term "
-              "the\n    factorisation argument dropped, NOT a ranking of the two):")
+        print("[A] spread halomodel/bias - 1 (size of the dropped 1-halo term):")
         for kk in (0.1, 0.3, 1.0, 3.0):
             if kk < k[-1]:
                 print(f"      k = {kk:4.1f}: {np.interp(kk, k, spread):+.3f}")
         big = k[np.abs(spread) > 0.5]
         if big.size:
-            print(f"      |spread| exceeds 50% above k = {big[0]:.2f}; past that "
-                  f"point neither\n      mode is controlled and only the "
-                  f"--split-logm validation can decide.")
+            print(f"      |spread| exceeds 50% above k = {big[0]:.2f}; only "
+                  f"--validate can decide there.")
 
-    # --- the figures ------------------------------------------------------------
-    from Pmx_reconstruction.predict_Pmx_from_Phx import compute_R
-    n_use = np.where(resolved, n_i, 0.0)
-    R = compute_R(cfg, k, P_halo_x, M_i, n_use, z)
+    # --- R and the target -------------------------------------------------------
+    n_use = np.where(mr.resolved, n_i, 0.0)
+    R = compute_R(cfg, k, P_halo_gas, M_i, n_use, z)
 
-    has_exact = U_exact is not None
-    P_target = (R + U_exact) if has_exact else P_matter_x_true
+    P_target = (R + U_exact) if mr.validate else P_matter_gas_true
 
     S_exact = None
-    if has_exact and f_u_hidden:
+    if mr.validate and f_u_hidden:
         with np.errstate(divide='ignore', invalid='ignore'):
-            S_exact = U_exact / (f_u_hidden * P_halo_x_ref)
+            S_exact = U_exact / (f_u_hidden * P_halo_gas_ref)
 
-    stem = (f'expA_shape_{tag}_{cfg.mass_def}_nb{cfg.nbins}'
-            f'_split{"none" if opts.split_logm is None else f"{opts.split_logm:.2f}"}'
-            f'_ref{logM_cen[ref]:.2f}_hmf{opts.hmf}_fu{opts.fu}{profile_tag(cfg)}'
-            f'{"" if bool(data.get("self_pairs_removed", False)) else "_shotpresent"}')
+    # measured partition, re-split at M_r / M_max
+    tot, _ = ru.load_totals(cfg, data, mr=mr,
+                            allow_compute=not mr.validate)
+    if tot is None and not mr.validate:
+        raise SystemExit(
+            "[A] cannot score the reconstruction against R*/U*: the cache "
+            "sits on a different k grid from the bundle. Rebuild it with\n"
+            "      python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute")
 
-    def _save(fig, this_stem):
-        path = plot_path('pme_reconstruction', cfg.feedback, stem=this_stem)
+    def _save(fig, kind):
+        """Save one of this run's figures, under a stem naming the whole run.
+
+        Everything that would make two runs differ has to appear here, or the
+        second would overwrite the first. `conc` is empty at the default so
+        that adding a profile switch does not rename every existing plot.
+        """
+        # Every model choice that moves the answer has to be in the name, or
+        # two runs overwrite each other: c(M,z) enters u_m, and the linear
+        # P(k) enters T(k,M) through the halo model. Empty at the defaults,
+        # so turning a knob does not rename every existing plot.
+        models = ''
+        if cfg.concentration_source != PmxConfig.concentration_source:
+            models += f'_conc-{cfg.concentration_source}'
+        if cfg.colossus_conc_model != PmxConfig.colossus_conc_model:
+            models += f'_cm-{cfg.colossus_conc_model}'
+        if cfg.power_spectrum != PmxConfig.power_spectrum:
+            models += f'_ps-{cfg.power_spectrum}'
+        stem = (f'expA_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}{mr.tag()}'
+                f'_hmf{cfg.hmf}_fu{cfg.fu}{models}')
+        path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
         ensure_parents(path)
         pl.save_figure(fig, path)
         print(f"[A][plot] {path}")
@@ -400,48 +261,36 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
 
     d = pl.PanelData(k=k, k_Ny=k_Ny, results=results,
                      R=R, P_target=P_target,
-                     P_matter_x_true=P_matter_x_true, tag=cfg.tracer_info['sym'], x_sym=x_sym,
-                     U_exact=U_exact, S_exact=S_exact)
+                     P_matter_gas_true=P_matter_gas_true,
+                     U_exact=U_exact, S_exact=S_exact,
+                     P_dm_gas=data['P_dm_gas'],
+                     P_selfpair=data['P_matter_gas_selfpair'])
+    if tot is not None:
+        d.R_star, d.U_star = tot['R_star'], tot['U_star']
+        if mr.above.any():
+            d.V_star = tot['V_star']
+        with np.errstate(divide='ignore', invalid='ignore'):
+            d.S_eff = tot['U_star'] / (tot['f_out'] * P_halo_gas_ref)
+        print(f"[A] measured S_eff: {_lowk(k, d.S_eff):.3f} at k -> 0, "
+              + ", ".join(f"{kk:g}: {float(np.interp(kk, k, d.S_eff)):.3f}"
+                          for kk in (1.0, 3.0) if kk <= k[-1]))
 
-    if has_exact:
-        # Validation puts both halves of the split test on one canvas.
-        p_main = _save(pl.validation_panel(d),
-                       stem.replace('expA_shape', 'expA_validation_panel'))
+    if mr.validate:
+        p_main = _save(pl.validation_panel(d), 'validation_panel')
     else:
-        # Production has no hidden bins to score the correction against, so it
-        # scores the whole reconstruction against the measured P^me.
-        tot, _ = ru.load_totals(cfg, data, tracer)
-        if tot is not None:
-            d.R_star, d.U_star = tot['R_star'], tot['U_star']
-            with np.errstate(divide='ignore', invalid='ignore'):
-                d.S_eff = tot['U_star'] / (tot['f_out'] * P_halo_x_ref)
-            print(f"[A] measured S_eff: {_lowk(k, d.S_eff):.3f} at k -> 0, "
-                  + ", ".join(f"{kk:g}: {float(np.interp(kk, k, d.S_eff)):.3f}"
-                              for kk in (1.0, 3.0) if kk <= k[-1]))
-            p_main = _save(pl.production_panel(d),
-                           stem.replace('expA_shape', 'expA_production_panel'))
-        else:
-            raise SystemExit(
-                "[A] cannot score the reconstruction against R*/U*: the cache "
-                "exists but sits on a different k grid from the bundle. "
-                "Rebuild it with\n"
-                "      python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute")
+        p_main = _save(pl.production_panel(d), 'production_panel')
 
     # --- save everything --------------------------------------------------------
     payload = {
-        'k_center': k, 'tracer': tracer, 'mode': mode_label,
-        'ref_bin': ref, 'ref_logM': float(logM_cen[ref]), 'M_ref': M_ref,
-        'M_min': M_min, 'split_logm': (np.nan if opts.split_logm is None
-                                       else float(opts.split_logm)),
-        'hmf_source': opts.hmf, 'fu_source': opts.fu,
-        'nfw_trunc': 1.0,
+        'k_center': k, 'mode': mode_label,
+        'ref_logM': float(logM_cen[ref]),
+        'hmf_source': cfg.hmf, 'fu_source': cfg.fu,
         'concentration_source': cfg.concentration_source,
-        'int_logm_min': float(int_logm_lo),
-        'f_u': f_u, 'f_resolved': f_resolved,
-        'self_pairs_removed': bool(data.get('self_pairs_removed', False)),
+        'f_u': mr.f_u, 'f_resolved': mr.f_resolved,
         'b_measured': b_meas, 'logM_cen': logM_cen, 'M_mean': M_i, 'n_i': n_i,
-        'P_halo_x_ref': P_halo_x_ref, 'R': R, 'P_matter_x_true': P_matter_x_true,
+        'P_halo_gas_ref': P_halo_gas_ref, 'R': R, 'P_matter_gas_true': P_matter_gas_true,
     }
+    payload.update(mr.payload())
     if U_exact is not None:
         payload['U_exact'] = U_exact
         payload['S_exact'] = S_exact
@@ -449,6 +298,8 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
     if tot is not None:
         payload['R_star'] = d.R_star
         payload['U_star'] = d.U_star
+        payload['V_star'] = tot['V_star']
+        payload['f_out'] = tot['f_out']
         payload['S_eff'] = d.S_eff
     for mode, res in results.items():
         payload[f'S_{mode}'] = res['S']
@@ -458,37 +309,21 @@ def run_experiment_A(cfg, data, opts, tracer=None, tag=None, x_sym=None):
         payload['b_tinker10'] = hm.bias(M_i)
         payload['dndM_tinker08'] = hm.dndM(M_i)
     save_plot_data(p_main, payload,
-                   description=('Experiment A: P_halo_x extrapolated below M_min by '
-                                'freezing the baryon response at a reference bin'))
+                   description=('Experiment A: P_halo_gas extrapolated below M_r by '
+                                'freezing the baryon response at the M_r bin'))
     return results
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description="Experiment A: extrapolate P_halo_x(k|M) below the "
-                    "catalogue's mass limit and correct the reconstruction.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    add_target_args(ap)
-    add_binning_args(ap)
-    add_concentration_args(ap)
-    add_selfpair_args(ap)
-    add_experiment_a_args(ap)
-    ap.add_argument('--recompute', action='store_true',
-                    help="ignore any cached spectra bundle and re-measure")
-    args = ap.parse_args()
-
+    args = base_parser(
+        "Experiment A: extrapolate P_halo_gas(k|M) below M_r and correct the "
+        "reconstruction.").parse_args()
     cfg = PmxConfig.from_args(args)
-    opts = ExperimentAOptions.from_args(args)
 
     from Pmx_reconstruction.pmxlib.bundle import load_or_measure
-    from Pmx_reconstruction.pmxlib.self_pairs import use_self_pair_corrected
-
     data = load_or_measure(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max,
-                           cfg.nkbins, recompute=args.recompute,
-                           self_pairs=cfg.subtract_self_pairs)
-    use_self_pair_corrected(cfg, data, subtract=cfg.subtract_self_pairs)
-
-    run_experiment_A(cfg, data, opts)
+                           cfg.nkbins, recompute=args.recompute)
+    run_experiment_A(cfg, data)
 
 
 if __name__ == '__main__':

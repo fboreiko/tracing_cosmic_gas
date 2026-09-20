@@ -13,7 +13,7 @@ THE ONE-LINE VERSION
 
 WHAT MOVES WITH x AND WHAT DOES NOT
     Nothing about the halos changes: the catalogue, the mass bins, the bin
-    labels M200b, the halo centres and every measured P_halo_x(k; M_i) are
+    labels M200b, the halo centres and every measured P_halo_gas(k; M_i) are
     identical at every x. The spectra bundle is not re-measured. What changes
     is only the PARTITION of the matter particles between "in bin i" and "not
     in any bin", and therefore
@@ -48,35 +48,24 @@ USAGE
         # measure anything new
         python -m Pmx_reconstruction.experiment_B --no-measure
 
-        # against the dm tracer, to separate geometry from feedback
-        python -m Pmx_reconstruction.experiment_B --target matter_dm
+        # R over [10^12, M_max]; everything below M_r is U / U*
+        python -m Pmx_reconstruction.experiment_B --logm-r 12
 ------------------------------------------------------------------------------
 """
-import argparse
-import inspect
-
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 from utils.pipeline_paths import ensure_parents, plot_path
 from utils.plot_data import save_plot_data
 
 from Pmx_reconstruction.pmxlib.bundle import load_or_measure
-from Pmx_reconstruction.pmxlib.config import (ExperimentAOptions, PmxConfig,
-                                              TRACER_INFO, add_binning_args,
-                                              add_concentration_args,
-                                              add_experiment_a_args,
-                                              add_selfpair_args,
-                                              add_target_args, profile_tag)
-from Pmx_reconstruction.pmxlib.halo_model import _conc
-from Pmx_reconstruction.pmxlib.nfw import r200m_of_M, u_nfw
-from Pmx_reconstruction.pmxlib.self_pairs import use_self_pair_corrected
+from Pmx_reconstruction.pmxlib.config import (MassRange, PmxConfig,
+                                              base_parser)
+from Pmx_reconstruction.pmxlib.nfw import conc_of, r200m_of_M, u_nfw
+from Pmx_reconstruction.pmxlib.reconstruction import compute_U
 from Pmx_reconstruction.pmxlib import plotting as pl
 from Pmx_reconstruction.pmxlib import rstar_ustar as ru
-
-from Pmx_reconstruction.experiment_A import compute_U
 
 KMAX_LOWK = 0.08
 K_TABLE = (0.1, 0.3, 1.0, 3.0, 10.0)
@@ -98,25 +87,18 @@ def nfw_mass_ratio(c, x):
     return m(float(x) * c) / m(c)
 
 
-def _U_of(run, mode):
-    """The U this run's `mode` produced, or 0 when --extrap was emptied."""
-    if mode is None:
-        return 0.0
-    return run['errors'][mode]['U']
-
-
-def measure_aperture(cfg, data, aperture, tracer, weights='aperture',
+def measure_aperture(cfg, data, aperture, weights='aperture',
                      allow_compute=True, recompute=False,
-                     chunk_particles=5e7, resolved=None):
+                     chunk_particles=5e7, mr=None):
     """Everything one aperture contributes, measured and modelled.
 
     Measured, from the R*/U* cache at this aperture:
-        R_star_i, R_star, U_star        the exact partition of P_matter_x
+        R_star_i, R_star, U_star        the exact partition of P_matter_gas
         f_part                          mass fraction inside each bin's spheres
         f_out = 1 - sum f_part          mass outside every sphere
 
     Modelled, from a profile truncated to match the aperture:
-        R = sum_i w_i u_m(k|M_i, trunc=x) P_halo_x(k; M_i)
+        R = sum_i w_i u_m(k|M_i, trunc=x) P_halo_gas(k; M_i)
 
     The weight w and the truncation are a MATCHED PAIR and cannot be chosen
     separately. u_nfw(trunc=x) is normalised by m(xc), so u -> 1 at k -> 0
@@ -135,11 +117,23 @@ def measure_aperture(cfg, data, aperture, tracer, weights='aperture',
       'catalogue' w = f_i m(xc)/m(c), the NFW-extrapolated enclosed mass. Uses
                   no particle information, so R is a genuine prediction and at
                   x = 1 it reduces exactly to the production reconstruction of
-                  predict_Pmx_from_Phx -- but it double counts overlapping
-                  spheres and leans on NFW where NFW is least trustworthy.
+                  experiment A's production run -- but it double counts
+                  overlapping spheres and leans on NFW where NFW is least
+                  trustworthy.
 
     Both are computed and returned whichever is selected, so the difference
     between them is always available and is reported by run_experiment_B.
+
+    The amplitude of U is part of the same pair. Whatever weight R runs on, the
+    mass U stands in for is what that weight leaves over -- f_out = 1 - sum
+    f_part for 'aperture', f_u_cat = 1 - sum f_i m(xc)/m(c) for 'catalogue'.
+    Mixing them would give the two halves of the reconstruction different mass
+    budgets: 'catalogue' would double count the overlap in R and then stand in
+    for it a second time in U. `f_u_model` is the matching one and is what
+    run_experiment_B passes to compute_U; at x = 1 it is mr.f_u either way for
+    'catalogue', so that run reduces exactly to the production reconstruction.
+
+    `mr` (MassRange) re-splits the measured partition at M_r / M_max.
     """
     cache = ru.load_or_compute(cfg, data, aperture=aperture,
                                allow_compute=allow_compute,
@@ -159,29 +153,13 @@ def measure_aperture(cfg, data, aperture, tracer, weights='aperture',
                          f"grid from the bundle ({k_c.size} vs {k.size} bins). "
                          f"Rebuild it with --recompute-apertures.")
 
-    tot = ru.totals(cfg, cache, data, tracer)
+    if mr is None:
+        mr = MassRange.from_config(cfg, data)
+    tot = ru.totals(cfg, cache, data, mr=mr)
     counts = np.asarray(data['counts'], float)
     occ = counts > 0
-    if resolved is None:
-        resolved = occ
-    resolved = np.asarray(resolved, bool) & occ
-    hidden = occ & ~resolved
-
-    # A raised M_r is applied to the MEASURED partition as well, not only to the
-    # model. R* must contain exactly the bins the reconstruction sums over, so
-    # the hidden bins' halo-bound matter is moved back into U*, which is then
-    # "matter outside every RESOLVED sphere". This stays an exact partition:
-    # assignment is to the most massive host, and every resolved halo outranks
-    # every hidden one, so nothing is double counted and nothing is dropped.
-    # Because the cache is per bin, the split costs no particle pass.
-    f_part = np.where(resolved, np.asarray(cache['f_part'], float), 0.0)
-    f_out = 1.0 - float(np.sum(f_part))
-    if np.any(hidden):
-        R_star_i = np.asarray(tot['R_star_i'], float)
-        tot = dict(tot)
-        tot['U_star'] = tot['U_star'] + np.sum(R_star_i[hidden], axis=0)
-        tot['R_star'] = tot['R_star'] - np.sum(R_star_i[hidden], axis=0)
-        tot['R_star_i'] = np.where(resolved[:, None], R_star_i, 0.0)
+    resolved = mr.resolved
+    f_part, f_out = tot['f_part'], tot['f_out']
 
     # Mean mass inside the aperture per halo of the bin, in Msun/h. Only used
     # for reporting: the model weight is f_part directly.
@@ -194,81 +172,62 @@ def measure_aperture(cfg, data, aperture, tracer, weights='aperture',
 
     # The model side. M_mean (the catalogue M200b) fixes r200m and c; the
     # aperture only moves the truncation radius.
-    info = TRACER_INFO[tracer]
-    P_halo_x = np.asarray(data[info['halo_key']], float)
+    P_halo_gas = np.asarray(data['P_halo_gas'], float)
     M_i = np.asarray(data['M_mean'], float)
     z = float(data['redshift'])
     u_i = np.zeros((M_i.size, k.size))
     conc = np.zeros(M_i.size)
     for j in np.flatnonzero(occ):
-        conc[j] = _conc(cfg, M_i[j], z)
+        conc[j] = conc_of(cfg, M_i[j], z)
         u_i[j] = u_nfw(k, M_i[j], conc[j], cfg.rhobar_m, trunc=aperture)
 
-    # The catalogue-side weight, for comparison and for weights='catalogue'.
-    # Both weights are zeroed on the hidden bins so that R sums over exactly the
-    # bins R* now contains.
-    f_i = np.where(resolved, counts / cfg.box ** 3 * M_i / cfg.rhobar_m, 0.0)
-    f_cat = np.where(resolved, f_i * nfw_mass_ratio(np.where(occ, conc, 1.0),
-                                                    aperture), 0.0)
+    # Both weights zeroed outside [M_r, M_max], matching R*. f_cat_all keeps
+    # the bins outside it, because the U amplitude below has to discount them
+    # the same way f_out does: bins above M_max are V*, not U.
+    f_i = np.where(resolved, mr.f_i, 0.0)
+    mu = nfw_mass_ratio(np.where(occ, conc, 1.0), aperture)
+    f_cat_all = np.where(occ, mr.f_i * mu, 0.0)
+    f_cat = np.where(resolved, f_cat_all, 0.0)
+    f_u_cat = 1.0 - float(f_cat_all[resolved | mr.above].sum())
 
     if weights == 'aperture':
-        w_model = f_part
+        w_model, f_u_model = f_part, f_out
     elif weights == 'catalogue':
-        w_model = f_cat
+        w_model, f_u_model = f_cat, f_u_cat
     else:
         raise ValueError(f"unknown weights {weights!r}")
-    R_model = np.sum(w_model[:, None] * u_i * P_halo_x, axis=0)
+    R_model = np.sum(w_model[:, None] * u_i * P_halo_gas, axis=0)
 
     return dict(aperture=float(aperture), cache=cache, k=k, weights=weights,
                 R_star_i=tot['R_star_i'], R_star=tot['R_star'],
-                U_star=tot['U_star'], total=tot['total'],
-                resolved=resolved, hidden=hidden,
-                f_part=f_part, f_out=f_out, M_ap=M_ap, u_i=u_i, conc=conc,
+                U_star=tot['U_star'], V_star=tot['V_star'], total=tot['total'],
+                resolved=resolved, hidden=mr.hidden, above=mr.above,
+                f_part=f_part, f_out=f_out, f_u_cat=f_u_cat,
+                f_u_model=f_u_model,
+                M_ap=M_ap, u_i=u_i, conc=conc,
                 f_i=f_i, f_cat=f_cat, w_model=w_model,
                 R_model=R_model,
-                assigned_over_m200b=float(np.asarray(
-                    cache.get('assigned_over_m200b_median', np.nan))))
+                assigned_over_m200b=float(
+                    cache['assigned_over_m200b_median']))
 
 
-def run_experiment_B(cfg, data, apertures, opts, tracer=None,
+def run_experiment_B(cfg, data, apertures,
                      weights='aperture', allow_compute=True, recompute=False,
                      chunk_particles=5e7):
     """Sweep the aperture, score each one, and write the two figures."""
-    tracer = cfg.tracer if tracer is None else tracer
-    info = TRACER_INFO[tracer]
-    tag, x_sym = info['tag'], info['sym']
     k = np.asarray(data['k_center'], float)
     k_Ny = float(data['k_Nyquist'])
     z = float(data['redshift'])
-    P_true = np.asarray(data[info['truth_key']], float)
-    P_halo_x = np.asarray(data[info['halo_key']], float)
+    P_true = np.asarray(data['P_matter_gas'], float)
+    P_halo_gas = np.asarray(data['P_halo_gas'], float)
     counts = np.asarray(data['counts'], float)
     logM_cen = np.asarray(data['logM_cen'], float)
     M_i = np.asarray(data['M_mean'], float)
     occ = counts > 0
 
-    # --- choose M_r, exactly as experiment_A does ------------------------------
-    if opts.split_logm is not None:
-        resolved = occ & (logM_cen >= opts.split_logm)
-        hidden = occ & ~resolved
-        if not np.any(resolved):
-            raise SystemExit(f"--split-logm {opts.split_logm} leaves no "
-                             f"occupied bin resolved.")
-        if not np.any(hidden):
-            raise SystemExit(f"--split-logm {opts.split_logm} hides no occupied "
-                             f"bin; omit it to use the whole catalogue.")
-    else:
-        resolved = occ.copy()
-        hidden = np.zeros_like(occ)
-
-    ref = int(np.flatnonzero(resolved)[0]) if opts.ref_logm is None else \
-        int(np.argmin(np.abs(logM_cen - opts.ref_logm)))
-    if not resolved[ref]:
-        raise SystemExit(f"--ref-logm {opts.ref_logm} selects bin {ref}, which "
-                         f"is not in the resolved set.")
-    M_ref = float(M_i[ref])
-    boundary = int(np.flatnonzero(resolved)[0])
-    M_min = 10.0 ** float(data['logM_edges'][boundary])
+    # --- M_r / M_max ---------------------------------------------------------------
+    mr = MassRange.from_config(cfg, data)
+    ref, M_ref = mr.r, mr.M_ref
 
     # x = 1 is the baseline every difference is taken against, so it is never
     # optional. Sorted so the shell differences are monotone in x.
@@ -277,28 +236,25 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
     print("\n" + "=" * 70)
     print("EXPERIMENT B -- growing the halo aperture beyond r200b")
     print("=" * 70)
-    print(f"  tracer x = {tracer}, apertures = "
-          f"{', '.join(f'{x:g}' for x in apertures)}, weights = {weights}")
+    print(f"  apertures = {', '.join(f'{x:g}' for x in apertures)}, "
+          f"weights = {weights}")
     print(f"  reference bin {ref} at logM = {logM_cen[ref]:.2f}, "
           f"r200m = {r200m_of_M(M_ref, cfg.rhobar_m):.3f} cMpc/h")
-    if np.any(hidden):
-        f_i_all = np.where(occ, counts / cfg.box ** 3 * M_i / cfg.rhobar_m, 0.0)
-        print(f"  M_r raised to logM = {opts.split_logm:.2f}: "
-              f"{int(np.count_nonzero(hidden))} of "
-              f"{int(np.count_nonzero(occ))} occupied bins hidden, "
-              f"carrying f = {float(np.sum(f_i_all[hidden])):.4f} of the matter")
-        print("  their halo-bound particles are counted in U*, not R*")
+    mr.report('  [B]')
+    if mr.hidden.any():
+        print("  bins masked below M_r: their halo-bound particles are counted "
+              "in U*, not R*")
 
     # --- the halo model, only if a U mode needs it -----------------------------
-    modes = [m for m in opts.extrap if m != 'simhc']
-    if 'simhc' in opts.extrap:
-        print("[B] dropping mode 'simhc': it needs hidden bins, which this "
-              "experiment does not create.")
+    modes = [m for m in cfg.extrap if m != 'simhc']
+    if 'simhc' in cfg.extrap:
+        print("[B] dropping mode 'simhc': it needs measured spectra below "
+              "M_r, which only experiment A's validation uses.")
     hm = None
     if any(m in ('bias', 'halomodel') for m in modes):
         from Pmx_reconstruction.pmxlib.halo_model import HaloModel
         print("[B] building the halo model ...")
-        hm = HaloModel(cfg, z, power_spectrum=opts.power_spectrum)
+        hm = HaloModel(cfg, z, power_spectrum=cfg.power_spectrum)
 
     # --- one pass per aperture -------------------------------------------------
     runs = {}
@@ -306,34 +262,36 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
         print("\n" + "-" * 70)
         print(f"[B] aperture {x:g} r200m")
         print("-" * 70)
-        runs[x] = measure_aperture(cfg, data, x, tracer, weights=weights,
+        runs[x] = measure_aperture(cfg, data, x, weights=weights,
                                    allow_compute=allow_compute,
                                    recompute=recompute,
                                    chunk_particles=chunk_particles,
-                                   resolved=resolved)
+                                   mr=mr)
 
         runs[x]['U_models'] = {}
         for mode in modes:
             res = compute_U(
-                cfg, k, P_halo_x[ref], M_ref, M_min, mode, hm=hm, z=z,
-                f_u=runs[x]['f_out'], trunc=float(x))
+                cfg, k, P_halo_gas[ref], M_ref, mr.M_u_hi, mode,
+                mr.int_logm_lo, hm=hm, z=z,
+                f_u=runs[x]['f_u_model'], trunc=float(x))
             runs[x]['U_models'][mode] = res
 
     # --- the two weights, side by side -----------------------------------------
     print("\n" + "=" * 70)
     print("WEIGHTS      sum_i f_part (measured)  vs  sum_i f_i m(xc)/m(c) (NFW)")
     print("=" * 70)
-    print("     x    measured   NFW extrap   ratio   R(measured)/R(NFW) at k=0.1")
+    print("     x    measured   NFW extrap   ratio   R(measured)/R(NFW) at k=0.1"
+          "   f_u used")
     for x in apertures:
         r = runs[x]
         sp, sc = float(np.sum(r['f_part'])), float(np.sum(r['f_cat']))
-        R_meas = np.sum(r['f_part'][:, None] * r['u_i'] * P_halo_x, axis=0)
-        R_nfw = np.sum(r['f_cat'][:, None] * r['u_i'] * P_halo_x, axis=0)
+        R_meas = np.sum(r['f_part'][:, None] * r['u_i'] * P_halo_gas, axis=0)
+        R_nfw = np.sum(r['f_cat'][:, None] * r['u_i'] * P_halo_gas, axis=0)
         with np.errstate(divide='ignore', invalid='ignore'):
             rr = float(np.interp(0.1, k, R_meas / R_nfw))
         r['R_model_alt'] = R_nfw if weights == 'aperture' else R_meas
         print(f"  {x:4.2f}   {sp:8.4f}   {sc:10.4f}   {sp / sc:6.3f}   "
-              f"{rr:22.3f}")
+              f"{rr:22.3f}   {r['f_u_model']:8.4f}")
     print("\n  ratio < 1 means the spheres hold LESS than NFW predicts: at "
           "x = 1 that is\n  the stellar mass and the mass definition, and its "
           "fall with x is overlap\n  plus the profile steepening past r200m. "
@@ -382,14 +340,19 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
                 prof = (r['R_model'] - r['R_star']) / denom
                 tmpl = (U - r['U_star']) / denom
                 totl = (r['R_model'] + U) / denom - 1.0
-            r.setdefault('errors', {})[mode] = dict(profile=prof, template=tmpl,
-                                                    total=totl, U=U)
+                abv = -r['V_star'] / denom
+            err = dict(profile=prof, template=tmpl, total=totl, U=U)
+            if mr.above.any():
+                err['above'] = abv
+            r.setdefault('errors', {})[mode] = err
             cells = "".join(
                 f"   {float(np.interp(kk, k, prof)):+.3f}/"
                 f"{float(np.interp(kk, k, tmpl)):+.3f}/"
                 f"{float(np.interp(kk, k, totl)):+.3f}"
                 for kk in (0.1, 1.0, 3.0))
-            print(f"  {x:4.2f}  {cells}")
+            print(f"  {x:4.2f}  {cells}"
+                  + (f"   -V*/total(k=1) = {float(np.interp(1.0, k, abv)):+.3f}"
+                     if mr.above.any() else ""))
 
     print("\n  The signature to look for: the TEMPLATE term at k ~ 1-3 shrinks "
           "with x while\n  the PROFILE term grows (NFW is a poor description "
@@ -397,15 +360,18 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
           "mean something else is going on.")
 
     # --- the shell spectra -----------------------------------------------------
-    # U*(1) - U*(x) is exactly <delta_m^shell delta_x>, the cross spectrum of
-    # the matter between r200m and x r200m with the tracer. It is a difference
+    # U*(1) - U*(x) is exactly <delta_m^shell delta_e>, the cross spectrum of
+    # the matter between r200m and x r200m with the gas. It is a difference
     # of two measurements, so it carries no model at all.
     print("\n" + "=" * 70)
-    print("SHELL SPECTRA      U*(1) - U*(x) = <delta_m^shell delta_x>")
+    print("SHELL SPECTRA      U*(1) - U*(x) = <delta_m^shell delta_e>")
+    if mr.hidden.any():
+        print("  (with bins masked below M_r this also holds masked-halo matter "
+              "captured by the growing resolved spheres)")
     print("=" * 70)
     ks = [kk for kk in K_TABLE if kk <= k[-1]]
     print("     x    " + "".join(f"    k={kk:<6g}" for kk in ks)
-          + f"   (as a fraction of P^m{tag})")
+          + "   (as a fraction of P^me)")
     for x in apertures:
         if x == 1.0:
             continue
@@ -421,7 +387,7 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
     x_top = apertures[-1]
     if x_top > 1.0:
         print(f"\n  per-bin shell contribution at x = {x_top:g}, "
-              f"as a fraction of P^m{tag} at k = 1:")
+              f"as a fraction of P^me at k = 1:")
         shell_i = runs[x_top]['shell_per_bin']
         idx = np.flatnonzero(occ)
         for j in idx[:: max(1, idx.size // 10)]:
@@ -432,16 +398,32 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
               "power'.")
 
     # --- figures ---------------------------------------------------------------
-    stem = (f'expB_aperture_{tag}_{cfg.mass_def}_nb{cfg.nbins}'
-            f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
-            f'{"" if opts.split_logm is None else f"_Mr{opts.split_logm:.2f}"}'
-            f'{"" if opts.ref_logm is None else f"_ref{logM_cen[ref]:.2f}"}'
-            f'_ap{"-".join(f"{x:g}" for x in apertures)}'
-            f'_mode{"-".join(modes)}_w{weights}{profile_tag(cfg)}'
-            f'{"" if bool(data.get("self_pairs_removed", False)) else "_shotpresent"}')
+    def _save(fig, kind):
+        """Save one of this run's figures, under a stem naming the whole run.
 
-    def _save(fig, this_stem):
-        path = plot_path('pme_reconstruction', cfg.feedback, stem=this_stem)
+        Everything that would make two runs differ has to appear here, or the
+        second would overwrite the first -- which for this experiment means the
+        apertures, the weights and the extrapolation modes as well as the
+        binning. `conc` is empty at the default so that adding a profile switch
+        does not rename every existing plot.
+        """
+        # Every model choice that moves the answer has to be in the name, or
+        # two runs overwrite each other: c(M,z) enters u_m, and the linear
+        # P(k) enters T(k,M) through the halo model. Empty at the defaults,
+        # so turning a knob does not rename every existing plot.
+        models = ''
+        if cfg.concentration_source != PmxConfig.concentration_source:
+            models += f'_conc-{cfg.concentration_source}'
+        if cfg.colossus_conc_model != PmxConfig.colossus_conc_model:
+            models += f'_cm-{cfg.colossus_conc_model}'
+        if cfg.power_spectrum != PmxConfig.power_spectrum:
+            models += f'_ps-{cfg.power_spectrum}'
+        stem = (f'expB_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}'
+                f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
+                f'{"" if mr.is_default else mr.tag()}'
+                f'_ap{"-".join(f"{x:g}" for x in apertures)}'
+                f'_mode{"-".join(modes)}_w{weights}{models}')
+        path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
         ensure_parents(path)
         pl.save_figure(fig, path)
         print(f"[B][plot] {path}")
@@ -450,28 +432,24 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
     err_mode = modes[-1] if modes else None
     pdata = pl.ApertureData(
         k=k, k_Ny=k_Ny, apertures=apertures, runs=runs, P_true=P_true,
-        logM_cen=logM_cen, occupied=occ, x_sym=x_sym, error_mode=err_mode,
-        P_halo_ref=P_halo_x[ref],
+        logM_cen=logM_cen, occupied=occ, error_mode=err_mode,
+        P_halo_ref=P_halo_gas[ref],
         r200m=np.array([r200m_of_M(m, cfg.rhobar_m) if m > 0 else np.nan
                         for m in M_i]))
 
-    p_main = _save(pl.aperture_panel(pdata), stem)
-    _save(pl.shell_mass_figure(pdata),
-          stem.replace('expB_aperture', 'expB_shellmass'))
+    p_main = _save(pl.aperture_panel(pdata), 'aperture')
+    _save(pl.shell_mass_figure(pdata), 'shellmass')
 
     # --- save ------------------------------------------------------------------
     payload = dict(
-        k_center=k, tracer=tracer, weights=weights,
+        k_center=k, weights=weights,
         apertures=np.array(apertures, float), f_i=np.asarray(
             runs[1.0]['f_i'], float),
         logM_cen=logM_cen, M_mean=M_i, counts=counts, ref_bin=ref,
-        M_ref=M_ref, P_true=P_true, P_halo_x_ref=P_halo_x[ref],
-        resolved=resolved, M_min=M_min,
-        split_logm=(np.nan if opts.split_logm is None
-                    else float(opts.split_logm)),
+        P_true=P_true, P_halo_gas_ref=P_halo_gas[ref],
         modes=np.array(modes, dtype=object).astype(str),
-        self_pairs_removed=bool(data.get('self_pairs_removed', False)),
     )
+    payload.update(mr.payload())
     for x in apertures:
         r = runs[x]
         key = f'{x:g}'.replace('.', 'p')
@@ -479,10 +457,13 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
         payload[f'f_cat_{key}'] = r['f_cat']
         payload[f'w_model_{key}'] = r['w_model']
         payload[f'f_out_{key}'] = r['f_out']
+        payload[f'f_u_cat_{key}'] = r['f_u_cat']
+        payload[f'f_u_model_{key}'] = r['f_u_model']
         payload[f'M_ap_{key}'] = r['M_ap']
         payload[f'R_star_{key}'] = r['R_star']
         payload[f'R_star_i_{key}'] = r['R_star_i']
         payload[f'U_star_{key}'] = r['U_star']
+        payload[f'V_star_{key}'] = r['V_star']
         payload[f'R_model_{key}'] = r['R_model']
         payload[f'beta_out_lowk_{key}'] = r['beta_out_lowk']
         if 'shell' in r:
@@ -505,15 +486,11 @@ def run_experiment_B(cfg, data, apertures, opts, tracer=None,
 # 7c.  Figures
 # ==============================================================================
 def main():
-    ap = argparse.ArgumentParser(
-        description="Experiment B: grow the halo membership sphere to x r200m "
-                    "and watch where the reconstruction error goes.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    add_target_args(ap)
-    add_binning_args(ap)
-    add_concentration_args(ap)
-    add_selfpair_args(ap)
-    add_experiment_a_args(ap)          # --extrap and --power-spectrum reused
+    # --extrap and --power-spectrum come from base_parser: U is built by the
+    # same pmxlib.reconstruction.compute_U at every aperture.
+    ap = base_parser(
+        "Experiment B: grow the halo membership sphere to x r200m and watch "
+        "where the reconstruction error goes.", validate=False)
     g = ap.add_argument_group('Experiment B')
     g.add_argument('--apertures', nargs='+', type=float,
                    default=[1.0, 1.2, 1.5, 2.0],
@@ -541,19 +518,14 @@ def main():
     g.add_argument('--chunk-particles', type=float, default=5e7,
                    help="expected member particles per membership chunk. The "
                         "aperture^3 scaling is applied on top of this.")
-    ap.add_argument('--recompute', action='store_true',
-                    help="ignore any cached spectra bundle and re-measure")
     args = ap.parse_args()
 
     cfg = PmxConfig.from_args(args)
-    opts = ExperimentAOptions.from_args(args)
 
     data = load_or_measure(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max,
-                           cfg.nkbins, recompute=args.recompute,
-                           self_pairs=cfg.subtract_self_pairs)
-    use_self_pair_corrected(cfg, data, subtract=cfg.subtract_self_pairs)
+                           cfg.nkbins, recompute=args.recompute)
 
-    run_experiment_B(cfg, data, args.apertures, opts, weights=args.weights,
+    run_experiment_B(cfg, data, args.apertures, weights=args.weights,
                      allow_compute=args.allow_compute,
                      recompute=args.recompute_apertures,
                      chunk_particles=args.chunk_particles)

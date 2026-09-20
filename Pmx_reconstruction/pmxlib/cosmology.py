@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Cosmology for the Pmx reconstruction.
-
-Every function here is a pure function of an explicit `sim_params` dict (from
-utils.sim_params.get_sim_params) rather than of module globals, so that two
-callers in one process cannot disagree about the cosmology.
-
-This module used to live inside the Experiment A section of
-predict_Pmx_from_Phx.py, which is why RHO_CRIT_0 and rhobar_m were declared None
-at the top of that file and only filled in 1300 lines later. Sections 1 and 2
-(the NFW profile and c(M,z)) depend on them, so they belong here, ahead of both.
-"""
+"""Cosmology for the Pmx reconstruction."""
 import numpy as np
 import astropy.units as u
 from astropy.cosmology import FlatLambdaCDM
@@ -20,17 +10,8 @@ from utils.pipeline_paths import DATA_ROOT, ensure_parents
 DELTA_C = 1.686               # spherical-collapse threshold
 DELTA_HALO = 200.0            # w.r.t. MEAN background: matches m200b and r200m_of_M
 
-# Sum of neutrino masses [eV] handed to CAMB. The parameter file does not carry
-# it, and Omega_m there is the TOTAL matter density, so setting a non-zero mnu
-# here without also adjusting omch2 would change Omega_m. FLAMINGO's fiducial
-# (DES Y3 3x2pt+all) uses 0.06 eV; set it here if you want that, and note that
-# it suppresses P_lin by ~ a few per cent at the k of interest. It cancels to
-# first order in T(k,M), which is a ratio, so the default of 0 is safe for
-# Experiment A even though it is not the simulation's cosmology.
-NEUTRINO_MASS_EV = 0.0
+NEUTRINO_MASS_EV = 0
 
-# CAMB table extent. It has to bracket everything colossus will ask for when it
-# builds its sigma(R) interpolator, which reaches well beyond the k of the box.
 CAMB_KMIN, CAMB_KMAX, CAMB_NK = 1e-6, 3e2, 1000
 
 
@@ -42,31 +23,13 @@ def astropy_cosmology(sim_params):
 
 
 def critical_density_h_units(sim_params):
-    """rho_crit(z=0) in (Msun/h)/(Mpc/h)^3, from astropy.
-
-    The h's cancel, so this is numerically the same as rho_crit in
-    h^2 Msun/Mpc^3, i.e. the familiar 2.77536627e11.
-
-    The `/ ac.h ** 2` is the whole content of this function. Dropping it gives a
-    density in Msun/Mpc^3, low by a factor h^2 = 0.4638, which puts every
-    reconstruction weight n_i M_i / rhobar_m out by 2.156 and every r200m out by
-    +29% without raising anything.
-    """
+    """rho_crit(z=0) in (Msun/h)/(Mpc/h)^3, from astropy."""
     ac = astropy_cosmology(sim_params)
     return float((ac.critical_density0 / ac.h ** 2).to(u.Msun / u.Mpc ** 3).value)
 
 
 def mean_matter_density(sim_params):
-    """rhobar_m = Omega_m * rho_crit(0), in (Msun/h)/(Mpc/h)^3.
-
-    Comoving mean matter density does not evolve in these units, so this is
-    redshift-independent. Numerically identical to the module-level `rhobar_m`
-    that predict_Pmx_from_Phx.py used to hold.
-
-    A function rather than a module constant on purpose: the old
-    `rhobar_m = None`, filled in far below, was what made the import order of
-    that file fragile.
-    """
+    """rhobar_m = Omega_m * rho_crit(0), in (Msun/h)/(Mpc/h)^3."""
     return sim_params['omega_m'] * critical_density_h_units(sim_params)
 
 
@@ -74,14 +37,7 @@ def camb_linear_power_table(sim_params, sim_name):
     """P_lin(k, z=0) from CAMB, cached on disk as a colossus-readable table.
 
     Returns the path to a two-column file of log10(k [h/Mpc]), log10(P
-    [(Mpc/h)^3]), normalised so that sigma_8 equals the value in the parameter
-    file. CAMB is run with an arbitrary A_s and the spectrum rescaled by
-    (sigma8_target / sigma8_camb)^2, which is exact in linear theory and avoids
-    having to solve for A_s.
-
-    The table is what makes the whole stack self-consistent: colossus computes
-    sigma(M), the Tinker+08 mass function and the Tinker+10 bias from this same
-    spectrum rather than from its built-in Eisenstein & Hu approximation.
+    [(Mpc/h)^3]).
     """
     import camb
 

@@ -1,0 +1,11 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+
+# macOS
+.DS_Store
+
+# Generated outputs and cached measurements. Both are large, both are
+# reproducible from the simulation files, and neither has ever been tracked.
+data/
+plots/

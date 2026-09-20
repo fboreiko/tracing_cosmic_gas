@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""NFW profile u_m(k|M) and the concentration-mass relation c(M, z).
-
-Was sections 1 and 2 of predict_Pmx_from_Phx.py. `rhobar_m` and the two
-concentration switches used to be module globals -- and the switches were
-rebound from the outside by measure_u_tilde.py and plot_omega_weights.py, so
-c(M,z) returned a different number depending on who had imported the module and
-how far through main() the interpreter was. They are now arguments.
-"""
+"""NFW profile u_m(k|M) and the concentration-mass relation c(M, z)."""
 import warnings
 
 import numpy as np
@@ -21,22 +14,14 @@ from Pmx_reconstruction.pmxlib.cosmology import DELTA_HALO
 _conc_warned = False
 
 
-# ==============================================================================
-# 1.  NFW PROFILE  u_m(k|M)   (normalized: u_m -> 1 as k -> 0)
-# ==============================================================================
-def delta_vir_200m():
-    """Halo mass is M200m: mean interior density = 200 * rhobar_m."""
-    return 200.0
-
+# NFW PROFILE  u_m(k|M)   (normalized: u_m -> 1 as k -> 0)
 
 def r200m_of_M(M, rhobar_m):
     """Comoving radius r200m [Mpc/h] for M200m [Msun/h].
 
     M = (4/3) pi r^3 * 200 * rhobar_m  =>  r = (3M / (4 pi 200 rhobar_m))^(1/3).
-    Using the comoving rhobar_m gives a comoving radius, consistent with a
-    comoving-k profile transform.
     """
-    return (3.0 * M / (4.0 * np.pi * delta_vir_200m() * rhobar_m)) ** (1.0 / 3.0)
+    return (3.0 * M / (4.0 * np.pi * 200.0 * rhobar_m)) ** (1.0 / 3.0)
 
 
 def u_nfw(k, M, c, rhobar_m, trunc=1.0):
@@ -46,16 +31,7 @@ def u_nfw(k, M, c, rhobar_m, trunc=1.0):
 
     `trunc` moves the outer edge to trunc * r200m. Since rs is fixed by
     c = r200m/rs, a truncation radius of trunc * r200m is trunc * c in units of
-    rs, so the whole generalisation is c -> c_t = trunc * c -- but it has to be
-    made in ALL FOUR places c appears, the three integrand terms and the mass
-    normalisation mc, since mc is what makes u -> 1 as k -> 0. Changing the
-    radius alone would normalise the profile to the wrong mass.
-
-    NOTE what trunc does and does not mean. The halo still contains M: the same
-    mass is spread over a larger radius, so rho_s falls as trunc grows. It does
-    NOT bolt extra mass onto an unchanged inner profile -- that would break the
-    sum rule, where the weight is n_i M_i with M_i the catalogue M200b. The
-    profile shape changes; the mass budget does not.
+    rs, so the whole generalisation is c -> c_t = trunc * c.
     """
     r200 = r200m_of_M(M, rhobar_m)
     rs = r200 / c
@@ -71,31 +47,21 @@ def u_nfw(k, M, c, rhobar_m, trunc=1.0):
     return term / mc
 
 
-# ==============================================================================
-# 2.  CONCENTRATION-MASS RELATION  c(M, z)
-# ==============================================================================
-# A simple power law in M200m, with parameters chosen to sit on the Diemer+19 /
-# FLAMINGO-DMO median at these redshifts (c ~ 5-6 at cluster scales, ~9-10 for
-# small halos). Swap in an exact colossus call if you want; with x = gas the
-# reconstruction is only mildly sensitive to c, since P_halo_gas already carries the
-# gas profile and u_m only redistributes the *matter* weight.
+# CONCENTRATION-MASS RELATION  c(M, z)
+
+# Published relations via colossus, which model is chosen by
+# --concentration-model (diemer19, duffy08, ishiyama21, ...). 
 #
-# That last sentence does NOT survive the switch to x = dm or x = matter. There
-# the measured P_halo_dm (or P_halo_matter) carries the true matter profile and
-# the truth goes as u_true^2, so the reconstruction/truth ratio at high k is
-# essentially u_model/u_true and this function is being tested directly. Tune
-# c0/alpha before concluding anything about the halo-model identity from a
-# high-k residual in either mode.
-#
-# 'powerlaw' is the built-in fit below and is the DEFAULT, so that upgrading
-# this file does not silently move every existing plot: u_m enters the baseline
-# reconstruction, not just Experiment A. 'colossus' swaps in a published
-# relation and is the better choice for new work -- especially in 'matter_dm'
-# and 'matter_matter' modes, where the reconstruction/truth ratio at high k is
-# close to u_model/u_true and this function is what is really being tested.
-def _concentration_colossus(M, z, colossus_model, sim_params, sim_name):
+# `source` is kept as a dispatch point so a relation that is not a colossus
+# model (a FLAMINGO-DMO fit, say) can be added without touching every caller:
+# register it in CONCENTRATION_SOURCES and give it a branch in concentration().
+CONCENTRATION_SOURCES = ('colossus',)
+
+
+def _concentration_colossus(M, z, colossus_model, sim_params, sim_name,
+                            power_spectrum):
     global _conc_warned
-    ensure_colossus_cosmology(sim_params, sim_name)
+    ensure_colossus_cosmology(sim_params, sim_name, power_spectrum)
     scalar = np.isscalar(M)
     M = np.atleast_1d(np.asarray(M, dtype=float))
     # The unresolved-mass integral reaches down to 10^8 Msun/h, below the
@@ -115,17 +81,25 @@ def _concentration_colossus(M, z, colossus_model, sim_params, sim_name):
     return float(c[0]) if scalar else c
 
 
-def concentration(M, z, source='powerlaw', colossus_model='diemer19',
-                  sim_params=None, sim_name='flamingo'):
-    """Concentration-mass relation, c(M200m, z)."""
+def concentration(M, z, source='colossus', colossus_model='diemer19',
+                  sim_params=None, sim_name='flamingo', power_spectrum='camb'):
+    """Concentration-mass relation, c(M200m, z).
+
+    `power_spectrum` is not used for c itself -- colossus_conc.concentration
+    takes no ps_args and uses the cosmology's built-in spectrum -- but it names
+    the colossus cosmology, and this may be what registers it. See
+    ensure_colossus_cosmology.
+    """
     if source == 'colossus':
-        return _concentration_colossus(M, z, colossus_model, sim_params, sim_name)
-    c0, Mpiv, alpha, beta = 7.5, 1e12, 0.090, 0.65
-    return c0 * (M / Mpiv) ** (-alpha) * (1.0 + z) ** (-beta)
+        return _concentration_colossus(M, z, colossus_model, sim_params,
+                                       sim_name, power_spectrum)
+    raise ValueError(f"unknown concentration source {source!r}; "
+                     f"available: {', '.join(CONCENTRATION_SOURCES)}")
 
 
-def concentration_from_cfg(M, z, cfg):
+def conc_of(cfg, M, z):
     """concentration() with the switches taken from a PmxConfig."""
     return concentration(M, z, source=cfg.concentration_source,
                          colossus_model=cfg.colossus_conc_model,
-                         sim_params=cfg.sim_params, sim_name=cfg.sim_name)
+                         sim_params=cfg.sim_params, sim_name=cfg.sim_name,
+                         power_spectrum=cfg.power_spectrum)

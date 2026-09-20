@@ -30,15 +30,6 @@ def compute_delta_2d(pos, box, ngrid, weights, nthread=4):
     return delta_2d
 
 
-def compute_delta_3d_projected(pos, box, ngrid, weights, nthread=4):
-    """Compute 3D overdensity field with TSC and project to 2D by averaging over z."""
-    dens_3d = tsc_parallel(pos, ngrid, box, weights=weights, nthread=nthread)
-    dens_avg = np.sum(dens_3d) / dens_3d.size
-    delta_3d = dens_3d / dens_avg - 1
-    delta_2d = np.mean(delta_3d, axis=2)
-    return delta_2d
-
-
 def compute_delta_field_and_mass(
     tracer,
     sim_name,
