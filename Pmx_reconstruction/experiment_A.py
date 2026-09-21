@@ -320,7 +320,7 @@ def main():
 
     from Pmx_reconstruction.pmxlib.bundle import load_or_measure
     data = load_or_measure(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max,
-                           cfg.nkbins, recompute=args.recompute,
+                           recompute=args.recompute,
                            recompute_3d=args.recompute_3d)
     run_experiment_A(cfg, data)
 

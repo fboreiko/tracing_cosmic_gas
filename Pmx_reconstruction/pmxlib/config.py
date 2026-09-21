@@ -10,6 +10,7 @@
 import argparse
 from dataclasses import dataclass, fields
 import numpy as np
+from utils.power_spectrum_utils import log_k_bin_edges
 from utils.sim_params import get_sim_params
 
 from Pmx_reconstruction.pmxlib.nfw import CONCENTRATION_SOURCES
@@ -159,7 +160,13 @@ class PmxConfig:
     logm_min: float = 11.0       # log10(M / [Msun/h])
     logm_max: float = 15.0       # (the physics cut is logm_r / logm_max_rec)
     nbins: int = 30              # log-spaced bins between logm_min and logm_max
-    nkbins: int = 600            # None -> max(32, ngrid // 10)
+    # k binning. Log-spaced: on a log axis a linear grid puts 93% of its bins
+    # above k = 1 and four below k = 0.1, so the small scales read as a noise
+    # band and the large ones are four points. kbin_wmin_kf floors the width
+    # at that many fundamentals, below which a bin holds too few modes to mean
+    # anything; see log_k_bin_edges.
+    kbins_per_decade: float = 25.0
+    kbin_wmin_kf: float = 2.0
     centrals_only: bool = True   # satellites repeat their host's m200b; counting
                                  # them would double-count halo mass in n_i M_i
     # Unit of the catalogue's halo-mass array, in Msun/h. Particle masses in
@@ -245,6 +252,25 @@ class PmxConfig:
         return np.pi * self.ngrid_3d / self.box if self.ngrid_3d else None
 
     @property
+    def k_bins(self):
+        """The k bin edges of this run. One definition, used everywhere.
+
+        Built from the PROJECTED grid even when a 3-D measurement is spliced
+        in: the 3-D half is binned onto these same edges, so the splice stays
+        an assignment rather than an interpolation.
+        """
+        k_f = 2.0 * np.pi / self.box
+        k_max = np.sqrt(2.0) * np.pi * self.grid / self.box   # rfft2 corner
+        return log_k_bin_edges(k_f, k_max, self.kbins_per_decade,
+                               self.kbin_wmin_kf * k_f)
+
+    @property
+    def kbin_tag(self):
+        """Filename token for the k binning."""
+        w = '' if self.kbin_wmin_kf == 2.0 else f'w{self.kbin_wmin_kf:g}'
+        return f'kd{self.kbins_per_decade:g}{w}'
+
+    @property
     def rhobar_m(self):
         """Comoving mean matter density in (Msun/h)/(Mpc/h)^3."""
         from Pmx_reconstruction.pmxlib.cosmology import mean_matter_density
@@ -277,8 +303,15 @@ def _add_binning_args(ap):
                    default=_D.logm_max,
                    help="highest bin edge of the cached bundle to read; not a "
                         "physics cut (use --logm-max)")
-    g.add_argument('--nkbins', type=int, default=_D.nkbins,
-                   help="number of k bins in the measured spectra")
+    g.add_argument('--kbins-per-decade', dest='kbins_per_decade', type=float,
+                   default=_D.kbins_per_decade,
+                   help="k bins per decade. The grid is log-spaced, with the "
+                        "width floored at --kbin-wmin fundamentals")
+    g.add_argument('--kbin-wmin', dest='kbin_wmin_kf', type=float,
+                   default=_D.kbin_wmin_kf,
+                   help="floor on the bin width, in units of k_f = 2 pi / L. "
+                        "Below about 2, the mode count per bin stops growing "
+                        "smoothly and the low-k points scatter erratically")
     g.add_argument('--ngrid', type=int, default=None,
                    help="FFT grid size (default: the simulation's ngrid_default)")
     g.add_argument('--nthread', type=int, default=None,

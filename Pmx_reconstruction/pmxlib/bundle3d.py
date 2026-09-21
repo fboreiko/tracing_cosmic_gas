@@ -35,11 +35,10 @@ BUNDLE3D_VERSION = 'v1'
 _STITCH_PREFIXES = ('P_', 'R_star', 'U_star')
 
 
-def bundle3d_path(cfg, nbins, logm_min, logm_max, ngrid3, nkbins):
-    nk = 'default' if nkbins is None else str(nkbins)
+def bundle3d_path(cfg, nbins, logm_min, logm_max, ngrid3):
     stem = (f'spectra3d_{BUNDLE3D_VERSION}_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{logm_min:g}-{logm_max:g}_nb{nbins}'
-            f'_n3d{ngrid3}_nk{nk}'
+            f'_n3d{ngrid3}_{cfg.kbin_tag}'
             f'_{"cen" if cfg.centrals_only else "all"}.npz')
     return DATA_ROOT / cfg.sim_name / 'pme_inputs' / stem
 
@@ -67,7 +66,7 @@ def species_delta_3d(cfg, species, ngrid3):
     return overdensity_3d(dens, ngrid3)
 
 
-def measure_spectra_3d(cfg, nbins, logm_min, logm_max, nkbins, k_bins,
+def measure_spectra_3d(cfg, nbins, logm_min, logm_max, k_bins,
                        f_c, f_g, ngrid3):
     """measure_spectra's 3-D twin: same spectra, same k edges, same keys."""
     print("=" * 70)
@@ -172,7 +171,7 @@ _REQUIRED_KEYS_3D = ('k_center', 'nmodes', 'nmodes_eff', 'k_eff', 'counts',
                      'P_dm_dm', 'P_gas_gas', 'P_shot_dm', 'P_shot_gas')
 
 
-def load_or_measure_3d(cfg, nbins, logm_min, logm_max, nkbins, k_bins,
+def load_or_measure_3d(cfg, nbins, logm_min, logm_max, k_bins,
                        f_c, f_g, recompute=False):
     """Load the cached 3-D bundle if it exists, otherwise measure and write it.
 
@@ -180,7 +179,7 @@ def load_or_measure_3d(cfg, nbins, logm_min, logm_max, nkbins, k_bins,
     is refused rather than interpolated onto.
     """
     ngrid3 = cfg.grid_3d
-    path = bundle3d_path(cfg, nbins, logm_min, logm_max, ngrid3, nkbins)
+    path = bundle3d_path(cfg, nbins, logm_min, logm_max, ngrid3)
 
     data = None
     if path.exists() and not recompute:
@@ -202,7 +201,7 @@ def load_or_measure_3d(cfg, nbins, logm_min, logm_max, nkbins, k_bins,
     if data is None:
         if recompute and path.exists():
             print("--recompute-3d given: ignoring the existing 3-D bundle.")
-        data = measure_spectra_3d(cfg, nbins, logm_min, logm_max, nkbins,
+        data = measure_spectra_3d(cfg, nbins, logm_min, logm_max,
                                   k_bins, f_c, f_g, ngrid3)
         ensure_parents(path)
         np.savez_compressed(path, **data)

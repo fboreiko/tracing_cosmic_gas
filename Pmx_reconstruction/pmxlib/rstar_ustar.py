@@ -34,7 +34,7 @@ WHAT IS IN THE CACHE
                 handed to the shared subtract_self_pairs.
     Binning:    k_center, k_bins, counts, f_i, f_part, M_mean, logM_cen,
                 logM_edges
-    Provenance: box, ngrid, nkbins, nbins, logm_min, logm_max, redshift,
+    Provenance: box, ngrid, kbins_per_decade, nbins, logm_min, logm_max, redshift,
                 feedback, mass_def, centrals_only, aperture, f_c, f_g, version
 
     'aperture' is the membership radius in units of r200m, stored as
@@ -65,8 +65,9 @@ from scipy.spatial import cKDTree
 from utils.catalog_loaders import load_particle_properties
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path)
-from utils.power_spectrum_utils import (Binner3D, compute_2d_fft,
-                                        compute_3d_fft, compute_k_grid_2d)
+from utils.power_spectrum_utils import (Binner3D, bin_mode_stats,
+                                        compute_2d_fft, compute_3d_fft,
+                                        compute_k_grid_2d)
 
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos
 from Pmx_reconstruction.pmxlib.bundle import _load_or_compute_delta
@@ -100,12 +101,11 @@ def cache_path(cfg, aperture=1.0, ngrid3=None):
     rather than extra keys in the 2-D one, so the caches already on disk stay
     valid and only what is missing gets measured.
     """
-    nk = 'default' if cfg.nkbins is None else str(cfg.nkbins)
     ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
     grid = f'ngrid{cfg.grid}' if ngrid3 is None else f'3d_n{int(ngrid3)}'
     stem = (f'rstar_ustar_{CACHE_VERSION}_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{cfg.logm_min:g}-{cfg.logm_max:g}_nb{cfg.nbins}'
-            f'_{grid}_nk{nk}'
+            f'_{grid}_{cfg.kbin_tag}'
             f'_{"cen" if cfg.centrals_only else "all"}{ap}.npz')
     return DATA_ROOT / cfg.sim_name / 'pme_inputs' / stem
 
@@ -247,16 +247,20 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
     to add a cubic grid to a 2-D cache that already exists.
     """
     ngrid, nthread, nbins = cfg.grid, cfg.threads, cfg.nbins
-    k_bins = np.asarray(data['k_bins'])
     k_grid = compute_k_grid_2d(ngrid, cfg.box)
     f_c, f_g = float(data['f_c']), float(data['f_g'])
     if not (want_2d or ngrid3):
         raise ValueError("nothing to measure: want_2d is False and ngrid3 is None")
+    k_bins = cfg.k_bins
+    nmodes, k_center = bin_mode_stats(k_grid, k_bins)
+    if not np.allclose(k_bins, np.asarray(data['k_bins'], dtype=float)):
+        raise SystemExit("The k binning here differs from the spectra bundle's. "
+                         "The two are differenced against each other, so they "
+                         "must share --kbins-per-decade, --kbin-wmin and "
+                         "--ngrid.")
 
     def _binned(prod):
-        """binned_spectrum, dropping the bin edges this function never uses."""
-        _, kc, Pk = binned_spectrum(cfg, prod, k_grid, cfg.nkbins)
-        return kc, Pk
+        return binned_spectrum(cfg, prod, k_grid)
 
     binner3 = None
     if ngrid3:
@@ -412,7 +416,8 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
         m2_bin_gas=m2_bin_gas, m2_tot_gas=m2_tot_gas,
         mass_bin_dm=mass_bin_species['dm'], mass_bin_gas=mass_bin_species['gas'],
         assigned_over_m200b_median=float(np.nanmedian(q)),
-        box=cfg.box, nkbins=(-1 if cfg.nkbins is None else cfg.nkbins),
+        box=cfg.box, kbins_per_decade=cfg.kbins_per_decade,
+        kbin_wmin_kf=cfg.kbin_wmin_kf,
         nbins=nbins, logm_min=cfg.logm_min, logm_max=cfg.logm_max,
         redshift=cfg.z, feedback=cfg.feedback, mass_def=cfg.mass_def,
         centrals_only=cfg.centrals_only, aperture=float(aperture),
@@ -420,36 +425,22 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
 
     # --- spectra, one grid at a time ------------------------------------------
     out_2d = out_3d = None
-    k_bundle = np.asarray(data['k_center'], dtype=float)
+    if not np.any(mass_bin > 0):
+        raise SystemExit("No occupied bin carried any assigned mass; nothing "
+                         "was measured. Check the catalogue and the mass range.")
 
     if want_2d:
         print("\nPer-bin cross spectra R*_i (projected) ...")
-        if not np.any(mass_bin > 0):
-            raise SystemExit("No occupied bin carried any assigned mass; "
-                             "nothing was measured. Check the catalogue and "
-                             "the mass range.")
-        k_center = None
-
-        def _b2(prod):
-            nonlocal k_center
-            k_center, Pk = _binned(prod)
-            return Pk
-
         R_star, U_star = _bin_spectra(
             dens_bin, M_tot / ngrid ** 2, gas_fft, m_fft,
-            lambda d: compute_2d_fft(d, ngrid), _b2, mass_bin > 0,
-            P_shot_2d.size)
+            lambda d: compute_2d_fft(d, ngrid), _binned, mass_bin > 0,
+            k_center.size)
         del dens_bin, m_fft
         gc.collect()
         _closure('2d', R_star, U_star, data, suffix='_2d')
-        if k_center.shape != k_bundle.shape or not np.allclose(k_center, k_bundle):
-            print(f"  WARNING: k binning differs from the spectra bundle "
-                  f"({k_center.size} bins here, {k_bundle.size} there). The "
-                  f"cache stores the grid these spectra were measured on; "
-                  f"callers that combine them with bundle quantities must "
-                  f"check it.")
-        out_2d = dict(shared, k_center=k_center, ngrid=ngrid,
-                      R_star_gas=R_star, U_star_gas=U_star, P_shot_gg=P_shot_2d)
+        out_2d = dict(shared, k_center=k_center, nmodes=np.asarray(nmodes),
+                      ngrid=ngrid, R_star_gas=R_star, U_star_gas=U_star,
+                      P_shot_gg=P_shot_2d)
 
     if ngrid3:
         print(f"\nPer-bin cross spectra R*_i ({ngrid3}^3) ...")
@@ -598,15 +589,14 @@ def main():
     args = ap.parse_args()
     cfg = PmxConfig.from_args(args)
 
-    bpath = bundle_path(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max, cfg.grid,
-                        cfg.nkbins)
+    bpath = bundle_path(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max, cfg.grid)
     if not bpath.exists():
         raise SystemExit(f"Spectra bundle missing:\n  {bpath}\n"
                          "Build it by running experiment_A or experiment_B.")
     # Through load_or_measure rather than straight off disk: with --ngrid-3d
     # the R*/U* pass needs the bundle's 3-D self-pair spectrum.
     data = load_or_measure(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max,
-                           cfg.nkbins, recompute_3d=args.recompute_3d)
+                           recompute_3d=args.recompute_3d)
 
     cache = load_or_measure_rstar_ustar(cfg, data, recompute=args.recompute,
                             chunk_particles=args.chunk_particles,

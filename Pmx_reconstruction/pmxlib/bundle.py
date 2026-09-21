@@ -14,20 +14,19 @@ from utils.catalog_loaders import load_particle_properties
 from utils.delta_fields import compute_delta_2d, compute_delta_field_and_mass
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path, delta_2d_path)
-from utils.power_spectrum_utils import (compute_2d_fft, compute_k_grid_2d,
-                                        mode_stats_2d)
+from utils.power_spectrum_utils import (bin_mode_stats, compute_2d_fft,
+                                        compute_k_grid_2d)
 
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos, log_mass_bin_edges
 from Pmx_reconstruction.pmxlib.painting import binned_spectrum
 from Pmx_reconstruction.pmxlib.self_pairs import (measure_shot_spectra,
                                                  subtract_self_pairs)
 
-def bundle_path(cfg, nbins, logm_min, logm_max, ngrid, nkbins):
+def bundle_path(cfg, nbins, logm_min, logm_max, ngrid):
     """One npz per distinct measurement configuration."""
-    nk = 'default' if nkbins is None else str(nkbins)
-    stem = (f'spectra_v4_{cfg.feedback}_{cfg.mass_def}'
+    stem = (f'spectra_v5_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{logm_min:g}-{logm_max:g}_nb{nbins}'
-            f'_ngrid{ngrid}_nk{nk}'
+            f'_ngrid{ngrid}_{cfg.kbin_tag}'
             f'_{"cen" if cfg.centrals_only else "all"}.npz')
     return DATA_ROOT / cfg.sim_name / 'pme_inputs' / stem
 
@@ -113,7 +112,7 @@ def _load_or_compute_delta(cfg, label):
     return field
 
 
-def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
+def measure_spectra(cfg, nbins, logm_min, logm_max):
     """Measure P_halo_gas and P_halo_dm per mass bin, plus the truths.
 
     Returns a dict ready to be written to the npz bundle.
@@ -134,6 +133,16 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
 
     k_grid = compute_k_grid_2d(cfg.grid, cfg.box)
     k_Nyquist = np.pi * cfg.grid / cfg.box
+    k_bins = cfg.k_bins
+    # k_center is the mode-weighted mean |k| of the bin, not the midpoint of
+    # its edges: that is the k the bin's value refers to, and where a bin is
+    # wide compared to the k it sits at -- the lowest few -- the two differ by
+    # several per cent. Models are evaluated on this k, so they and the
+    # measurement refer to the same place.
+    nmodes, k_center = bin_mode_stats(k_grid, k_bins)
+    print(f"  k binning: {k_center.size} log bins, "
+          f"{cfg.kbins_per_decade:g}/decade, width floored at "
+          f"{cfg.kbin_wmin_kf:g} k_f; k = {k_center[0]:.4f} .. {k_center[-1]:.3f}")
 
     # --- the matter field --------------------------------------------------
     # delta_m = f_c delta_dm + f_g delta_gas.
@@ -143,18 +152,18 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
 
     # --- the truths --------------------------------------------------------
     def _binned(prod):
-        return binned_spectrum(cfg, prod, k_grid, nkbins)
+        return binned_spectrum(cfg, prod, k_grid)
 
-    k_bins, k_center, P_matter_gas = _binned((m_fft * np.conj(gas_fft)).real)
-    _, _, P_dm_gas = _binned((dm_fft * np.conj(gas_fft)).real)
-    _, _, P_dm_dm = _binned(np.abs(dm_fft) ** 2)
-    _, _, P_gas_gas = _binned(np.abs(gas_fft) ** 2)
+    P_matter_gas = _binned((m_fft * np.conj(gas_fft)).real)
+    P_dm_gas = _binned((dm_fft * np.conj(gas_fft)).real)
+    P_dm_dm = _binned(np.abs(dm_fft) ** 2)
+    P_gas_gas = _binned(np.abs(gas_fft) ** 2)
 
     del m_fft
     gc.collect()
 
     # --- the self-pair spectra ---------------------------------------------
-    shot = measure_shot_spectra(cfg, nkbins)
+    shot = measure_shot_spectra(cfg)
 
     # --- halo catalogue and log-spaced mass bins ---------------------------
     print("\nHalo catalogue:")
@@ -182,8 +191,8 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
         halo_fft = compute_2d_fft(delta_h, cfg.grid)
         del delta_h, pos_i
 
-        _, _, P_halo_gas[i] = _binned((gas_fft * np.conj(halo_fft)).real)
-        _, _, P_halo_dm[i] = _binned((dm_fft * np.conj(halo_fft)).real)
+        P_halo_gas[i] = _binned((gas_fft * np.conj(halo_fft)).real)
+        P_halo_dm[i] = _binned((dm_fft * np.conj(halo_fft)).real)
 
         del halo_fft
         gc.collect()
@@ -202,6 +211,7 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
     return dict(
         k_bins=np.asarray(k_bins),
         k_center=np.asarray(k_center),
+        nmodes=np.asarray(nmodes),
         k_Nyquist=k_Nyquist,
         logM_edges=logM_edges,
         logM_cen=logM_cen,
@@ -226,19 +236,19 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
 
 
 # Keys every bundle must carry; a bundle missing any of them is re-measured.
-_REQUIRED_KEYS = ('k_center', 'counts', 'M_mean', 'f_c', 'f_g',
+_REQUIRED_KEYS = ('k_center', 'k_bins', 'nmodes', 'counts', 'M_mean', 'f_c', 'f_g',
                   'P_halo_gas', 'P_halo_dm', 'P_matter_gas', 'P_dm_gas',
                   'P_dm_dm', 'P_gas_gas', 'P_shot_dm', 'P_shot_gas')
 
 
-def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False,
+def load_or_measure(cfg, nbins, logm_min, logm_max, recompute=False,
                     recompute_3d=False):
     """Load the cached bundle if it exists, otherwise measure and write it.
 
     With cfg.ngrid_3d set, the same spectra are also measured on a cubic grid
     and spliced in below cfg.k_split; see pmxlib.bundle3d.
     """
-    path = bundle_path(cfg, nbins, logm_min, logm_max, cfg.grid, nkbins)
+    path = bundle_path(cfg, nbins, logm_min, logm_max, cfg.grid)
 
     data = None
     if path.exists() and not recompute:
@@ -259,7 +269,7 @@ def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False,
         if recompute and path.exists():
             print("--recompute given: ignoring the existing bundle and "
                   "re-measuring.")
-        data = measure_spectra(cfg, nbins, logm_min, logm_max, nkbins)
+        data = measure_spectra(cfg, nbins, logm_min, logm_max)
         ensure_parents(path)
         np.savez_compressed(path, **data)
         print(f"\nSpectra bundle saved:\n  {path}")
@@ -271,12 +281,12 @@ def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False,
     from Pmx_reconstruction.pmxlib.bundle3d import (load_or_measure_3d,
                                                     report_stitch, stitch_on_k)
     k_bins = np.asarray(data['k_bins'], dtype=float)
-    d3 = load_or_measure_3d(cfg, nbins, logm_min, logm_max, nkbins, k_bins,
+    d3 = load_or_measure_3d(cfg, nbins, logm_min, logm_max, k_bins,
                             float(data['f_c']), float(data['f_g']),
                             recompute=recompute_3d)
     d3 = subtract_self_pairs(d3, report=False)
     data = stitch_on_k(data, d3, cfg.k_split)
-    data['nmodes_2d'], data['k_eff_2d'] = mode_stats_2d(cfg.grid, cfg.box,
-                                                        k_bins)
+    data['nmodes_2d'], data['k_eff_2d'] = bin_mode_stats(
+        compute_k_grid_2d(cfg.grid, cfg.box), k_bins)
     report_stitch(data)
     return data
