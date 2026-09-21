@@ -4,7 +4,9 @@
 
 The bundle is one npz per distinct measurement configuration, so whichever of
 experiment_A.py and experiment_B.py runs first builds it and the other picks it
-up without re-measuring anything.
+up without re-measuring anything. --geometry is part of that configuration:
+a projected and a cubic run are separate bundles, measured by the same code
+through pmxlib.geometry.
 """
 import gc
 
@@ -14,19 +16,22 @@ from utils.catalog_loaders import load_particle_properties
 from utils.delta_fields import compute_delta_2d, compute_delta_field_and_mass
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path, delta_2d_path)
-from utils.power_spectrum_utils import compute_2d_fft, compute_k_grid_2d
-
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos, log_mass_bin_edges
-from Pmx_reconstruction.pmxlib.painting import binned_spectrum
+from Pmx_reconstruction.pmxlib.geometry import make_geometry
 from Pmx_reconstruction.pmxlib.self_pairs import (measure_shot_spectra,
                                                  subtract_self_pairs)
 
 def bundle_path(cfg, nbins, logm_min, logm_max, ngrid, nkbins):
-    """One npz per distinct measurement configuration."""
+    """One npz per distinct measurement configuration.
+
+    cfg.geom_tag is empty for '2d' and cfg.kmax is normally unset, so a
+    projected run keeps the filename it had before there was a choice.
+    """
     nk = 'default' if nkbins is None else str(nkbins)
+    km = '' if cfg.kmax is None else f'_kmax{cfg.kmax:g}'
     stem = (f'spectra_v4_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{logm_min:g}-{logm_max:g}_nb{nbins}'
-            f'_ngrid{ngrid}_nk{nk}'
+            f'_ngrid{ngrid}{cfg.geom_tag}_nk{nk}{km}'
             f'_{"cen" if cfg.centrals_only else "all"}.npz')
     return DATA_ROOT / cfg.sim_name / 'pme_inputs' / stem
 
@@ -83,7 +88,7 @@ def component_mass_fractions(cfg, source='particles'):
     return f_c, f_g
 
 
-def _load_or_compute_delta(cfg, label):
+def load_or_compute_delta_2d(cfg, label):
     """Load a FLAMINGO 2-D projected delta field, computing it only if absent."""
     path_cfg = {'sim_name': cfg.sim_name, 'feedback': cfg.feedback}
     path = delta_2d_path(path_cfg, label)
@@ -112,50 +117,44 @@ def _load_or_compute_delta(cfg, label):
     return field
 
 
-def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
+def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins, geom):
     """Measure P_halo_gas and P_halo_dm per mass bin, plus the truths.
 
-    Returns a dict ready to be written to the npz bundle.
+    Written once against `geom`, so a projected and a cubic run differ only in
+    which Geometry they are handed. Returns a dict ready for the npz bundle.
     """
     print("=" * 70)
-    print("Measuring FLAMINGO spectra (no cached bundle found)")
+    print(f"Measuring FLAMINGO spectra, {geom.name} (no cached bundle found)")
     print("=" * 70)
+    geom.report()
 
-    # --- gas and DM projected fields --------------------------------------
-    print("\nProjected fields:")
-    delta_gas = _load_or_compute_delta(cfg, 'gas')
-    delta_dm = _load_or_compute_delta(cfg, 'dm')
-
-    gas_fft = compute_2d_fft(delta_gas, cfg.grid)
-    dm_fft = compute_2d_fft(delta_dm, cfg.grid)
-    del delta_gas, delta_dm
+    # --- gas and DM fields --------------------------------------------------
+    print("\nFields:")
+    gas_fft = geom.fft(geom.species_delta('gas'))
+    gc.collect()
+    dm_fft = geom.fft(geom.species_delta('dm'))
     gc.collect()
 
-    k_grid = compute_k_grid_2d(cfg.grid, cfg.box)
-    k_Nyquist = np.pi * cfg.grid / cfg.box
-
-    # --- the matter field --------------------------------------------------
+    # --- the matter field ---------------------------------------------------
     # delta_m = f_c delta_dm + f_g delta_gas.
     print("\nComponent mass fractions:")
     f_c, f_g = component_mass_fractions(cfg)
     m_fft = f_c * dm_fft + f_g * gas_fft
 
-    # --- the truths --------------------------------------------------------
-    def _binned(prod):
-        return binned_spectrum(cfg, prod, k_grid, nkbins)
-
-    k_bins, k_center, P_matter_gas = _binned((m_fft * np.conj(gas_fft)).real)
-    _, _, P_dm_gas = _binned((dm_fft * np.conj(gas_fft)).real)
-    _, _, P_dm_dm = _binned(np.abs(dm_fft) ** 2)
-    _, _, P_gas_gas = _binned(np.abs(gas_fft) ** 2)
+    # --- the truths ---------------------------------------------------------
+    k_center = geom.k_center
+    P_matter_gas = geom.binned((m_fft * np.conj(gas_fft)).real)
+    P_dm_gas = geom.binned((dm_fft * np.conj(gas_fft)).real)
+    P_dm_dm = geom.binned(np.abs(dm_fft) ** 2)
+    P_gas_gas = geom.binned(np.abs(gas_fft) ** 2)
 
     del m_fft
     gc.collect()
 
-    # --- the self-pair spectra ---------------------------------------------
-    shot = measure_shot_spectra(cfg, nkbins)
+    # --- the self-pair spectra ----------------------------------------------
+    shot = measure_shot_spectra(cfg, geom)
 
-    # --- halo catalogue and log-spaced mass bins ---------------------------
+    # --- halo catalogue and log-spaced mass bins ----------------------------
     print("\nHalo catalogue:")
     all_pos, all_mass, bin_index, logM_edges, _ = load_binned_halos(cfg)
     _, logM_cen, M_cen = log_mass_bin_edges(nbins, logm_min, logm_max)
@@ -177,19 +176,19 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
         M_mean[i] = float(np.mean(all_mass[sel]))
         pos_i = np.ascontiguousarray(all_pos[sel], dtype=np.float32)
 
-        delta_h = compute_delta_2d(pos_i, cfg.box, cfg.grid, None, nthread=cfg.threads)
-        halo_fft = compute_2d_fft(delta_h, cfg.grid)
-        del delta_h, pos_i
+        halo_fft = geom.fft(geom.halo_delta(pos_i))
+        del pos_i
 
-        _, _, P_halo_gas[i] = _binned((gas_fft * np.conj(halo_fft)).real)
-        _, _, P_halo_dm[i] = _binned((dm_fft * np.conj(halo_fft)).real)
+        P_halo_gas[i] = geom.binned((gas_fft * np.conj(halo_fft)).real)
+        P_halo_dm[i] = geom.binned((dm_fft * np.conj(halo_fft)).real)
 
         del halo_fft
         gc.collect()
 
         print(f"  bin {i:2d}  logM = {logM_cen[i]:5.2f}  N = {n_in_bin:8d}  "
               f"log10<M> = {np.log10(M_mean[i]):5.2f}  "
-              f"P_halo_gas(k_min) = {P_halo_gas[i, 0]:.4e}  P_halo_dm(k_min) = {P_halo_dm[i, 0]:.4e}")
+              f"P_halo_gas(k_min) = {P_halo_gas[i, 0]:.4e}  "
+              f"P_halo_dm(k_min) = {P_halo_dm[i, 0]:.4e}")
 
     del gas_fft, dm_fft, all_pos, all_mass
     gc.collect()
@@ -199,9 +198,11 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
     M_mean = np.where(counts > 0, M_mean, M_cen)
 
     return dict(
-        k_bins=np.asarray(k_bins),
+        k_bins=np.asarray(geom.k_bins),
         k_center=np.asarray(k_center),
-        k_Nyquist=k_Nyquist,
+        k_Nyquist=geom.k_Nyquist,
+        nmodes=np.asarray(geom.nmodes),
+        k_eff=np.asarray(geom.k_eff),
         logM_edges=logM_edges,
         logM_cen=logM_cen,
         M_mean=M_mean,
@@ -217,6 +218,8 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
         f_g=f_g,
         box=cfg.box,
         ngrid=cfg.grid,
+        geometry=geom.name,
+        deconvolve_window=geom.deconvolve_window,
         redshift=cfg.z,
         mass_def=cfg.mass_def,
         centrals_only=cfg.centrals_only,
@@ -228,6 +231,30 @@ def measure_spectra(cfg, nbins, logm_min, logm_max, nkbins):
 _REQUIRED_KEYS = ('k_center', 'counts', 'M_mean', 'f_c', 'f_g',
                   'P_halo_gas', 'P_halo_dm', 'P_matter_gas', 'P_dm_gas',
                   'P_dm_dm', 'P_gas_gas', 'P_shot_dm', 'P_shot_gas')
+
+
+def report_modes(data, ks=(0.03, 0.05, 0.1, 0.2, 0.3, 0.5, 1.0, 3.0)):
+    """Modes per k bin and the sigma ~ 1/sqrt(N) they imply.
+
+    The number to compare between a 2-D and a 3-D run: the whole reason to
+    paint a cubic grid is what this column does.
+    """
+    if 'nmodes' not in data:
+        return
+    k = np.asarray(data['k_center'], dtype=float)
+    n = np.asarray(data['nmodes'], dtype=float)
+    k_Ny = float(data['k_Nyquist'])
+    print(f"\n[{str(data.get('geometry', '2d'))}] modes per k bin "
+          f"(k_Nyquist = {k_Ny:.3f}):")
+    print("        k      N_modes   sigma ~ 1/sqrt(N)")
+    for kk in ks:
+        if kk >= k[-1]:
+            continue
+        i = int(np.argmin(np.abs(k - kk)))
+        if n[i] <= 0:
+            continue
+        flag = '' if k[i] < k_Ny else '   (above k_Nyquist)'
+        print(f"  {k[i]:7.3f}  {n[i]:10.0f}      {1 / np.sqrt(n[i]):8.2%}{flag}")
 
 
 def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False):
@@ -246,6 +273,7 @@ def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False):
         else:
             print(f"  {data['P_halo_gas'].shape[0]} mass bins, "
                   f"{data['k_center'].size} k bins, "
+                  f"geometry {str(data.get('geometry', '2d'))}, "
                   f"f_c={float(data['f_c']):.4f}, f_g={float(data['f_g']):.4f}. "
                   f"Skipping measurement.")
 
@@ -253,9 +281,11 @@ def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False):
         if recompute and path.exists():
             print("--recompute given: ignoring the existing bundle and "
                   "re-measuring.")
-        data = measure_spectra(cfg, nbins, logm_min, logm_max, nkbins)
+        geom = make_geometry(cfg, nkbins, kmax=cfg.kmax)
+        data = measure_spectra(cfg, nbins, logm_min, logm_max, nkbins, geom)
         ensure_parents(path)
         np.savez_compressed(path, **data)
         print(f"\nSpectra bundle saved:\n  {path}")
 
+    report_modes(data)
     return subtract_self_pairs(data)

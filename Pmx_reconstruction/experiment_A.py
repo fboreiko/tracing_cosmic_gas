@@ -242,6 +242,8 @@ def run_experiment_A(cfg, data):
             models += f'_cm-{cfg.colossus_conc_model}'
         if cfg.power_spectrum != PmxConfig.power_spectrum:
             models += f'_ps-{cfg.power_spectrum}'
+        if cfg.geometry != PmxConfig.geometry:
+            models += f'_{cfg.geometry}{cfg.grid}'
         stem = (f'expA_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}{mr.tag()}'
                 f'_hmf{cfg.hmf}_fu{cfg.fu}{models}')
         path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
@@ -280,6 +282,9 @@ def run_experiment_A(cfg, data):
         'b_measured': b_meas, 'logM_cen': logM_cen, 'M_mean': M_i, 'n_i': n_i,
         'P_halo_gas_ref': P_halo_gas_ref, 'R': R, 'P_matter_gas_true': P_matter_gas_true,
     }
+    for key in ('geometry', 'ngrid', 'nmodes', 'k_eff', 'k_Nyquist'):
+        if key in data:
+            payload[key] = data[key]
     payload.update(mr.payload())
     if U_exact is not None:
         payload['U_exact'] = U_exact

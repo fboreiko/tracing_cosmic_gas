@@ -376,6 +376,8 @@ def run_experiment_B(cfg, data, apertures,
             models += f'_cm-{cfg.colossus_conc_model}'
         if cfg.power_spectrum != PmxConfig.power_spectrum:
             models += f'_ps-{cfg.power_spectrum}'
+        if cfg.geometry != PmxConfig.geometry:
+            models += f'_{cfg.geometry}{cfg.grid}'
         stem = (f'expB_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}'
                 f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
                 f'{"" if mr.is_default else mr.tag()}'
@@ -407,6 +409,9 @@ def run_experiment_B(cfg, data, apertures,
         P_true=P_true, P_halo_gas_ref=P_halo_gas[ref],
         modes=np.array(modes, dtype=object).astype(str),
     )
+    for key in ('geometry', 'ngrid', 'nmodes', 'k_eff', 'k_Nyquist'):
+        if key in data:
+            payload[key] = data[key]
     payload.update(mr.payload())
     for x in apertures:
         r = runs[x]

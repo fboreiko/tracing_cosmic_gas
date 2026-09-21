@@ -12,6 +12,8 @@ from dataclasses import dataclass, fields
 import numpy as np
 from utils.sim_params import get_sim_params
 
+from Pmx_reconstruction.pmxlib.geometry import (GEOMETRIES, NGRID_3D_DEFAULT,
+                                                 deconvolve_is_default)
 from Pmx_reconstruction.pmxlib.nfw import CONCENTRATION_SOURCES
 
 
@@ -144,8 +146,18 @@ class PmxConfig:
     # --- simulation -----------------------------------------------------------
     sim_name: str = 'flamingo'
     feedback: str = 'strongest_AGN'
-    ngrid: int = None            # None -> sim_params['ngrid_default']   (2048)
     nthread: int = None          # None -> sim_params['nthread_default']
+
+    # --- how the spectra are measured ----------------------------------------
+    # '2d' projects along z (k up to ~9, but k dk modes); '3d' paints a cubic
+    # grid (k^2 dk modes, so sqrt(2k/k_f) less noise, but k_Nyquist = pi n / L
+    # puts the reachable k_max far lower). See pmxlib.geometry.
+    geometry: str = '2d'
+    ngrid: int = None            # None -> 2048 for '2d', 384 for '3d'
+    kmax: float = None           # None -> the grid's own largest |k|
+    # None -> each geometry's own default: off for '2d' (so results measured
+    # before there was a switch keep their meaning), on for '3d'.
+    deconvolve_window: bool = None
 
     # --- halo binning ---------------------------------------------------------
     mass_def: str = 'm200b'
@@ -180,6 +192,9 @@ class PmxConfig:
     power_spectrum: str = 'camb'   # 'camb' | 'eisenstein98'
 
     def __post_init__(self):
+        if self.geometry not in GEOMETRIES:
+            raise ValueError(f"geometry is {self.geometry!r}; expected one of "
+                             f"{GEOMETRIES}")
         if self.mass_def != 'm200b':
             raise ValueError(
                 f"mass_def is {self.mass_def!r}, but r200m_of_M assumes a "
@@ -209,11 +224,31 @@ class PmxConfig:
 
     @property
     def grid(self):
-        return self.ngrid if self.ngrid else self.sim_params['ngrid_default']
+        if self.ngrid:
+            return self.ngrid
+        return (NGRID_3D_DEFAULT if self.geometry == '3d'
+                else self.sim_params['ngrid_default'])
 
     @property
     def threads(self):
         return self.nthread if self.nthread else self.sim_params['nthread_default']
+
+    @property
+    def k_Nyquist(self):
+        return np.pi * self.grid / self.box
+
+    @property
+    def geom_tag(self):
+        """Filename token for the geometry and its window handling.
+
+        Empty for a default '2d' run, so every cache written before there was
+        a choice keeps its name; a non-default window setting always shows,
+        because it changes the numbers without changing anything else.
+        """
+        tag = '' if self.geometry == '2d' else f'_{self.geometry}'
+        if not deconvolve_is_default(self):
+            tag += '_dcw' if self.deconvolve_window else '_nodcw'
+        return tag
 
     @property
     def rhobar_m(self):
@@ -251,9 +286,38 @@ def _add_binning_args(ap):
     g.add_argument('--nkbins', type=int, default=_D.nkbins,
                    help="number of k bins in the measured spectra")
     g.add_argument('--ngrid', type=int, default=None,
-                   help="FFT grid size (default: the simulation's ngrid_default)")
+                   help=f"FFT grid size per axis (default: the simulation's "
+                        f"ngrid_default for --geometry 2d, "
+                        f"{NGRID_3D_DEFAULT} for 3d)")
     g.add_argument('--nthread', type=int, default=None,
                    help="threads for painting and FFTs (default: nthread_default)")
+    return g
+
+
+def _add_geometry_args(ap):
+    g = ap.add_argument_group('Measurement geometry')
+    g.add_argument('--geometry', default=_D.geometry, choices=list(GEOMETRIES),
+                   help="'2d' projects the box along z, reaching k ~ 9 h/cMpc "
+                        "with k dk modes per bin. '3d' paints a cubic grid: "
+                        "k^2 dk modes, so sigma falls by sqrt(2k/k_f) (4.7x at "
+                        "k = 0.1), but k_Nyquist = pi ngrid / L_box caps how "
+                        "far in k a run can go. They are alternatives; a run "
+                        "is one or the other")
+    g.add_argument('--deconvolve-window', dest='deconvolve_window',
+                   action='store_true', default=None,
+                   help="divide out the TSC assignment window. On by default "
+                        "for '3d', where it is 1.8%% of P at k = 0.1 on a "
+                        "256^3 grid; off by default for '2d', where it is 3e-4 "
+                        "at k = 0.1 on 2048^2 but 22%% by k = 3. Turn it on for "
+                        "BOTH runs to compare the two geometries above k ~ 1")
+    g.add_argument('--no-deconvolve-window', dest='deconvolve_window',
+                   action='store_false',
+                   help="leave the TSC window in (the '2d' default)")
+    g.add_argument('--kmax', type=float, default=None,
+                   help="upper edge of the k binning (default: the grid's own "
+                        "largest |k|). Give a 2-D and a 3-D run the same "
+                        "--kmax and --nkbins and they land on identical bin "
+                        "edges, which is what makes them comparable bin by bin")
     return g
 
 
@@ -325,6 +389,7 @@ def base_parser(description, validate=True):
     ap.add_argument('--recompute', action='store_true',
                     help="ignore any cached spectra bundle and re-measure")
     _add_binning_args(ap)
+    _add_geometry_args(ap)
     _add_profile_args(ap)
     _add_mass_range_args(ap, validate=validate)
     _add_extrapolation_args(ap)

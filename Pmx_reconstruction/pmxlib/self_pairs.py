@@ -14,10 +14,12 @@ P_gas_gas    :     P^shot_gg
 P_dm_dm      :     P^shot_dd
 
 HOW P^shot IS MEASURED
-Each species is painted at uniformly random 2-D positions with its real
-per-particle masses, and the auto spectrum of the resulting field is taken
-through binned_spectrum(). A random catalogue has no clustering, so in
-expectation that auto spectrum IS the self-pair term of the real field.
+Each species is painted at uniformly random positions -- on whichever grid the
+run's Geometry uses -- with its real per-particle masses, and the auto spectrum
+of the resulting field is taken. A random catalogue has no clustering, so in
+expectation that auto spectrum IS the self-pair term of the real field. Its
+exact value is L_box^2 sum m^2 / (sum m)^2 in this pipeline's convention, and
+the measured/analytic ratio is printed as a check on the painting.
 ------------------------------------------------------------------------------
 """
 import gc
@@ -26,20 +28,17 @@ import numpy as np
 
 from utils.catalog_loaders import load_particle_properties
 from utils.pipeline_paths import get_particle_file_path
-from utils.power_spectrum_utils import compute_2d_fft, compute_k_grid_2d
-
-from Pmx_reconstruction.pmxlib.painting import (binned_spectrum, mass_moments,
-                                                paint_uniform_random_2d)
+from Pmx_reconstruction.pmxlib.painting import mass_moments
 
 SHOT_SPECIES = ('dm', 'gas')
 
 SHOT_SEED = 12345
 SHOT_CHUNK = 5e7
 
-def measure_shot_spectra(cfg, nkbins):
-    """P^shot_dd and P^shot_gg, in this pipeline's own k-binning convention."""
-    print("\nSelf-pair (shot-noise) spectra, from uniformly random catalogues:")
-    k_grid = compute_k_grid_2d(cfg.grid, cfg.box)
+def measure_shot_spectra(cfg, geom):
+    """P^shot_dd and P^shot_gg, on this run's grid and in its k binning."""
+    print(f"\nSelf-pair (shot-noise) spectra, from uniformly random "
+          f"catalogues ({geom.name}):")
     particles_file = get_particle_file_path(cfg.feedback, sim_name=cfg.sim_name)
     rng = np.random.default_rng(SHOT_SEED)
 
@@ -53,22 +52,23 @@ def measure_shot_spectra(cfg, nkbins):
         gc.collect()
 
         M_tot, M2 = mass_moments(mass, chunk=SHOT_CHUNK)
+        analytic = cfg.box ** 2 * M2 / M_tot ** 2
         print(f"  [{species}] {mass.size:.4e} particles, "
               f"sum m^2 / (sum m)^2 = {M2 / M_tot ** 2:.6e}")
 
-        dens = paint_uniform_random_2d(mass, cfg.box, cfg.grid, cfg.threads,
-                                       rng, chunk=SHOT_CHUNK)
-        delta = dens / (M_tot / cfg.grid ** 2) - 1.0
-        del dens, mass
+        delta = geom.random_delta(mass, rng, chunk=SHOT_CHUNK)
+        del mass
         gc.collect()
-        fft_r = compute_2d_fft(delta, cfg.grid)
+        fft_r = geom.fft(delta)
         del delta
-        _, _, P_shot = binned_spectrum(cfg, np.abs(fft_r) ** 2, k_grid, nkbins)
+        P_shot = geom.binned(np.abs(fft_r) ** 2)
         del fft_r
         gc.collect()
 
         out[f'P_shot_{species}'] = P_shot
-        print(f"  [{species}] P^shot = {np.nanmedian(P_shot):.4e} (median over k)")
+        med = float(np.nanmedian(P_shot))
+        print(f"  [{species}] P^shot = {med:.4e} (median over k), analytic "
+              f"{analytic:.4e}, ratio {med / analytic:.4f}")
 
     return out
 
