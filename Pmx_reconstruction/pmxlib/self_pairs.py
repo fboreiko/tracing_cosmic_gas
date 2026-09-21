@@ -26,10 +26,13 @@ import numpy as np
 
 from utils.catalog_loaders import load_particle_properties
 from utils.pipeline_paths import get_particle_file_path
-from utils.power_spectrum_utils import compute_2d_fft, compute_k_grid_2d
+from utils.power_spectrum_utils import (compute_2d_fft, compute_3d_fft,
+                                        compute_k_grid_2d)
 
-from Pmx_reconstruction.pmxlib.painting import (binned_spectrum, mass_moments,
-                                                paint_uniform_random_2d)
+from Pmx_reconstruction.pmxlib.painting import (binned_spectrum,
+                                                binned_spectrum_3d, mass_moments,
+                                                paint_uniform_random_2d,
+                                                paint_uniform_random_3d)
 
 SHOT_SPECIES = ('dm', 'gas')
 
@@ -69,6 +72,48 @@ def measure_shot_spectra(cfg, nkbins):
 
         out[f'P_shot_{species}'] = P_shot
         print(f"  [{species}] P^shot = {np.nanmedian(P_shot):.4e} (median over k)")
+
+    return out
+
+
+def measure_shot_spectra_3d(cfg, ngrid3, binner):
+    """measure_shot_spectra's 3-D twin, in the projected convention.
+
+    L^2 sum m^2 / (sum m)^2 is the exact expectation, so the ratio printed
+    here tests the painting normalisation and the window deconvolution at
+    once, with no clustering in the way.
+    """
+    print("\nSelf-pair (shot-noise) spectra on the 3-D grid:")
+    particles_file = get_particle_file_path(cfg.feedback, sim_name=cfg.sim_name)
+    rng = np.random.default_rng(SHOT_SEED)
+
+    out = {}
+    for species in SHOT_SPECIES:
+        part = load_particle_properties(particles_file, species,
+                                        requested=('mass',),
+                                        sim_name=cfg.sim_name, Lbox=cfg.box)
+        mass = np.asarray(part['mass'])
+        del part
+        gc.collect()
+
+        M_tot, M2 = mass_moments(mass, chunk=SHOT_CHUNK)
+        expected = cfg.box ** 2 * M2 / M_tot ** 2
+
+        dens = paint_uniform_random_3d(mass, cfg.box, ngrid3, cfg.threads,
+                                       rng, chunk=SHOT_CHUNK)
+        delta = dens / (M_tot / ngrid3 ** 3) - 1.0
+        del dens, mass
+        gc.collect()
+        fft_r = compute_3d_fft(delta, ngrid3)
+        del delta
+        P_shot = binned_spectrum_3d(cfg, np.abs(fft_r) ** 2, binner)
+        del fft_r
+        gc.collect()
+
+        out[f'P_shot_{species}'] = P_shot
+        med = float(np.nanmedian(P_shot))
+        print(f"  [{species}] P^shot = {med:.4e}, analytic {expected:.4e}, "
+              f"ratio {med / expected:.4f} (1 = painting and window ok)")
 
     return out
 

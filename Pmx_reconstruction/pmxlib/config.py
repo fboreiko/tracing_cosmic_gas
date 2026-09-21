@@ -147,6 +147,13 @@ class PmxConfig:
     ngrid: int = None            # None -> sim_params['ngrid_default']   (2048)
     nthread: int = None          # None -> sim_params['nthread_default']
 
+    # --- large scales, measured in 3-D and stitched under the 2-D run ---------
+    # Projecting to k_z = 0 throws away a factor 2k/k_f in modes: 4.7x in sigma
+    # at k = 0.1, 10x at k = 0.5. ngrid_3d = None leaves the pipeline purely
+    # 2-D, exactly as before.
+    ngrid_3d: int = None
+    k_split: float = 0.5         # 3-D below, 2-D above [h/cMpc]
+
     # --- halo binning ---------------------------------------------------------
     mass_def: str = 'm200b'
     logm_min: float = 11.0       # log10(M / [Msun/h])
@@ -180,6 +187,20 @@ class PmxConfig:
     power_spectrum: str = 'camb'   # 'camb' | 'eisenstein98'
 
     def __post_init__(self):
+        # The 0.6 k_Nyquist ceiling is where TSC aliasing survives the window
+        # deconvolution. Measured on a painted uniform random catalogue (a flat
+        # spectrum, so the worst case; the matter field falls as k^-2 and
+        # aliases less): +0.02% at 0.4-0.5 k_Ny, +0.1% at 0.5-0.6, +0.4% at
+        # 0.6-0.7, +2.4% at 0.7-0.85.
+        if self.ngrid_3d:
+            k_ny3 = np.pi * self.ngrid_3d / self.box
+            if self.k_split > 0.6 * k_ny3:
+                need = int(np.ceil(self.k_split * self.box / (0.6 * np.pi)))
+                raise ValueError(
+                    f"--k-split {self.k_split:g} is above 0.6 k_Nyquist "
+                    f"({0.6 * k_ny3:.3f}) for --ngrid-3d {self.ngrid_3d}, "
+                    f"where TSC aliasing stops being negligible. Use "
+                    f"--ngrid-3d {need} or lower --k-split.")
         if self.mass_def != 'm200b':
             raise ValueError(
                 f"mass_def is {self.mass_def!r}, but r200m_of_M assumes a "
@@ -214,6 +235,14 @@ class PmxConfig:
     @property
     def threads(self):
         return self.nthread if self.nthread else self.sim_params['nthread_default']
+
+    @property
+    def grid_3d(self):
+        return self.ngrid_3d
+
+    @property
+    def k_Nyquist_3d(self):
+        return np.pi * self.ngrid_3d / self.box if self.ngrid_3d else None
 
     @property
     def rhobar_m(self):
@@ -254,6 +283,20 @@ def _add_binning_args(ap):
                    help="FFT grid size (default: the simulation's ngrid_default)")
     g.add_argument('--nthread', type=int, default=None,
                    help="threads for painting and FFTs (default: nthread_default)")
+    return g
+
+
+def _add_largescale_args(ap):
+    g = ap.add_argument_group('Large scales in 3-D')
+    g.add_argument('--ngrid-3d', dest='ngrid_3d', type=int, nargs='?',
+                   const=256, default=None,
+                   help="measure k < --k-split on a cubic grid of this size "
+                        "and stitch it under the 2-D run. Bare --ngrid-3d "
+                        "means 256. Omitted, the pipeline is purely 2-D")
+    g.add_argument('--k-split', dest='k_split', type=float, default=_D.k_split,
+                   help="where the 3-D measurement hands over to the 2-D one")
+    g.add_argument('--recompute-3d', dest='recompute_3d', action='store_true',
+                   help="ignore any cached 3-D measurement and re-measure")
     return g
 
 
@@ -325,6 +368,7 @@ def base_parser(description, validate=True):
     ap.add_argument('--recompute', action='store_true',
                     help="ignore any cached spectra bundle and re-measure")
     _add_binning_args(ap)
+    _add_largescale_args(ap)
     _add_profile_args(ap)
     _add_mass_range_args(ap, validate=validate)
     _add_extrapolation_args(ap)

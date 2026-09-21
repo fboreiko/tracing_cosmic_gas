@@ -187,6 +187,7 @@ def run_experiment_B(cfg, data, apertures,
     """Go through the apertures, score each one, and write the two figures."""
     k = np.asarray(data['k_center'], float)
     k_Ny = float(data['k_Nyquist'])
+    k_split = float(data['k_split']) if 'k_split' in data else None
     z = float(data['redshift'])
     P_true = np.asarray(data['P_matter_gas'], float)
     P_halo_gas = np.asarray(data['P_halo_gas'], float)
@@ -376,6 +377,8 @@ def run_experiment_B(cfg, data, apertures,
             models += f'_cm-{cfg.colossus_conc_model}'
         if cfg.power_spectrum != PmxConfig.power_spectrum:
             models += f'_ps-{cfg.power_spectrum}'
+        if cfg.ngrid_3d:
+            models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
         stem = (f'expB_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}'
                 f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
                 f'{"" if mr.is_default else mr.tag()}'
@@ -390,7 +393,7 @@ def run_experiment_B(cfg, data, apertures,
     err_mode = modes[-1] if modes else None
     pdata = pl.ApertureData(
         k=k, k_Ny=k_Ny, apertures=apertures, runs=runs, P_true=P_true,
-        logM_cen=logM_cen, occupied=occ, error_mode=err_mode,
+        logM_cen=logM_cen, occupied=occ, error_mode=err_mode, k_split=k_split,
         P_halo_ref=P_halo_gas[ref],
         r200m=np.array([r200m_of_M(m, cfg.rhobar_m) if m > 0 else np.nan
                         for m in M_i]))
@@ -407,6 +410,10 @@ def run_experiment_B(cfg, data, apertures,
         P_true=P_true, P_halo_gas_ref=P_halo_gas[ref],
         modes=np.array(modes, dtype=object).astype(str),
     )
+    for key in ('k_split', 'ngrid_3d', 'is_3d', 'nmodes_2d', 'nmodes_3d',
+                'nmodes_eff_3d', 'k_eff_2d', 'k_eff_3d'):
+        if key in data:
+            payload[key] = data[key]
     payload.update(mr.payload())
     for x in apertures:
         r = runs[x]
@@ -479,7 +486,8 @@ def main():
     cfg = PmxConfig.from_args(args)
 
     data = load_or_measure(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max,
-                           cfg.nkbins, recompute=args.recompute)
+                           cfg.nkbins, recompute=args.recompute,
+                           recompute_3d=args.recompute_3d)
 
     run_experiment_B(cfg, data, args.apertures, weights=args.weights,
                      allow_compute=args.allow_compute,

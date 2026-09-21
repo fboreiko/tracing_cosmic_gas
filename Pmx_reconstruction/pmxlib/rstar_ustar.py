@@ -40,6 +40,11 @@ WHAT IS IN THE CACHE
     'aperture' is the membership radius in units of r200m, stored as
     provenance; nothing reads it back, the filename carries it.
 
+    With --ngrid-3d there is a second cache beside it, the same measurement on
+    a cubic grid, carrying nmodes / k_eff / ngrid_3d as well. The loader
+    splices the two at --k-split so the error budget at low k is not limited
+    by the projection while P_matter_gas no longer is.
+
     'species' is dm or gas: delta_m^(i) is painted from BOTH, since it is the
     matter in bin i, but it is only ever crossed against the gas field.
 
@@ -60,12 +65,16 @@ from scipy.spatial import cKDTree
 from utils.catalog_loaders import load_particle_properties
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path)
-from utils.power_spectrum_utils import compute_2d_fft, compute_k_grid_2d
+from utils.power_spectrum_utils import (Binner3D, compute_2d_fft,
+                                        compute_3d_fft, compute_k_grid_2d)
 
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos
 from Pmx_reconstruction.pmxlib.bundle import _load_or_compute_delta
+from Pmx_reconstruction.pmxlib.bundle3d import stitch_on_k
 from Pmx_reconstruction.pmxlib.nfw import r200m_of_M
-from Pmx_reconstruction.pmxlib.painting import binned_spectrum, paint_2d
+from Pmx_reconstruction.pmxlib.painting import (binned_spectrum,
+                                                binned_spectrum_3d, paint_2d,
+                                                paint_3d)
 from Pmx_reconstruction.pmxlib.self_pairs import (rstar_self_pair_terms,
                                                   subtract_self_pairs)
 
@@ -80,18 +89,23 @@ SPECIES = ('dm', 'gas')
 
 
 # Path
-def cache_path(cfg, aperture=1.0):
+def cache_path(cfg, aperture=1.0, ngrid3=None):
     """Companion to bundle_path: same binning knobs in the stem.
 
     `aperture` is the membership radius in units of r200m (see
     compute_R_star_U_star). It enters the filename only when off the default,
     so the x = 1 cache keeps the plain stem.
+
+    `ngrid3` names the cubic-grid companion of a cache. It is a SEPARATE file
+    rather than extra keys in the 2-D one, so the caches already on disk stay
+    valid and only what is missing gets measured.
     """
     nk = 'default' if cfg.nkbins is None else str(cfg.nkbins)
     ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
+    grid = f'ngrid{cfg.grid}' if ngrid3 is None else f'3d_n{int(ngrid3)}'
     stem = (f'rstar_ustar_{CACHE_VERSION}_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{cfg.logm_min:g}-{cfg.logm_max:g}_nb{cfg.nbins}'
-            f'_ngrid{cfg.grid}_nk{nk}'
+            f'_{grid}_nk{nk}'
             f'_{"cen" if cfg.centrals_only else "all"}{ap}.npz')
     return DATA_ROOT / cfg.sim_name / 'pme_inputs' / stem
 
@@ -173,31 +187,92 @@ def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass,
 
 
 # The measurement
-def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
-    """Measure R*_i and U*. Returns the cache dict.
+def _bin_spectra(dens_bin, dens_avg, gas_fft, m_fft, fft_of, binned, occupied,
+                 nk):
+    """R*_i against the gas field, and U* from the residual.
+
+    U* is taken from m_fft minus the summed per-bin transforms rather than
+    painted separately, so P_matter_gas = sum_i R*_i + U* closes exactly
+    whichever grid this is called on.
+    """
+    R_star = np.zeros((occupied.size, nk))
+    sum_fft = np.zeros_like(m_fft)
+    for i in np.flatnonzero(occupied):
+        fft_i = fft_of(np.asarray(dens_bin[i], dtype=np.float64) / dens_avg)
+        sum_fft += fft_i
+        R_star[i] = binned((fft_i * np.conj(gas_fft)).real)
+        del fft_i
+        print(f"  bin {i:2d} done")
+    U_star = binned(((m_fft - sum_fft) * np.conj(gas_fft)).real)
+    del sum_fft
+    gc.collect()
+    return R_star, U_star
+
+
+def _closure(tag, R_star, U_star, data, suffix=''):
+    """|(R* + U*)/P_matter_gas - 1|, the check that U*-from-the-residual closes.
+
+    Against the RAW bundle spectrum: the identity holds for the painted fields,
+    and R*/U* here have not had their self-pair term taken off yet. Comparing
+    them to the corrected spectrum would report the shot fraction instead.
+    """
+    tot = R_star.sum(axis=0) + U_star
+    for key in (f'P_matter_gas_raw{suffix}', f'P_matter_gas{suffix}',
+                'P_matter_gas_raw', 'P_matter_gas'):
+        if key in data:
+            truth = np.asarray(data[key], dtype=float)
+            break
+    if truth.shape != tot.shape:
+        print(f"  closure [{tag}]: SKIPPED, bundle spectrum has {truth.size} "
+              f"k bins against {tot.size} measured here")
+        return
+    with np.errstate(divide='ignore', invalid='ignore'):
+        dev = np.abs(tot / truth - 1.0)
+    print(f"  closure [{tag}]: |(R* + U*)/P_matter_gas - 1| max = "
+          f"{np.nanmax(dev):.2e}")
+
+
+def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
+                          want_2d=True, ngrid3=None):
+    """Measure R*_i and U*. Returns (cache_2d, cache_3d), either may be None.
 
     `aperture` changes WHICH particles carry a halo label, so how the identity
     P_matter_gas = sum_i R*_i + U* splits between the two; it does not change
     the identity. Bins stay labelled by M200b, so R*_i is comparable across
     apertures bin by bin.
+
+    The two grids are measured in the SAME pass because the cost here is the
+    membership KD-tree, which is grid-independent; painting a second grid
+    inside the loop that is already running is nearly free. Pass want_2d=False
+    to add a cubic grid to a 2-D cache that already exists.
     """
     ngrid, nthread, nbins = cfg.grid, cfg.threads, cfg.nbins
     k_bins = np.asarray(data['k_bins'])
     k_grid = compute_k_grid_2d(ngrid, cfg.box)
+    f_c, f_g = float(data['f_c']), float(data['f_g'])
+    if not (want_2d or ngrid3):
+        raise ValueError("nothing to measure: want_2d is False and ngrid3 is None")
 
     def _binned(prod):
         """binned_spectrum, dropping the bin edges this function never uses."""
         _, kc, Pk = binned_spectrum(cfg, prod, k_grid, cfg.nkbins)
         return kc, Pk
 
-    # --- the fields, exactly as measure_spectra builds them -------------------
-    print("\nProjected fields:")
-    gas_fft = compute_2d_fft(_load_or_compute_delta(cfg, 'gas'), ngrid)
-    dm_fft = compute_2d_fft(_load_or_compute_delta(cfg, 'dm'), ngrid)
-    f_c, f_g = float(data['f_c']), float(data['f_g'])
-    m_fft = f_c * dm_fft + f_g * gas_fft
-    del dm_fft
-    gc.collect()
+    binner3 = None
+    if ngrid3:
+        binner3 = Binner3D(ngrid3, cfg.box, k_bins)
+        print(f"\n3-D companion on a {ngrid3}^3 grid, k_Nyquist = "
+              f"{binner3.k_Nyquist:.3f} h/cMpc, TSC window deconvolved")
+
+    # --- the projected fields, exactly as measure_spectra builds them ---------
+    gas_fft = m_fft = None
+    if want_2d:
+        print("\nProjected fields:")
+        gas_fft = compute_2d_fft(_load_or_compute_delta(cfg, 'gas'), ngrid)
+        dm_fft = compute_2d_fft(_load_or_compute_delta(cfg, 'dm'), ngrid)
+        m_fft = f_c * dm_fft + f_g * gas_fft
+        del dm_fft
+        gc.collect()
 
     # --- centrals -------------------------------------------------------------
     print("\nHalo catalogue:")
@@ -209,14 +284,32 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
     n_halo = h_mass.size
     h_bin16 = h_bin.astype(np.int16)
 
-    dens_bin = np.zeros((nbins, ngrid, ngrid), dtype=np.float64)
+    dens_bin = (np.zeros((nbins, ngrid, ngrid), dtype=np.float64)
+                if want_2d else None)
+    # float32 here: tsc accumulates in float32 anyway, and the stack is
+    # 2.0 GB at 256^3 against 4.0 in float64.
+    dens_bin_3d = (np.zeros((nbins, ngrid3, ngrid3, ngrid3), dtype=np.float32)
+                   if ngrid3 else None)
+    dens_all_3d = ({s: np.zeros((ngrid3,) * 3, dtype=np.float32) for s in SPECIES}
+                   if ngrid3 else None)
     mass_bin_species = {s: np.zeros(nbins) for s in SPECIES}
     m2_bin_gas = np.zeros(nbins)
     mass_tot_species = {}
     m2_tot_gas = 0.0
     mass_halo_assigned = np.zeros(n_halo)
-    # P^shot_gg is not re-measured here: the bundle carries it already
-    P_shot_gg = np.asarray(data['P_shot_gas'], dtype=float)
+    # P^shot_gg is not re-measured here: the bundle carries it already, and
+    # carries one per grid once it has been stitched.
+    P_shot_2d = np.asarray(data.get('P_shot_gas_2d', data['P_shot_gas']),
+                           dtype=float)
+    P_shot_3d = None
+    if ngrid3:
+        if 'P_shot_gas_3d' not in data:
+            raise SystemExit(
+                "The bundle carries no 3-D self-pair spectrum. Build it first "
+                "with the same --ngrid-3d, e.g.\n"
+                f"      python -m Pmx_reconstruction.experiment_A "
+                f"--ngrid-3d {ngrid3}")
+        P_shot_3d = np.asarray(data['P_shot_gas_3d'], dtype=float)
     particles_file = get_particle_file_path(cfg.feedback, sim_name=cfg.sim_name)
 
     for species in SPECIES:
@@ -235,6 +328,10 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
         if species == 'gas':
             m2_tot_gas = float(np.sum(mass ** 2))
         print(f"    {pos.shape[0]:.3e} particles, {time.time() - t0:.1f} s")
+
+        if ngrid3:
+            paint_3d(pos, mass, cfg.box, ngrid3, nthread,
+                     out=dens_all_3d[species])
 
         omega_b = float(cfg.sim_params.get('omega_b'))
         share = ((cfg.omega_m - omega_b) / cfg.omega_m if species == 'dm'
@@ -260,10 +357,16 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
             if not np.any(sel):
                 continue
             m_i = mass[sel]
+            pos_i = pos[sel]
             mass_bin_species[species][i] = float(m_i.sum())
             if species == 'gas':
                 m2_bin_gas[i] = float(np.sum(m_i ** 2))
-            dens_bin[i] += paint_2d(pos[sel], m_i, cfg.box, ngrid, nthread)
+            if want_2d:
+                dens_bin[i] += paint_2d(pos_i, m_i, cfg.box, ngrid, nthread)
+            if ngrid3:
+                paint_3d(pos_i, m_i, cfg.box, ngrid3, nthread,
+                         out=dens_bin_3d[i])
+            del pos_i, m_i
         print(f"    {time.time() - t0:.1f} s")
         del pos, mass, label, member, bin_of_particle
         gc.collect()
@@ -300,91 +403,137 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
           f"16-84% [{np.nanpercentile(q, 16):.4f}, "
           f"{np.nanpercentile(q, 84):.4f}]")
 
-    # --- spectra --------------------------------------------------------------
-    print("\nPer-bin cross spectra R*_i ...")
-    dens_avg = M_tot / ngrid ** 2                    # global mean per cell
-    nk = int(P_shot_gg.size)
-    R_star = np.zeros((nbins, nk))
-    sum_fft = np.zeros_like(m_fft)
-    k_center = None
-    for i in range(nbins):
-        if mass_bin[i] == 0:
-            continue
-        delta_i = dens_bin[i] / dens_avg             # rho^(i)/rhobar_m
-        fft_i = compute_2d_fft(delta_i, ngrid)
-        sum_fft += fft_i
-        k_center, R_star[i] = _binned((fft_i * np.conj(gas_fft)).real)
-        del fft_i
-        print(f"  bin {i:2d} done")
-    del dens_bin
-    gc.collect()
-
-    # U* from the residual field, so the closure is exact by construction.
-    out_fft = m_fft - sum_fft                        # delta_m^out
-    _, U_star = _binned((out_fft * np.conj(gas_fft)).real)
-
-    tot = R_star.sum(axis=0) + U_star
-    truth = np.asarray(data['P_matter_gas'], dtype=float)
-    if truth.shape != tot.shape:
-        print(f"  closure: SKIPPED, bundle spectrum has {truth.size} k bins "
-              f"against {tot.size} measured here")
-    else:
-        with np.errstate(divide='ignore', invalid='ignore'):
-            dev = np.abs(tot / truth - 1.0)
-        print(f"  closure: |(R* + U*)/P_matter_gas - 1| max = "
-              f"{np.nanmax(dev):.2e}")
-
-    k_bundle = np.asarray(data['k_center'], dtype=float)
-    if k_center is None:
-        raise SystemExit("No occupied bin carried any assigned mass; nothing "
-                         "was measured. Check the catalogue and the mass range.")
-    if k_center.shape != k_bundle.shape or not np.allclose(k_center, k_bundle):
-        print(f"  WARNING: k binning differs from the spectra bundle "
-              f"({k_center.size} bins here, {k_bundle.size} there). The cache "
-              f"stores the grid these spectra were measured on; callers that "
-              f"combine them with bundle quantities must check it.")
-
-    # --- assemble ------------------------------------------------------------
-    out = dict(
+    shared = dict(
         version=CACHE_VERSION,
-        k_center=np.asarray(k_center, dtype=float), k_bins=k_bins,
+        k_bins=k_bins,
         logM_edges=logM_edges, logM_cen=data['logM_cen'],
         M_mean=data['M_mean'], counts=counts, f_i=f_i, f_part=f_part,
         M_tot_particles=M_tot, f_c=f_c_here, f_g=f_g_here,
-        R_star_gas=R_star, U_star_gas=U_star,
-        P_shot_gg=P_shot_gg, m2_bin_gas=m2_bin_gas, m2_tot_gas=m2_tot_gas,
+        m2_bin_gas=m2_bin_gas, m2_tot_gas=m2_tot_gas,
         mass_bin_dm=mass_bin_species['dm'], mass_bin_gas=mass_bin_species['gas'],
         assigned_over_m200b_median=float(np.nanmedian(q)),
-        box=cfg.box, ngrid=ngrid, nkbins=(-1 if cfg.nkbins is None else cfg.nkbins),
+        box=cfg.box, nkbins=(-1 if cfg.nkbins is None else cfg.nkbins),
         nbins=nbins, logm_min=cfg.logm_min, logm_max=cfg.logm_max,
         redshift=cfg.z, feedback=cfg.feedback, mass_def=cfg.mass_def,
         centrals_only=cfg.centrals_only, aperture=float(aperture),
     )
-    return out
+
+    # --- spectra, one grid at a time ------------------------------------------
+    out_2d = out_3d = None
+    k_bundle = np.asarray(data['k_center'], dtype=float)
+
+    if want_2d:
+        print("\nPer-bin cross spectra R*_i (projected) ...")
+        if not np.any(mass_bin > 0):
+            raise SystemExit("No occupied bin carried any assigned mass; "
+                             "nothing was measured. Check the catalogue and "
+                             "the mass range.")
+        k_center = None
+
+        def _b2(prod):
+            nonlocal k_center
+            k_center, Pk = _binned(prod)
+            return Pk
+
+        R_star, U_star = _bin_spectra(
+            dens_bin, M_tot / ngrid ** 2, gas_fft, m_fft,
+            lambda d: compute_2d_fft(d, ngrid), _b2, mass_bin > 0,
+            P_shot_2d.size)
+        del dens_bin, m_fft
+        gc.collect()
+        _closure('2d', R_star, U_star, data, suffix='_2d')
+        if k_center.shape != k_bundle.shape or not np.allclose(k_center, k_bundle):
+            print(f"  WARNING: k binning differs from the spectra bundle "
+                  f"({k_center.size} bins here, {k_bundle.size} there). The "
+                  f"cache stores the grid these spectra were measured on; "
+                  f"callers that combine them with bundle quantities must "
+                  f"check it.")
+        out_2d = dict(shared, k_center=k_center, ngrid=ngrid,
+                      R_star_gas=R_star, U_star_gas=U_star, P_shot_gg=P_shot_2d)
+
+    if ngrid3:
+        print(f"\nPer-bin cross spectra R*_i ({ngrid3}^3) ...")
+        gas3 = (np.asarray(dens_all_3d['gas'], dtype=np.float64)
+                / (mass_tot_species['gas'] / ngrid3 ** 3) - 1.0)
+        dm3 = (np.asarray(dens_all_3d['dm'], dtype=np.float64)
+               / (mass_tot_species['dm'] / ngrid3 ** 3) - 1.0)
+        del dens_all_3d
+        gc.collect()
+        gas_fft3 = compute_3d_fft(gas3, ngrid3)
+        dm_fft3 = compute_3d_fft(dm3, ngrid3)
+        del gas3, dm3
+        gc.collect()
+        m_fft3 = f_c * dm_fft3 + f_g * gas_fft3
+        del dm_fft3
+        gc.collect()
+
+        R_star3, U_star3 = _bin_spectra(
+            dens_bin_3d, M_tot / ngrid3 ** 3, gas_fft3, m_fft3,
+            lambda d: compute_3d_fft(d, ngrid3),
+            lambda prod: binned_spectrum_3d(cfg, prod, binner3),
+            mass_bin > 0, binner3.k_center.size)
+        del dens_bin_3d, m_fft3, gas_fft3
+        gc.collect()
+        _closure('3d', R_star3, U_star3, data, suffix='_3d')
+        out_3d = dict(shared, k_center=binner3.k_center, ngrid=ngrid3,
+                      ngrid_3d=ngrid3, k_Nyquist_3d=binner3.k_Nyquist,
+                      nmodes=binner3.nmodes,
+                      nmodes_eff=binner3.nmodes_eff, k_eff=binner3.k_eff,
+                      R_star_gas=R_star3, U_star_gas=U_star3,
+                      P_shot_gg=P_shot_3d)
+
+    return out_2d, out_3d
 
 
 # Cache
-def load_or_measure_rstar_ustar(cfg, data, recompute=False, chunk_particles=5e7,
-                    allow_compute=True, aperture=1.0):
-    """Read the cache, or measure and write it. None if absent and not allowed."""
-    path = cache_path(cfg, aperture=aperture)
-    if path.exists() and not recompute:
-        print(f"R*/U* cache:\n  {path}")
-        with np.load(path, allow_pickle=False) as f:
-            cache = {key: f[key] for key in f.files}
-        return subtract_self_pairs(cache, terms=rstar_self_pair_terms(cache),
-                                   report=False)
-    if not allow_compute:
-        return None
-    print(f"No R*/U* cache at\n  {path}\nMeasuring (one particle pass per "
-          f"species) ...")
-    cache = compute_R_star_U_star(cfg, data, chunk_particles=chunk_particles,
-                                  aperture=aperture)
-    ensure_parents(path)
-    np.savez_compressed(path, **cache)
-    print(f"\nR*/U* cache saved:\n  {path}")
+def _read_cache(path):
+    with np.load(path, allow_pickle=False) as f:
+        cache = {key: f[key] for key in f.files}
     return subtract_self_pairs(cache, terms=rstar_self_pair_terms(cache),
                                report=False)
+
+
+def load_or_measure_rstar_ustar(cfg, data, recompute=False, chunk_particles=5e7,
+                    allow_compute=True, aperture=1.0):
+    """Read the cache, or measure and write it. None if absent and not allowed.
+
+    With cfg.ngrid_3d set there are two caches, one per grid, each corrected
+    with its own P^shot_gg; the dict handed back is the 2-D one with k <
+    cfg.k_split replaced by the cubic-grid measurement. Whichever of the two
+    files is missing is the only thing measured, but either way that costs a
+    full particle pass, so both are written when both are absent.
+    """
+    ngrid3 = cfg.ngrid_3d
+    path = cache_path(cfg, aperture=aperture)
+    path3 = cache_path(cfg, aperture=aperture, ngrid3=ngrid3) if ngrid3 else None
+
+    want_2d = recompute or not path.exists()
+    want_3d = bool(ngrid3) and (recompute or not path3.exists())
+
+    if want_2d or want_3d:
+        if not allow_compute:
+            return None
+        missing = " and ".join(str(p) for p, w in
+                               ((path, want_2d), (path3, want_3d)) if w)
+        print(f"No R*/U* cache at\n  {missing}\nMeasuring (one particle pass "
+              f"per species) ...")
+        out_2d, out_3d = compute_R_star_U_star(
+            cfg, data, chunk_particles=chunk_particles, aperture=aperture,
+            want_2d=want_2d, ngrid3=(ngrid3 if want_3d else None))
+        for target, out in ((path, out_2d), (path3, out_3d)):
+            if out is None:
+                continue
+            ensure_parents(target)
+            np.savez_compressed(target, **out)
+            print(f"\nR*/U* cache saved:\n  {target}")
+
+    print(f"R*/U* cache:\n  {path}")
+    cache = _read_cache(path)
+    if not ngrid3:
+        return cache
+    print(f"R*/U* 3-D cache:\n  {path3}")
+    return stitch_on_k(cache, _read_cache(path3), cfg.k_split,
+                       label='R*/U*')
 
 
 # Read-time assembly
@@ -436,7 +585,7 @@ def load_measured_partition(cfg, data, recompute=False, allow_compute=True,
 
 # Standalone entry point
 def main():
-    from Pmx_reconstruction.pmxlib.bundle import bundle_path
+    from Pmx_reconstruction.pmxlib.bundle import bundle_path, load_or_measure
     from Pmx_reconstruction.pmxlib.config import PmxConfig, base_parser
 
     ap = base_parser("Measure R*_i, U* and the self-pair terms; cache them.",
@@ -454,9 +603,10 @@ def main():
     if not bpath.exists():
         raise SystemExit(f"Spectra bundle missing:\n  {bpath}\n"
                          "Build it by running experiment_A or experiment_B.")
-    print(f"Spectra bundle:\n  {bpath}")
-    with np.load(bpath, allow_pickle=False) as f:
-        data = {key: f[key] for key in f.files}
+    # Through load_or_measure rather than straight off disk: with --ngrid-3d
+    # the R*/U* pass needs the bundle's 3-D self-pair spectrum.
+    data = load_or_measure(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max,
+                           cfg.nkbins, recompute_3d=args.recompute_3d)
 
     cache = load_or_measure_rstar_ustar(cfg, data, recompute=args.recompute,
                             chunk_particles=args.chunk_particles,

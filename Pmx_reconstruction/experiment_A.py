@@ -104,6 +104,7 @@ def run_experiment_A(cfg, data):
     logM_cen = data['logM_cen']
     z = float(data['redshift'])
     k_Ny = float(data['k_Nyquist'])
+    k_split = float(data['k_split']) if 'k_split' in data else None
     n_i = counts / float(data['box']) ** 3
 
     print("\n" + "=" * 70)
@@ -242,6 +243,8 @@ def run_experiment_A(cfg, data):
             models += f'_cm-{cfg.colossus_conc_model}'
         if cfg.power_spectrum != PmxConfig.power_spectrum:
             models += f'_ps-{cfg.power_spectrum}'
+        if cfg.ngrid_3d:
+            models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
         stem = (f'expA_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}{mr.tag()}'
                 f'_hmf{cfg.hmf}_fu{cfg.fu}{models}')
         path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
@@ -250,7 +253,7 @@ def run_experiment_A(cfg, data):
         print(f"[A][plot] {path}")
         return path
 
-    d = pl.PanelData(k=k, k_Ny=k_Ny, results=results,
+    d = pl.PanelData(k=k, k_Ny=k_Ny, results=results, k_split=k_split,
                      R=R, P_target=P_target,
                      P_matter_gas_true=P_matter_gas_true,
                      U_exact=U_exact, S_exact=S_exact,
@@ -280,6 +283,10 @@ def run_experiment_A(cfg, data):
         'b_measured': b_meas, 'logM_cen': logM_cen, 'M_mean': M_i, 'n_i': n_i,
         'P_halo_gas_ref': P_halo_gas_ref, 'R': R, 'P_matter_gas_true': P_matter_gas_true,
     }
+    for key in ('k_split', 'ngrid_3d', 'is_3d', 'nmodes_2d', 'nmodes_3d',
+                'nmodes_eff_3d', 'k_eff_2d', 'k_eff_3d'):
+        if key in data:
+            payload[key] = data[key]
     payload.update(mr.payload())
     if U_exact is not None:
         payload['U_exact'] = U_exact
@@ -313,7 +320,8 @@ def main():
 
     from Pmx_reconstruction.pmxlib.bundle import load_or_measure
     data = load_or_measure(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max,
-                           cfg.nkbins, recompute=args.recompute)
+                           cfg.nkbins, recompute=args.recompute,
+                           recompute_3d=args.recompute_3d)
     run_experiment_A(cfg, data)
 
 

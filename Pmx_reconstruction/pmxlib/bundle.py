@@ -14,7 +14,8 @@ from utils.catalog_loaders import load_particle_properties
 from utils.delta_fields import compute_delta_2d, compute_delta_field_and_mass
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path, delta_2d_path)
-from utils.power_spectrum_utils import compute_2d_fft, compute_k_grid_2d
+from utils.power_spectrum_utils import (compute_2d_fft, compute_k_grid_2d,
+                                        mode_stats_2d)
 
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos, log_mass_bin_edges
 from Pmx_reconstruction.pmxlib.painting import binned_spectrum
@@ -230,8 +231,13 @@ _REQUIRED_KEYS = ('k_center', 'counts', 'M_mean', 'f_c', 'f_g',
                   'P_dm_dm', 'P_gas_gas', 'P_shot_dm', 'P_shot_gas')
 
 
-def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False):
-    """Load the cached bundle if it exists, otherwise measure and write it."""
+def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False,
+                    recompute_3d=False):
+    """Load the cached bundle if it exists, otherwise measure and write it.
+
+    With cfg.ngrid_3d set, the same spectra are also measured on a cubic grid
+    and spliced in below cfg.k_split; see pmxlib.bundle3d.
+    """
     path = bundle_path(cfg, nbins, logm_min, logm_max, cfg.grid, nkbins)
 
     data = None
@@ -258,4 +264,19 @@ def load_or_measure(cfg, nbins, logm_min, logm_max, nkbins, recompute=False):
         np.savez_compressed(path, **data)
         print(f"\nSpectra bundle saved:\n  {path}")
 
-    return subtract_self_pairs(data)
+    data = subtract_self_pairs(data)
+    if not cfg.ngrid_3d:
+        return data
+
+    from Pmx_reconstruction.pmxlib.bundle3d import (load_or_measure_3d,
+                                                    report_stitch, stitch_on_k)
+    k_bins = np.asarray(data['k_bins'], dtype=float)
+    d3 = load_or_measure_3d(cfg, nbins, logm_min, logm_max, nkbins, k_bins,
+                            float(data['f_c']), float(data['f_g']),
+                            recompute=recompute_3d)
+    d3 = subtract_self_pairs(d3, report=False)
+    data = stitch_on_k(data, d3, cfg.k_split)
+    data['nmodes_2d'], data['k_eff_2d'] = mode_stats_2d(cfg.grid, cfg.box,
+                                                        k_bins)
+    report_stitch(data)
+    return data

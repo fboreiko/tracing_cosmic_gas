@@ -206,6 +206,8 @@ def _guides(ax, d, level=None, band=None, ylim=None, ylabel=None,
     tolerance band, limits, labels. `legend` is None/False or a dict of
     ax.legend kwargs (frameon=False is implied)."""
     ax.axvline(d.k_Ny, c='grey', ls=':', lw=1.2)
+    if getattr(d, 'k_split', None):
+        ax.axvline(d.k_split, c='grey', ls='--', lw=1.0, alpha=0.6)
     if level is not None:
         ax.axhline(level, c='k', lw=0.8)
         if band:
@@ -252,6 +254,9 @@ class PanelData:
     S_eff: Optional[np.ndarray] = None
     V_star: Optional[np.ndarray] = None
     error_mode: str = ERROR_MODE
+    # Where a 3-D measurement hands over to the projected one, drawn as a
+    # dashed guide by _guides. None when the run was purely 2-D.
+    k_split: Optional[float] = None
 
     @property
     def has_exact(self) -> bool:
@@ -282,6 +287,7 @@ class ApertureData:
     P_halo_ref: np.ndarray
     error_mode: Optional[str] = None
     colours: Optional[dict] = None
+    k_split: Optional[float] = None
 
     def __post_init__(self):
         self.apertures = sorted(float(x) for x in self.apertures)
