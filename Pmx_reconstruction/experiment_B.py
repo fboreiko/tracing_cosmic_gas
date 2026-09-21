@@ -479,7 +479,7 @@ def main():
     cfg = PmxConfig.from_args(args)
 
     data = load_or_measure(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max,
-                           cfg.nkbins, recompute=args.recompute)
+                           recompute=args.recompute)
 
     run_experiment_B(cfg, data, args.apertures, weights=args.weights,
                      allow_compute=args.allow_compute,

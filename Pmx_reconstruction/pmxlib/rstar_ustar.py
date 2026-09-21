@@ -34,7 +34,7 @@ WHAT IS IN THE CACHE
                 handed to the shared subtract_self_pairs.
     Binning:    k_center, k_bins, counts, f_i, f_part, M_mean, logM_cen,
                 logM_edges
-    Provenance: box, ngrid, nkbins, nbins, logm_min, logm_max, redshift,
+    Provenance: box, ngrid, kbins_per_decade, nbins, logm_min, logm_max, redshift,
                 feedback, mass_def, centrals_only, aperture, f_c, f_g, version
 
     'aperture' is the membership radius in units of r200m, stored as
@@ -60,7 +60,8 @@ from scipy.spatial import cKDTree
 from utils.catalog_loaders import load_particle_properties
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path)
-from utils.power_spectrum_utils import compute_2d_fft, compute_k_grid_2d
+from utils.power_spectrum_utils import (bin_mode_stats, compute_2d_fft,
+                                        compute_k_grid_2d)
 
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos
 from Pmx_reconstruction.pmxlib.bundle import _load_or_compute_delta
@@ -87,11 +88,10 @@ def cache_path(cfg, aperture=1.0):
     compute_R_star_U_star). It enters the filename only when off the default,
     so the x = 1 cache keeps the plain stem.
     """
-    nk = 'default' if cfg.nkbins is None else str(cfg.nkbins)
     ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
     stem = (f'rstar_ustar_{CACHE_VERSION}_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{cfg.logm_min:g}-{cfg.logm_max:g}_nb{cfg.nbins}'
-            f'_ngrid{cfg.grid}_nk{nk}'
+            f'_ngrid{cfg.grid}_{cfg.kbin_tag}'
             f'_{"cen" if cfg.centrals_only else "all"}{ap}.npz')
     return DATA_ROOT / cfg.sim_name / 'pme_inputs' / stem
 
@@ -182,13 +182,17 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
     apertures bin by bin.
     """
     ngrid, nthread, nbins = cfg.grid, cfg.threads, cfg.nbins
-    k_bins = np.asarray(data['k_bins'])
     k_grid = compute_k_grid_2d(ngrid, cfg.box)
+    k_bins = cfg.k_bins
+    nmodes, k_center = bin_mode_stats(k_grid, k_bins)
+    if not np.allclose(k_bins, np.asarray(data['k_bins'], dtype=float)):
+        raise SystemExit("The k binning here differs from the spectra bundle's. "
+                         "The two are differenced against each other, so they "
+                         "must share --kbins-per-decade, --kbin-wmin and "
+                         "--ngrid.")
 
     def _binned(prod):
-        """binned_spectrum, dropping the bin edges this function never uses."""
-        _, kc, Pk = binned_spectrum(cfg, prod, k_grid, cfg.nkbins)
-        return kc, Pk
+        return binned_spectrum(cfg, prod, k_grid)
 
     # --- the fields, exactly as measure_spectra builds them -------------------
     print("\nProjected fields:")
@@ -303,17 +307,17 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
     # --- spectra --------------------------------------------------------------
     print("\nPer-bin cross spectra R*_i ...")
     dens_avg = M_tot / ngrid ** 2                    # global mean per cell
-    nk = int(P_shot_gg.size)
+    nk = int(k_center.size)
+    if not np.any(mass_bin > 0):
+        raise SystemExit("No occupied bin carried any assigned mass; nothing "
+                         "was measured. Check the catalogue and the mass range.")
     R_star = np.zeros((nbins, nk))
     sum_fft = np.zeros_like(m_fft)
-    k_center = None
-    for i in range(nbins):
-        if mass_bin[i] == 0:
-            continue
+    for i in np.flatnonzero(mass_bin > 0):
         delta_i = dens_bin[i] / dens_avg             # rho^(i)/rhobar_m
         fft_i = compute_2d_fft(delta_i, ngrid)
         sum_fft += fft_i
-        k_center, R_star[i] = _binned((fft_i * np.conj(gas_fft)).real)
+        R_star[i] = _binned((fft_i * np.conj(gas_fft)).real)
         del fft_i
         print(f"  bin {i:2d} done")
     del dens_bin
@@ -321,7 +325,7 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
 
     # U* from the residual field, so the closure is exact by construction.
     out_fft = m_fft - sum_fft                        # delta_m^out
-    _, U_star = _binned((out_fft * np.conj(gas_fft)).real)
+    U_star = _binned((out_fft * np.conj(gas_fft)).real)
 
     tot = R_star.sum(axis=0) + U_star
     truth = np.asarray(data['P_matter_gas'], dtype=float)
@@ -334,20 +338,11 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
         print(f"  closure: |(R* + U*)/P_matter_gas - 1| max = "
               f"{np.nanmax(dev):.2e}")
 
-    k_bundle = np.asarray(data['k_center'], dtype=float)
-    if k_center is None:
-        raise SystemExit("No occupied bin carried any assigned mass; nothing "
-                         "was measured. Check the catalogue and the mass range.")
-    if k_center.shape != k_bundle.shape or not np.allclose(k_center, k_bundle):
-        print(f"  WARNING: k binning differs from the spectra bundle "
-              f"({k_center.size} bins here, {k_bundle.size} there). The cache "
-              f"stores the grid these spectra were measured on; callers that "
-              f"combine them with bundle quantities must check it.")
-
     # --- assemble ------------------------------------------------------------
     out = dict(
         version=CACHE_VERSION,
         k_center=np.asarray(k_center, dtype=float), k_bins=k_bins,
+        nmodes=np.asarray(nmodes),
         logM_edges=logM_edges, logM_cen=data['logM_cen'],
         M_mean=data['M_mean'], counts=counts, f_i=f_i, f_part=f_part,
         M_tot_particles=M_tot, f_c=f_c_here, f_g=f_g_here,
@@ -355,7 +350,8 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0):
         P_shot_gg=P_shot_gg, m2_bin_gas=m2_bin_gas, m2_tot_gas=m2_tot_gas,
         mass_bin_dm=mass_bin_species['dm'], mass_bin_gas=mass_bin_species['gas'],
         assigned_over_m200b_median=float(np.nanmedian(q)),
-        box=cfg.box, ngrid=ngrid, nkbins=(-1 if cfg.nkbins is None else cfg.nkbins),
+        box=cfg.box, ngrid=ngrid, kbins_per_decade=cfg.kbins_per_decade,
+        kbin_wmin_kf=cfg.kbin_wmin_kf,
         nbins=nbins, logm_min=cfg.logm_min, logm_max=cfg.logm_max,
         redshift=cfg.z, feedback=cfg.feedback, mass_def=cfg.mass_def,
         centrals_only=cfg.centrals_only, aperture=float(aperture),
@@ -449,8 +445,7 @@ def main():
     args = ap.parse_args()
     cfg = PmxConfig.from_args(args)
 
-    bpath = bundle_path(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max, cfg.grid,
-                        cfg.nkbins)
+    bpath = bundle_path(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max, cfg.grid)
     if not bpath.exists():
         raise SystemExit(f"Spectra bundle missing:\n  {bpath}\n"
                          "Build it by running experiment_A or experiment_B.")

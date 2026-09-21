@@ -36,7 +36,7 @@ SHOT_SPECIES = ('dm', 'gas')
 SHOT_SEED = 12345
 SHOT_CHUNK = 5e7
 
-def measure_shot_spectra(cfg, nkbins):
+def measure_shot_spectra(cfg):
     """P^shot_dd and P^shot_gg, in this pipeline's own k-binning convention."""
     print("\nSelf-pair (shot-noise) spectra, from uniformly random catalogues:")
     k_grid = compute_k_grid_2d(cfg.grid, cfg.box)
@@ -63,7 +63,7 @@ def measure_shot_spectra(cfg, nkbins):
         gc.collect()
         fft_r = compute_2d_fft(delta, cfg.grid)
         del delta
-        _, _, P_shot = binned_spectrum(cfg, np.abs(fft_r) ** 2, k_grid, nkbins)
+        P_shot = binned_spectrum(cfg, np.abs(fft_r) ** 2, k_grid)
         del fft_r
         gc.collect()
 

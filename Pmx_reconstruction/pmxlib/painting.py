@@ -84,25 +84,25 @@ def azimuthal_mean(field, box, ngrid, k_bins, deconvolve_tsc=False):
         return np.where(den > 0, num / den, np.nan)
 
 
-def binned_spectrum(cfg, prod, k_grid, nkbins):
+def binned_spectrum(cfg, prod, k_grid):
     """The one and only k-binning convention in this pipeline.
 
     Takes the real part of a product of two transforms (or |transform|^2),
-    azimuthally averages it over the k bins and applies the L_box^2 factor that
+    azimuthally averages it over cfg.k_bins and applies the L_box^2 factor that
     every spectrum in this repo carries.
 
     It is not a wrapper around bin_power_spectrum_2d for its own sake. That
-    function is shared with HATF, which does NOT use the L_box^2 convention, so
-    the factor cannot live down there. Everything that ends up in a bundle, in
-    the R*/U* cache or in a self-pair subtraction has to carry it and the same
-    k binning, and those three are measured in separate passes -- possibly
-    years apart in wall-clock time. This is the one place that decides, so they
-    agree by construction rather than by three copies happening to match.
+    function is shared with HATF, which does NOT use the L_box^2 convention and
+    does not use this pipeline's log-spaced k grid, so neither can live down
+    there. Everything that ends up in a bundle, in the R*/U* cache or in a
+    self-pair subtraction has to carry both and be binned identically, and
+    those three are measured in separate passes -- possibly years apart in
+    wall-clock time. This is the one place that decides, so they agree by
+    construction rather than by three copies happening to match.
 
-    k_min is passed explicitly even though it equals bin_power_spectrum_2d's own
-    default, so that a change to the default in shared utils/ cannot silently
-    move this pipeline's k grid.
+    The edges come from cfg rather than being rebuilt here, so a bundle cannot
+    end up on a different grid from the R*/U* cache it is differenced against.
     """
-    kb, kc, P = bin_power_spectrum_2d(prod, k_grid, cfg.grid, cfg.box,
-                                      nkbins=nkbins, k_min=2.0 * np.pi / cfg.box)
-    return np.asarray(kb), np.asarray(kc), np.asarray(P) * cfg.box ** 2
+    _, _, P = bin_power_spectrum_2d(prod, k_grid, cfg.grid, cfg.box,
+                                    k_bins=cfg.k_bins)
+    return np.asarray(P) * cfg.box ** 2
