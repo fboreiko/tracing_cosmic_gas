@@ -84,18 +84,28 @@ def load_halo_catalogue(cfg, extra_props=()):
     return pos, mass, extras
 
 
-def load_binned_halos(cfg, extra_props=(), restrict_to_range=False):
+def load_binned_halos(cfg, extra_props=(), restrict_to_range=False,
+                      nbins=None, logm_min=None, logm_max=None):
     """Load the catalogue, check the mass units, and bin by mass.
 
     Returns (pos, mass, bin_index, logM_edges, extras). With restrict_to_range
     the arrays are cut down to the in-range halos.
+
+    nbins / logm_min / logm_max default to the config's, which is the binning
+    the spectra bundle and the R*/U* cache share. They are overridable for the
+    one caller that must not share it: pmxlib.u_bar measures a profile, not a
+    spectrum, so it is not tied to the bundle's mass grid and reaches below it.
     """
+    nbins = cfg.nbins if nbins is None else int(nbins)
+    logm_min = cfg.logm_min if logm_min is None else float(logm_min)
+    logm_max = cfg.logm_max if logm_max is None else float(logm_max)
+
     pos, mass, extras = load_halo_catalogue(cfg, extra_props=extra_props)
     check_mass_units(mass, cfg.halo_mass_unit_msun_h)
 
     bin_index, in_range, logM_edges = assign_mass_bins(
-        mass, cfg.nbins, cfg.logm_min, cfg.logm_max)
-    print(f"  in [{cfg.logm_min}, {cfg.logm_max}): {np.count_nonzero(in_range)} halos "
+        mass, nbins, logm_min, logm_max)
+    print(f"  in [{logm_min}, {logm_max}): {np.count_nonzero(in_range)} halos "
           f"({np.count_nonzero(in_range) / mass.size:.1%} of the sample)")
 
     if restrict_to_range:

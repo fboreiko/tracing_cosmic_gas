@@ -179,6 +179,14 @@ class PmxConfig:
     # colossus_conc_model, and that is the knob to turn when comparing fits.
     concentration_source: str = 'colossus'
     colossus_conc_model: str = 'diemer19'
+    # Where u_m(k|M) comes from in R and in U's S(k).
+    #   'nfw'      the model: u_nfw with c(M,z) from the two knobs above.
+    #   'measured' the stacked profile from pmxlib.u_bar, interpolated in
+    #              log M, with the model kept only below the measured floor.
+    # 'measured' also switches the mass weights from n_i M_i / rhobar_m to the
+    # mass actually assigned inside the aperture: u_bar is normalised to that
+    # mass, so the two are a matched pair and mixing them is silently wrong.
+    profile_source: str = 'nfw'
 
     # --- mass range, resolved against a bundle by MassRange.from_config -------
     # R sums the bins in [M_r, M_max]; U models the mass below M_r.
@@ -208,6 +216,12 @@ class PmxConfig:
                     f"({0.6 * k_ny3:.3f}) for --ngrid-3d {self.ngrid_3d}, "
                     f"where TSC aliasing stops being negligible. Use "
                     f"--ngrid-3d {need} or lower --k-split.")
+        if self.profile_source not in ('nfw', 'measured'):
+            raise ValueError(
+                f"profile_source is {self.profile_source!r}; expected 'nfw' "
+                f"or 'measured'. Checked here because Profile treats anything "
+                f"that is not 'nfw' as a request for the measured cache, so a "
+                f"typo would otherwise go looking for one rather than fail.")
         if self.mass_def != 'm200b':
             raise ValueError(
                 f"mass_def is {self.mass_def!r}, but r200m_of_M assumes a "
@@ -345,6 +359,15 @@ def _add_profile_args(ap):
                    default=_D.colossus_conc_model,
                    help="colossus c(M,z) model name (diemer19, duffy08, "
                         "ishiyama21, ...). This is the knob for comparing fits")
+    g.add_argument('--profile', dest='profile_source',
+                   default=_D.profile_source, choices=['nfw', 'measured'],
+                   help="u_m(k|M) in R and in U's S(k). 'nfw' is the model; "
+                        "'measured' reads the stacked profile cached by "
+                        "pmxlib.u_bar and ALSO switches the mass weights to "
+                        "the assigned mass the profile is normalised to "
+                        "(f_part instead of n_i M_i / rhobar_m), because the "
+                        "two only mean anything together. Below the measured "
+                        "floor the model is kept")
     return g
 
 

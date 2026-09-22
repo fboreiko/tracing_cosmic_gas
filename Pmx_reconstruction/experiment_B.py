@@ -57,8 +57,8 @@ from utils.plot_data import save_plot_data
 from Pmx_reconstruction.pmxlib.bundle import load_or_measure
 from Pmx_reconstruction.pmxlib.config import (MassRange, PmxConfig,
                                               base_parser)
-from Pmx_reconstruction.pmxlib.nfw import conc_of, r200m_of_M, u_nfw
-from Pmx_reconstruction.pmxlib.reconstruction import compute_U
+from Pmx_reconstruction.pmxlib.nfw import conc_of, r200m_of_M
+from Pmx_reconstruction.pmxlib.reconstruction import Profile, compute_U
 from Pmx_reconstruction.pmxlib import plotting as pl
 from Pmx_reconstruction.pmxlib import rstar_ustar as ru
 
@@ -84,7 +84,7 @@ def nfw_mass_ratio(c, x):
 
 def measure_aperture(cfg, data, aperture, weights='aperture',
                      allow_compute=True, recompute=False,
-                     chunk_particles=5e7, mr=None):
+                     chunk_particles=5e7, mr=None, profile=None):
     """Everything one aperture contributes, measured and modelled.
 
     Measured, from the R*/U* cache at this aperture:
@@ -94,6 +94,12 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
 
     Modelled, from a profile truncated to match the aperture:
         R = sum_i w_i u_m(k|M_i, trunc=x) P_halo_gas(k; M_i)
+
+    `profile` is where u_m comes from; built from the config at this aperture
+    when not given. Under --profile measured the truncation is not modelled at
+    all -- the u_bar cache for this aperture was stacked out to exactly this
+    radius, so the sweep compares measured shells rather than NFW's guess at
+    what lies beyond r200m.
 
     Growing the aperture has to grow the weight, and `weights` says how:
 
@@ -148,11 +154,18 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
     P_halo_gas = np.asarray(data['P_halo_gas'], float)
     M_i = np.asarray(data['M_mean'], float)
     z = float(data['redshift'])
-    u_i = np.zeros((M_i.size, k.size))
+    if profile is None:
+        profile = Profile.from_config(cfg, z, aperture=aperture)
+    # conc stays NFW's even under --profile measured: mu(x, c) below is the
+    # NFW enclosed-mass ratio, which is the whole point of the 'catalogue'
+    # weighting and has no measured counterpart. It is reported, not used, in
+    # the 'aperture' weighting this file defaults to.
     conc = np.zeros(M_i.size)
     for j in np.flatnonzero(occ):
         conc[j] = conc_of(cfg, M_i[j], z)
-        u_i[j] = u_nfw(k, M_i[j], conc[j], cfg.rhobar_m, trunc=aperture)
+    u_i = np.zeros((M_i.size, k.size))
+    idx = np.flatnonzero(occ)
+    u_i[idx] = profile.u(k, M_i[idx], trunc=aperture)
 
     f_i = np.where(resolved, mr.f_i, 0.0)
     mu = nfw_mass_ratio(np.where(occ, conc, 1.0), aperture)
@@ -163,6 +176,13 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
     if weights == 'aperture':
         w_model, f_u_model = f_part, f_out
     elif weights == 'catalogue':
+        if profile.source == 'measured':
+            raise SystemExit(
+                "--weights catalogue multiplies the catalogue f_i by NFW's "
+                "enclosed-mass ratio mu(x, c), which is not the mass a "
+                "measured u_bar is normalised to. Use --weights aperture "
+                "with --profile measured, or --profile nfw with this "
+                "weighting.")
         w_model, f_u_model = f_cat, f_u_cat
     else:
         raise ValueError(f"unknown weights {weights!r}")
@@ -173,12 +193,49 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
                 U_star=tot['U_star'], V_star=tot['V_star'], total=tot['total'],
                 resolved=resolved, hidden=mr.hidden, above=mr.above,
                 f_part=f_part, f_out=f_out, f_u_cat=f_u_cat,
-                f_u_model=f_u_model,
+                f_u_model=f_u_model, profile_source=profile.source,
                 M_ap=M_ap, u_i=u_i, conc=conc,
                 f_i=f_i, f_cat=f_cat, w_model=w_model,
                 R_model=R_model,
                 assigned_over_m200b=float(
                     cache['assigned_over_m200b_median']))
+
+
+def check_profile_caches(cfg, apertures, allow_compute):
+    """Preflight the stacked-profile caches the sweep is about to need.
+
+    EVERY aperture needs its own. u_bar is normalised to the mass inside that
+    radius, so the x = 1 stack is not the x = 2 one truncated -- it is a
+    different measurement, and Profile refuses to pretend otherwise.
+
+    Checked before the loop rather than inside it, because the loop measures
+    R*/U* for aperture 1 first: discovering at x = 1.2 that its profile cache
+    is missing would throw away a particle pass that had already run.
+    """
+    if cfg.profile_source != 'measured':
+        return
+    from Pmx_reconstruction.pmxlib import u_bar as ub
+    missing = [x for x in apertures if not ub.cache_path(cfg, x).exists()]
+    if not missing:
+        print(f"[B] stacked-profile caches present for all "
+              f"{len(apertures)} apertures")
+        return
+    cmds = "\n".join(f"      python -m Pmx_reconstruction.pmxlib.u_bar "
+                     f"--aperture {x:g}" for x in missing)
+    if allow_compute:
+        print(f"[B] NOTE: {len(missing)} of {len(apertures)} stacked-profile "
+              f"caches are missing ({', '.join(f'x={x:g}' for x in missing)}); "
+              f"this run will measure each one, a particle pass per species "
+              f"apiece, on top of the R*/U* passes. To do them separately "
+              f"first:\n{cmds}")
+        return
+    raise SystemExit(
+        f"--profile measured needs one stacked-profile cache per aperture, "
+        f"and {len(missing)} of {len(apertures)} are missing "
+        f"({', '.join(f'x={x:g}' for x in missing)}). u_bar is normalised to "
+        f"the mass inside the aperture, so the x = 1 stack cannot stand in "
+        f"for the others. Build them with\n{cmds}\nor drop --no-measure to "
+        f"let this run measure them.")
 
 
 def run_experiment_B(cfg, data, apertures,
@@ -201,6 +258,7 @@ def run_experiment_B(cfg, data, apertures,
     ref, M_ref = mr.r, mr.M_ref
 
     apertures = sorted({1.0} | {float(x) for x in apertures})
+    check_profile_caches(cfg, apertures, allow_compute)
 
     print("\n" + "=" * 70)
     print("EXPERIMENT B -- growing the halo aperture beyond r200b")
@@ -231,18 +289,20 @@ def run_experiment_B(cfg, data, apertures,
         print("\n" + "-" * 70)
         print(f"[B] aperture {x:g} r200m")
         print("-" * 70)
+        prof_x = Profile.from_config(cfg, z, aperture=float(x),
+                                     allow_compute=allow_compute)
         runs[x] = measure_aperture(cfg, data, x, weights=weights,
                                    allow_compute=allow_compute,
                                    recompute=recompute,
                                    chunk_particles=chunk_particles,
-                                   mr=mr)
+                                   mr=mr, profile=prof_x)
 
         runs[x]['U_models'] = {}
         for mode in modes:
             res = compute_U(
                 cfg, k, P_halo_gas[ref], M_ref, mr.M_u_hi, mode,
                 mr.int_logm_lo, hm=hm, z=z,
-                f_u=runs[x]['f_u_model'], trunc=float(x))
+                f_u=runs[x]['f_u_model'], trunc=float(x), profile=prof_x)
             runs[x]['U_models'][mode] = res
 
     # --- the two weights, side by side -----------------------------------------
@@ -377,6 +437,8 @@ def run_experiment_B(cfg, data, apertures,
             models += f'_cm-{cfg.colossus_conc_model}'
         if cfg.power_spectrum != PmxConfig.power_spectrum:
             models += f'_ps-{cfg.power_spectrum}'
+        if cfg.profile_source != PmxConfig.profile_source:
+            models += f'_prof-{cfg.profile_source}'
         if cfg.ngrid_3d:
             models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
         stem = (f'expB_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}'
@@ -393,6 +455,7 @@ def run_experiment_B(cfg, data, apertures,
     err_mode = modes[-1] if modes else None
     pdata = pl.ApertureData(
         k=k, k_Ny=k_Ny, apertures=apertures, runs=runs, P_true=P_true,
+        profile_source=cfg.profile_source,
         logM_cen=logM_cen, occupied=occ, error_mode=err_mode, k_split=k_split,
         P_halo_ref=P_halo_gas[ref],
         r200m=np.array([r200m_of_M(m, cfg.rhobar_m) if m > 0 else np.nan
@@ -472,7 +535,9 @@ def main():
                         "both: they bracket the answer.")
     g.add_argument('--no-measure', dest='allow_compute', action='store_false',
                    default=True,
-                   help="refuse to start a particle pass; use only apertures "
+                   help="refuse to start any particle pass -- for the R*/U* "
+                        "caches and, under --profile measured, for the "
+                        "stacked-profile ones too; use only apertures "
                         "that are already cached. Useful for a first look and "
                         "for replotting.")
     g.add_argument('--recompute-apertures', dest='recompute_apertures',

@@ -32,10 +32,12 @@ __all__ = [
     'TRACER_SYM', 'labels', 'LABEL_K', 'LABEL_DP_RATIO', 'LABEL_SHAPE', 'SHAPE_YLIM',
     'YLABEL_X_LEFT', 'YLABEL_X_RIGHT',
     'YLABEL_X_SINGLE', 'mode_style', 'set_ylabel_x', 'save_figure',
-    'PanelData', 'ApertureData', 'APERTURE_CMAP', 'aperture_colours',
+    'PanelData', 'ApertureData', 'ProfileData',
+    'APERTURE_CMAP', 'aperture_colours',
     'panel_reconstruction', 'panel_rec_ratio', 'panel_shape', 'panel_dP',
-    'panel_error', 'panel_shell_mass',
+    'panel_error', 'panel_shell_mass', 'panel_profile', 'panel_profile_ratio',
     'panel_figure', 'stacked_figure', 'ansatz_figure', 'shell_mass_figure',
+    'profile_figure',
     # aliases
     'validation_panel', 'production_panel', 'aperture_panel',
     'shape_figure', 'reconstruction_figure',
@@ -68,6 +70,14 @@ LABEL_K = r'$k$ [h/cMpc]'
 LABEL_DP_RATIO = r'$U_{\rm model}\,/\,U_{\rm exact}$'
 LABEL_SHAPE = r'$S(k)=\langle u_m T\rangle_w$'
 LABEL_HOST_BIN = r'$\log_{10} M_{200b}$ of the host bin'
+LABEL_UM = r'$u_m(k\,|\,M)$'
+LABEL_UM_RATIO = r'$\bar u_m\,/\,u_m^{\rm NFW} - 1$'
+# Two denominators share that label; panel_profile_ratio's own legend says
+# which curve is against which, so the axis can stay short.
+# Named where the panels can reach it, because two figures say it and it is
+# the one thing a reader has to know to read either of them.
+PROFILE_NOTE = {'nfw': r'$u_m$: NFW + $c(M,z)$',
+                'measured': r'$u_m$: measured $\bar u_m$'}
 LABEL_PI_OVER_R200M = r'$\pi/r_{200m}$ [h/cMpc]'
 
 
@@ -151,6 +161,9 @@ YLABEL_X_SINGLE = -0.082
 
 APERTURE_CMAP = plt.get_cmap('plasma')
 APERTURE_REC_RATIO_YLIM = (0.6, 1.4)
+# Smallest half-range the u_m ratio panel will shrink to, so a
+# well-modelled run shows a flat line rather than magnified noise.
+PROFILE_RATIO_FLOOR = 0.1
 SHELL_K_STYLES = ((0.1, ':'), (1.0, '-'), (3.0, '--'))
 
 
@@ -257,6 +270,9 @@ class PanelData:
     # Where a 3-D measurement hands over to the projected one, drawn as a
     # dashed guide by _guides. None when the run was purely 2-D.
     k_split: Optional[float] = None
+    # 'nfw' or 'measured'. Annotated on the spectrum panel, because which one
+    # a figure used is not otherwise recoverable from the curves.
+    profile_source: str = 'nfw'
 
     @property
     def has_exact(self) -> bool:
@@ -288,6 +304,7 @@ class ApertureData:
     error_mode: Optional[str] = None
     colours: Optional[dict] = None
     k_split: Optional[float] = None
+    profile_source: str = 'nfw'
 
     def __post_init__(self):
         self.apertures = sorted(float(x) for x in self.apertures)
@@ -327,6 +344,37 @@ class ApertureData:
 
     def total_model(self, x) -> np.ndarray:
         return self.runs[x]['R_model'] + self.U(x)
+
+
+@dataclass
+class ProfileData:
+    """Measured against modelled u_m, for a handful of mass bins.
+
+    One colour per mass bin, as in ansatz_figure: here a colour means a mass,
+    not an extrapolation mode, so this deliberately sits outside the mode
+    palette. Solid is what the simulation does, dashed is what the model says
+    it does, and the lower panel is the only thing R actually cares about --
+    the ratio, because that is the factor u_m contributes to every bin's term.
+
+    `u_fit` is optional: u_nfw re-evaluated at a concentration fitted to the
+    measured curve, which separates "NFW is the wrong shape" from "c(M,z) is
+    the wrong number".
+    """
+    k: np.ndarray
+    k_Ny: float
+    logM: np.ndarray                    # (nb,) log10 <M> of each bin shown
+    u_meas: np.ndarray                  # (nb, nk)
+    u_model: np.ndarray                 # (nb, nk)
+    u_fit: Optional[np.ndarray] = None  # (nb, nk), fitted c
+    c_model: Optional[np.ndarray] = None
+    c_fit: Optional[np.ndarray] = None
+    r200m: Optional[np.ndarray] = None  # (nb,) cMpc/h, for the k r200m = 1 marks
+    aperture: float = 1.0
+    k_split: Optional[float] = None
+
+    @property
+    def colours(self):
+        return plt.cm.viridis(np.linspace(0.0, 0.85, max(len(self.logM), 1)))
 
 
 def _is_aperture(d) -> bool:
@@ -381,6 +429,10 @@ def panel_reconstruction(ax, d, title=None, legend=True):
             ax.loglog(d.k, np.abs(d.P_selfpair), label='self-pair term (removed)',
                       **REF_STYLE['selfpair'])
         legend_kw = {}
+    note = PROFILE_NOTE.get(getattr(d, 'profile_source', 'nfw'))
+    if note:
+        ax.text(0.03, 0.03, note, transform=ax.transAxes, ha='left',
+                va='bottom', fontsize=SMALL_LEGEND, color='0.35')
     _guides(ax, d, ylabel=L['spectrum'], title=title,
             legend=legend and legend_kw)
 
@@ -590,6 +642,97 @@ def panel_shell_mass(ax, d: ApertureData):
     ax.tick_params(top=False)   # else the rc's top ticks double the twin's
 
 
+def _ratio_ylim(curves, floor=PROFILE_RATIO_FLOOR, ceiling=1.0):
+    """Symmetric y range around 0 that fits `curves`.
+
+    A fixed range would be wrong in both directions here: the gap can be a few
+    per cent for a well-modelled run, where (-1, 1) flattens everything onto
+    the zero line, or it can run away at high k. Floored so that a run with no
+    error does not magnify its own noise into a signal, and capped so one
+    diverging bin cannot squash the rest.
+    """
+    vals = np.concatenate([np.asarray(c)[np.isfinite(c)] for c in curves
+                           if c is not None and np.any(np.isfinite(c))]) \
+        if curves else np.array([])
+    half = float(np.max(np.abs(vals))) * 1.15 if vals.size else floor
+    half = min(max(half, floor), ceiling)
+    return (-half, half)
+
+
+def panel_profile(ax, d: ProfileData, legend=True):
+    """u_m(k|M) per mass bin: measured solid, model dashed, fitted-c dotted.
+
+    Log y, because u falls by more than a decade across the k range for the
+    massive bins and a linear axis would show only where it has already gone
+    to zero.
+    """
+    for n, lgM in enumerate(d.logM):
+        c = d.colours[n]
+        ax.loglog(d.k, np.abs(d.u_meas[n]), color=c, ls='-', lw=1.9,
+                  label=rf'$\log_{{10}}M={lgM:.2f}$')
+        ax.loglog(d.k, np.abs(d.u_model[n]), color=c, ls='--', lw=1.2)
+        if d.u_fit is not None:
+            ax.loglog(d.k, np.abs(d.u_fit[n]), color=c, ls=':', lw=1.4)
+        if d.r200m is not None and np.isfinite(d.r200m[n]) and d.r200m[n] > 0:
+            # k r200m = 1 for this bin: left of it u is 1 whatever the profile
+            # is, so disagreement there is a bug and not a result. Faint and
+            # dashed, because a solid vertical at data opacity reads as data.
+            ax.axvline(1.0 / d.r200m[n], color=c, lw=0.6, ls=(0, (2, 3)),
+                       alpha=0.22, zorder=0)
+    handles = [_proxy(r'measured $\bar u_m$', color='0.3', ls='-', lw=1.9),
+               _proxy(r'NFW, $c(M,z)$', color='0.3', ls='--', lw=1.2)]
+    if d.u_fit is not None:
+        handles.append(_proxy(r'NFW, fitted $c$', color='0.3', ls=':', lw=1.4))
+    if legend:
+        # Both legends go bottom-left, where the curves have already fallen
+        # away. Upper right is where the massive bins live, and a legend there
+        # lands on top of the very curves it is naming.
+        first = ax.legend(frameon=False, fontsize=SMALL_LEGEND, ncol=2,
+                          loc='lower left')
+        ax.add_artist(first)
+        ax.legend(handles=handles, frameon=False, fontsize=SMALL_LEGEND,
+                  loc='center left')
+    _guides(ax, d, ylabel=LABEL_UM)
+    ax.set_ylim(1e-3, 2.0)
+
+
+def panel_profile_ratio(ax, d: ProfileData, legend=True):
+    """The factor the profile choice puts into every bin's term of R.
+
+    Two curves per mass bin, SOLID against c(M,z) and DOTTED against the
+    fitted c -- the same numerator over two different denominators. Solid is
+    the error a --profile nfw run makes today; dotted is what survives
+    refitting the concentration; the gap between them is the part a better
+    c(M,z) would buy back. Zero means the model already had it right.
+
+    The line styles do NOT carry over from the panel above, where solid is the
+    measured profile itself and dashed is the model. This panel therefore
+    names its own, rather than letting the reader carry the wrong key down.
+
+    The band is the same 5% this module draws on every residual, so a profile
+    error can be weighed against a reconstruction error without converting
+    units in the reader's head.
+    """
+    shown = []
+    with _quiet():
+        for n, lgM in enumerate(d.logM):
+            r = d.u_meas[n] / d.u_model[n] - 1.0
+            ax.semilogx(d.k, r, color=d.colours[n], ls='-', lw=1.9)
+            shown.append(r)
+            if d.u_fit is not None:
+                rf = d.u_meas[n] / d.u_fit[n] - 1.0
+                ax.semilogx(d.k, rf, color=d.colours[n], ls=':', lw=1.4)
+                shown.append(rf)
+    handles = [_proxy(r'against $c(M,z)$', color='0.3', ls='-', lw=1.9)]
+    if d.u_fit is not None:
+        handles.append(_proxy(r'against fitted $c$', color='0.3', ls=':',
+                              lw=1.4))
+    _guides(ax, d, level=0.0, band=TOTAL_ERR_BAND, ylim=_ratio_ylim(shown),
+            ylabel=LABEL_UM_RATIO, xlabel=LABEL_K,
+            legend=legend and dict(handles=handles, fontsize=SMALL_LEGEND,
+                                   loc='lower left', ncol=2))
+
+
 # ==============================================================================
 # Figures -- each returns an unsaved Figure
 # ==============================================================================
@@ -692,6 +835,21 @@ def ansatz_figure(k, k_Ny, curves: Sequence[tuple], title=None):
         ax.legend(frameon=False, ncol=2)
         if title:
             ax.set_title(title)
+    return fig
+
+
+def profile_figure(d: ProfileData, title=None):
+    """Standalone two-row: u_m over the ratio, one colour per mass bin."""
+    with plt.rc_context(PANEL_RC):
+        fig, axes = plt.subplots(2, 1, figsize=SINGLE_FIGSIZE, sharex=True,
+                                 dpi=DPI,
+                                 gridspec_kw=dict(height_ratios=[2, 1],
+                                                  hspace=0.05))
+        panel_profile(axes[0], d)
+        panel_profile_ratio(axes[1], d)
+        if title:
+            axes[0].set_title(title)
+        set_ylabel_x(axes, YLABEL_X_SINGLE)
     return fig
 
 

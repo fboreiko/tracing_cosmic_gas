@@ -111,14 +111,23 @@ def cache_path(cfg, aperture=1.0, ngrid3=None):
 
 
 # Halo catalogue, binned exactly as measure_spectra does it
-def load_binned_centrals(cfg, aperture=1.0):
+def load_binned_centrals(cfg, aperture=1.0, nbins=None, logm_min=None,
+                         logm_max=None):
     """Positions, masses, radii and bin index of the in-range centrals.
 
     The binning is pmxlib.binning's, the same code measure_spectra uses, so bin
-    i here is bin i in the spectra bundle by construction.
+    i here is bin i in the spectra bundle by construction -- unless the caller
+    overrides it, which only pmxlib.u_bar does and which puts it on its own
+    mass grid deliberately.
+
+    Halos come back sorted by DESCENDING mass, and assign_particles is
+    first-assignment-wins, so extending the range downwards adds halos at the
+    bottom of the order and cannot take a particle from any halo above them:
+    the membership of the bundle's bins is bit-identical whatever the floor.
     """
     pos, mass, bin_index, logM_edges, extras = load_binned_halos(
-        cfg, extra_props=('r200b',), restrict_to_range=True)
+        cfg, extra_props=('r200b',), restrict_to_range=True,
+        nbins=nbins, logm_min=logm_min, logm_max=logm_max)
     r_cat = extras['r200b']
     r_use = float(aperture) * r200m_of_M(mass, cfg.rhobar_m)   # cMpc/h, comoving
 
@@ -133,7 +142,9 @@ def load_binned_centrals(cfg, aperture=1.0):
 
     pos = np.mod(pos, cfg.box)                       # cKDTree boxsize wants [0, L)
     order = np.argsort(-mass, kind='stable')         # descending mass
-    print(f"  {mass.size} centrals in [{cfg.logm_min}, {cfg.logm_max}), "
+    lo = cfg.logm_min if logm_min is None else float(logm_min)
+    hi = cfg.logm_max if logm_max is None else float(logm_max)
+    print(f"  {mass.size} centrals in [{lo}, {hi}), "
           f"aperture = {float(aperture):g} r200m, "
           f"r_max = {r_use.max():.3f} cMpc/h")
     return pos[order], mass[order], r_use[order], bin_index[order], logM_edges
@@ -142,7 +153,7 @@ def load_binned_centrals(cfg, aperture=1.0):
 # Particle membership
 def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass,
                      m_particle_msun_h, chunk_particles=5e7, nthread=4,
-                     aperture=1.0):
+                     aperture=1.0, max_halos_per_chunk=2_000_000):
     """label[p] = index of the most massive central whose r200m sphere contains
     particle p, or -1.
 
@@ -151,6 +162,14 @@ def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass,
     member particles per chunk is ~chunk_particles, which bounds the transient
     Python-list memory of query_ball_point. First assignment wins, so a
     particle in two overlapping spheres belongs to the more massive halo.
+
+    `max_halos_per_chunk` bounds the chunk from the other side. Sizing purely
+    by expected particles is fine while the catalogue stops at 10^11, but
+    n(M) ~ M^-1.9, so a floor two decades lower multiplies the halo count by
+    ~60 and most of those halos expect under one particle each: the cumulative
+    sum barely advances and a single chunk swallows millions of halos, whose
+    list-of-lists from query_ball_point is the memory the sizing was meant to
+    bound. With the bundle's own range the cap never binds.
     """
     n_p = pos_p.shape[0]
     label = np.full(n_p, -1, dtype=np.int32)
@@ -161,8 +180,10 @@ def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass,
 
     expected = float(aperture) ** 3 * halo_mass / m_particle_msun_h
     cum = np.cumsum(expected)
-    edges = np.searchsorted(cum, np.arange(0.0, cum[-1], chunk_particles))
-    edges = np.unique(np.append(edges, halo_mass.size))
+    edges = np.unique(np.concatenate([
+        np.searchsorted(cum, np.arange(0.0, cum[-1], chunk_particles)),
+        np.arange(0, halo_mass.size, int(max_halos_per_chunk)),
+        [halo_mass.size]]))
 
     n_assigned = 0
     t0 = time.time()

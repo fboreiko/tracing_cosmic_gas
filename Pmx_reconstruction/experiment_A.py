@@ -56,8 +56,9 @@ from Pmx_reconstruction.pmxlib.config import (MassRange, PmxConfig,
 from Pmx_reconstruction.pmxlib.halo_model import HaloModel
 from Pmx_reconstruction.pmxlib import plotting as pl
 from Pmx_reconstruction.pmxlib import rstar_ustar as ru
-from Pmx_reconstruction.pmxlib.nfw import conc_of, u_nfw
-from Pmx_reconstruction.pmxlib.reconstruction import compute_R, compute_U
+from Pmx_reconstruction.pmxlib.reconstruction import (Profile, compute_R,
+                                                      compute_U,
+                                                      reconstruction_weights)
 
 def _lowk(k, y, kmax=0.08):
     """Mean of y over k < kmax, for one-line reporting."""
@@ -119,14 +120,34 @@ def run_experiment_A(cfg, data):
     ref = mr.r
     P_halo_gas_ref = P_halo_gas[ref]
 
+    # --- where u_m comes from, and the weights that go with it ------------------
+    # Both are decided here, once, and handed to R, to U and to the validation
+    # truth. The measured partition is needed BEFORE R now, not just for
+    # scoring afterwards: under --profile measured it is where f_part lives.
+    # allow_compute matches the measured partition's below: a production run
+    # already measures what it is missing, so refusing to measure the profile
+    # would be the one inconsistent thing in the run.
+    prof = Profile.from_config(cfg, z, allow_compute=not mr.validate)
+    tot, _ = ru.load_measured_partition(cfg, data, mr=mr,
+                            allow_compute=not mr.validate)
+    if tot is None and not mr.validate:
+        raise SystemExit(
+            "[A] cannot score the reconstruction against R*/U*: the cache "
+            "sits on a different k grid from the bundle. Rebuild it with\n"
+            "      python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute")
+    w_R, f_u_weights = reconstruction_weights(cfg, mr, tot=tot)
+    print(f"[A] profile {prof.source}, weights "
+          f"{'f_part (assigned mass)' if prof.source == 'measured' else 'n_i M_i / rhobar_m'}: "
+          f"sum_i w_i = {float(np.sum(w_R)):.4f}, f_u = {f_u_weights:.4f}")
+
     # --- the exact target, validation only --------------------------------------
     U_exact = None
     f_u_hidden = None
     if mr.validate:
         idx = np.flatnonzero(hidden)
-        u_hidden = np.array([u_nfw(k, M_i[j], conc_of(cfg, M_i[j], z),
-                                   cfg.rhobar_m)
-                             for j in idx])
+        # The same profile as R. A validation truth built on a different u_m
+        # from the thing it scores would be measuring the profile switch.
+        u_hidden = prof.u(k, M_i[idx])
         U_exact = np.sum(mr.f_i[idx][:, None] * u_hidden * P_halo_gas[idx], axis=0)
         f_u_hidden = mr.f_hidden
         print(f"[A] exact masked-bin contribution built; "
@@ -155,7 +176,7 @@ def run_experiment_A(cfg, data):
 
     # --- the unresolved mass fraction ----------------------------------------------------------
     if cfg.fu == 'catalog':
-        f_u_amp = f_u_hidden if mr.validate else mr.f_u
+        f_u_amp = f_u_hidden if mr.validate else f_u_weights
     else:
         f_u_amp = None
     print(f"[A] f_u source: --fu {cfg.fu}"
@@ -186,6 +207,7 @@ def run_experiment_A(cfg, data):
             cfg, k, P_halo_gas_ref, mr.M_ref, mr.M_u_hi, mode, mr.int_logm_lo,
             hm=hm, z=z, cat_M=cm, cat_w=cw,
             T_sim=T_sim if mode == 'simhc' else None, f_u=f_u_amp,
+            profile=prof,
         )
         results[mode] = res
         S = res['S']
@@ -215,8 +237,7 @@ def run_experiment_A(cfg, data):
                   f"--validate can decide there.")
 
     # --- R and the target -------------------------------------------------------
-    n_use = np.where(mr.resolved, n_i, 0.0)
-    R = compute_R(cfg, k, P_halo_gas, M_i, n_use, z)
+    R = compute_R(cfg, k, P_halo_gas, M_i, n_i, z, profile=prof, weight=w_R)
 
     P_target = (R + U_exact) if mr.validate else P_matter_gas_true
 
@@ -224,15 +245,6 @@ def run_experiment_A(cfg, data):
     if mr.validate and f_u_hidden:
         with np.errstate(divide='ignore', invalid='ignore'):
             S_exact = U_exact / (f_u_hidden * P_halo_gas_ref)
-
-    # measured partition, re-split at M_r / M_max
-    tot, _ = ru.load_measured_partition(cfg, data, mr=mr,
-                            allow_compute=not mr.validate)
-    if tot is None and not mr.validate:
-        raise SystemExit(
-            "[A] cannot score the reconstruction against R*/U*: the cache "
-            "sits on a different k grid from the bundle. Rebuild it with\n"
-            "      python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute")
 
     def _save(fig, kind):
         """Save one of this run's figures, under a stem naming the whole run."""
@@ -243,6 +255,7 @@ def run_experiment_A(cfg, data):
             models += f'_cm-{cfg.colossus_conc_model}'
         if cfg.power_spectrum != PmxConfig.power_spectrum:
             models += f'_ps-{cfg.power_spectrum}'
+        models += prof.tag                    # empty unless --profile measured
         if cfg.ngrid_3d:
             models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
         stem = (f'expA_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}{mr.tag()}'
@@ -254,6 +267,7 @@ def run_experiment_A(cfg, data):
         return path
 
     d = pl.PanelData(k=k, k_Ny=k_Ny, results=results, k_split=k_split,
+                     profile_source=prof.source,
                      R=R, P_target=P_target,
                      P_matter_gas_true=P_matter_gas_true,
                      U_exact=U_exact, S_exact=S_exact,
@@ -279,6 +293,7 @@ def run_experiment_A(cfg, data):
         'ref_logM': float(logM_cen[ref]),
         'hmf_source': cfg.hmf, 'fu_source': cfg.fu,
         'concentration_source': cfg.concentration_source,
+        'profile_source': prof.source, 'w_R': w_R, 'f_u_weights': f_u_weights,
         'f_u': mr.f_u, 'f_resolved': mr.f_resolved,
         'b_measured': b_meas, 'logM_cen': logM_cen, 'M_mean': M_i, 'n_i': n_i,
         'P_halo_gas_ref': P_halo_gas_ref, 'R': R, 'P_matter_gas_true': P_matter_gas_true,
