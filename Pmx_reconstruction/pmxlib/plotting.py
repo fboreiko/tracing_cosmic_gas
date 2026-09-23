@@ -32,12 +32,14 @@ __all__ = [
     'TRACER_SYM', 'labels', 'LABEL_K', 'LABEL_DP_RATIO', 'LABEL_SHAPE', 'SHAPE_YLIM',
     'YLABEL_X_LEFT', 'YLABEL_X_RIGHT',
     'YLABEL_X_SINGLE', 'mode_style', 'set_ylabel_x', 'save_figure',
-    'PanelData', 'ApertureData', 'ProfileData',
+    'PanelData', 'ApertureData', 'ProfileData', 'SpheriseData',
     'APERTURE_CMAP', 'aperture_colours',
     'panel_reconstruction', 'panel_rec_ratio', 'panel_shape', 'panel_dP',
     'panel_error', 'panel_shell_mass', 'panel_profile', 'panel_profile_ratio',
+    'panel_spherise', 'panel_spherise_ratio', 'panel_spherise_split',
+    'panel_spherise_bins',
     'panel_figure', 'stacked_figure', 'ansatz_figure', 'shell_mass_figure',
-    'profile_figure',
+    'profile_figure', 'spherise_figure',
     # aliases
     'validation_panel', 'production_panel', 'aperture_panel',
     'shape_figure', 'reconstruction_figure',
@@ -852,6 +854,202 @@ def profile_figure(d: ProfileData, title=None):
         if title:
             axes[0].set_title(title)
         set_ylabel_x(axes, YLABEL_X_SINGLE)
+    return fig
+
+
+# ==============================================================================
+# Experiment D -- what randomising the halo interiors does to R*
+# ==============================================================================
+@dataclass
+class SpheriseData:
+    """The production R*, the randomised R*, and the model that sits between.
+
+    Every curve here is at ONE aperture and is a bin sum over the same bins
+    with the same weights, so the three differ only in what they say about the
+    inside of a halo:
+
+        R_meas      f_part * u_bar * P_halo_gas, the measured radial profile
+        R_nfw       the same with u_m from NFW + c(M,z), for context: it is
+                    what the production reconstruction actually uses
+        R_star      the exact contribution of those particles
+        R_star_rand the same after the halo interiors are randomised
+
+    The decomposition the figure exists to show is the exact
+        (R_meas - R_star) = (R_meas - R_star_rand) - (R_star - R_star_rand),
+    i.e. total = halo-to-halo + (minus) intra-halo.
+    """
+    k: np.ndarray
+    k_Ny: float
+    P_true: np.ndarray
+    R_star: np.ndarray
+    R_star_rand: np.ndarray
+    R_meas: np.ndarray
+    logM: np.ndarray                          # (nbins,) bin centres
+    C_i: np.ndarray                           # (nbins, nk) per-bin intra-halo
+    R_star_i: np.ndarray                      # (nbins, nk) production
+    mode: str = 'shuffle'
+    aperture: float = 1.0
+    R_nfw: Optional[np.ndarray] = None
+    sigma: Optional[np.ndarray] = None        # randomisation noise on R*_rand
+    k_split: Optional[float] = None
+
+
+# Red means the intra-halo term wherever it appears, so the randomised R* --
+# which is the curve that term is the DISTANCE to -- takes its own colour
+# rather than sharing one with it.
+SPHERISE_STYLE = {
+    'star':  dict(color='k', ls='-', lw=2.6),
+    'rand':  dict(color='C1', ls='-', lw=2.0),
+    'meas':  dict(color='C0', ls='--', lw=2.0),
+    'nfw':   dict(color='C2', ls=':', lw=1.8),
+    'intra': dict(color='C3', ls='-', lw=2.2),
+    'halo':  dict(color='C0', ls='--', lw=2.0),
+    'total': dict(color='k', ls='-', lw=2.4, alpha=0.6),
+}
+SPHERISE_BIN_K = (1.0, 3.0, 5.0)
+
+
+def _spherise_labels(mode):
+    r = r'R_\star'
+    return {
+        'star': rf'${r}$ (measured)',
+        'rand': rf'${r}$, {mode}d halos',
+        'meas': r'$R = \sum_i \tilde f_i \bar u_m P^{\,h e}$',
+        'nfw':  r'$R$ with $u_m^{\rm NFW}$',
+        'total': rf'$(R - {r})/P^{{\,me}}$  total',
+        'halo': rf'$(R - {r}^{{\rm\,rand}})/P^{{\,me}}$  halo-to-halo',
+        'intra': rf'$({r} - {r}^{{\rm\,rand}})/P^{{\,me}}$  intra-halo',
+        'intra_abs': rf'$C = {r} - {r}^{{\rm\,rand}}$  intra-halo',
+    }
+
+
+def panel_spherise(ax, d: SpheriseData, legend=True):
+    """The spectra, with the intra-halo term they differ by drawn beside them.
+
+    The four bin sums lie on top of one another on a log axis -- the whole
+    effect is a few per cent -- so the panel would be empty of information
+    without C(k) itself on it. C is what the model is missing, in the units it
+    would have to be added in, and sigma underneath it says where it stops
+    being measurable.
+    """
+    L = _spherise_labels(d.mode)
+    ax.loglog(d.k, np.abs(d.R_star), label=L['star'], **SPHERISE_STYLE['star'])
+    ax.loglog(d.k, np.abs(d.R_star_rand), label=L['rand'],
+              **SPHERISE_STYLE['rand'])
+    ax.loglog(d.k, np.abs(d.R_meas), label=L['meas'], **SPHERISE_STYLE['meas'])
+    if d.R_nfw is not None:
+        ax.loglog(d.k, np.abs(d.R_nfw), label=L['nfw'], **SPHERISE_STYLE['nfw'])
+    intra = d.R_star - d.R_star_rand
+    ax.loglog(d.k, np.abs(intra), label=L['intra_abs'],
+              **SPHERISE_STYLE['intra'])
+    if d.sigma is not None:
+        ax.loglog(d.k, np.abs(d.sigma), color='0.6', ls=':', lw=1.4,
+                  label=r'randomisation noise $\sigma$')
+    # Keep the axis on the part of the range the curves occupy: C is small but
+    # it is the point, so the floor is set by it rather than by R*.
+    finite = np.isfinite(intra) & (np.abs(intra) > 0)
+    if np.any(finite):
+        lo = float(np.nanmin(np.abs(intra)[finite]))
+        hi = float(np.nanmax(np.abs(d.R_star)))
+        ax.set_ylim(max(lo, hi * 1e-8) * 0.3, hi * 3.0)
+    _guides(ax, d, ylabel=rf'$R(k)\,L_{{\rm box}}^2$, $x = {d.aperture:g}$',
+            legend=dict(loc='lower left', fontsize=SMALL_LEGEND) if legend
+            else None)
+
+
+def panel_spherise_ratio(ax, d: SpheriseData):
+    """Everything as a fraction of the measured R*, with the 5% band."""
+    L = _spherise_labels(d.mode)
+    with _quiet():
+        ax.semilogx(d.k, d.R_star_rand / d.R_star - 1.0, label=L['rand'],
+                    **SPHERISE_STYLE['rand'])
+        ax.semilogx(d.k, d.R_meas / d.R_star - 1.0, label=L['meas'],
+                    **SPHERISE_STYLE['meas'])
+        if d.R_nfw is not None:
+            ax.semilogx(d.k, d.R_nfw / d.R_star - 1.0, label=L['nfw'],
+                        **SPHERISE_STYLE['nfw'])
+    _guides(ax, d, level=0.0, band=TOTAL_ERR_BAND, ylim=(-0.30, 0.15),
+            ylabel=r'curve $/\,R_\star - 1$', xlabel=LABEL_K)
+
+
+def panel_spherise_split(ax, d: SpheriseData, legend=True):
+    """The identity the experiment is for: total = halo-to-halo - intra-halo.
+
+    Drawn as fractions of P^me so the numbers can be read straight against
+    the error budget panels of Experiment B, where the same quantity is the
+    'profile error'.
+    """
+    L = _spherise_labels(d.mode)
+    with _quiet():
+        total = (d.R_meas - d.R_star) / d.P_true
+        halo = (d.R_meas - d.R_star_rand) / d.P_true
+        intra = (d.R_star - d.R_star_rand) / d.P_true
+        ax.semilogx(d.k, total, label=L['total'], **SPHERISE_STYLE['total'])
+        ax.semilogx(d.k, halo, label=L['halo'], **SPHERISE_STYLE['halo'])
+        ax.semilogx(d.k, -intra, label=rf'$-${L["intra"]}',
+                    **SPHERISE_STYLE['intra'])
+        if d.sigma is not None:
+            ax.fill_between(d.k, -np.abs(d.sigma / d.P_true),
+                            np.abs(d.sigma / d.P_true), color='0.85',
+                            zorder=0, label=r'$\pm\sigma$')
+    _guides(ax, d, level=0.0, ylim=(-0.18, 0.08),
+            ylabel=r'fraction of $P^{\,me}$',
+            legend=dict(loc='lower left', fontsize=SMALL_LEGEND) if legend
+            else None)
+
+
+def panel_spherise_bins(ax, d: SpheriseData, legend=True):
+    """Where in halo mass the intra-halo term lives.
+
+    Per bin, the intra-halo term as a fraction of that bin's own R*_i: a
+    substructure term should grow with host mass and with k, while a bin-width
+    artefact would not care which bin it is in.
+    """
+    ks = [kk for kk in SPHERISE_BIN_K if kk <= d.k[-1]]
+    colours = plt.cm.viridis(np.linspace(0.0, 0.8, max(len(ks), 1)))
+    occupied = np.any(np.isfinite(d.R_star_i) & (d.R_star_i != 0.0), axis=1)
+    for n, kk in enumerate(ks):
+        j = int(np.argmin(np.abs(d.k - kk)))
+        with _quiet():
+            y = np.where(occupied, d.C_i[:, j] / d.R_star_i[:, j], np.nan)
+        ax.plot(d.logM, y, color=colours[n], lw=2.0,
+                label=rf'$k = {d.k[j]:.2g}$')
+    ax.axhline(0.0, c='k', lw=0.8)
+    ax.set_xlabel(LABEL_HOST_BIN)
+    ax.set_ylabel(r'intra-halo $/\,R_{\star i}$')
+    if legend:
+        ax.legend(frameon=False, loc='upper left', fontsize=SMALL_LEGEND)
+
+
+def spherise_figure(d: SpheriseData, title=None):
+    """The 2x2 experiment D panel.
+
+    Its own skeleton rather than _two_column_axes: the bottom right panel is
+    against log M, not k, so the right column must NOT share an x axis. Undoing
+    a share after the fact is not something matplotlib supports across
+    versions, so the two are simply never joined.
+    """
+    with plt.rc_context(PANEL_RC):
+        fig = plt.figure(figsize=PANEL_FIGSIZE, dpi=DPI)
+        outer = fig.add_gridspec(1, 2, width_ratios=PANEL_WIDTH_RATIOS,
+                                 wspace=PANEL_WSPACE)
+        gs_l = outer[0, 0].subgridspec(2, 1, height_ratios=[3, 1], hspace=0.05)
+        gs_r = outer[0, 1].subgridspec(2, 1, height_ratios=[1, 1], hspace=0.30)
+        ax_lt = fig.add_subplot(gs_l[0])
+        ax_lb = fig.add_subplot(gs_l[1], sharex=ax_lt)
+        ax_rt = fig.add_subplot(gs_r[0])
+        ax_rb = fig.add_subplot(gs_r[1])
+        plt.setp(ax_lt.get_xticklabels(), visible=False)
+        set_ylabel_x([ax_lt, ax_lb], YLABEL_X_LEFT)
+        set_ylabel_x([ax_rt, ax_rb], YLABEL_X_RIGHT)
+
+        panel_spherise(ax_lt, d)
+        panel_spherise_ratio(ax_lb, d)
+        panel_spherise_split(ax_rt, d)
+        panel_spherise_bins(ax_rb, d)
+        ax_rt.set_xlabel(LABEL_K)
+        if title:
+            ax_lt.set_title(title)
     return fig
 
 
