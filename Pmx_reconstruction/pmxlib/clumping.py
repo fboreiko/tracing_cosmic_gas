@@ -2,6 +2,13 @@
 # -*- coding: utf-8 -*-
 """The intra-halo clumping correction to u_m, calibrated by experiment D.
 
+Experiment D itself is NOT on this branch: pmxlib/spherise.py, experiment_D.py
+and rstar_ustar's --randomise caches live on 3d-stitch-expD. What is here is
+its result, which stands on its own -- nothing below imports any of them. Read
+that branch, or re-derive the numbers from its experiment_D plot data, before
+changing CLUMP_A, CLUMP_ALPHA or XI_MAX: they are a fit, not constants, and
+the run they were fitted on is named in CALIBRATION.
+
 R writes a halo's matter as one smooth radial profile, so the only thing it
 can say about a halo's interior is how much mass lies at each radius. A real
 halo keeps some of that mass in subhaloes, those subhaloes hold gas, and matter
@@ -99,8 +106,9 @@ CLUMP_ALPHA = 1.74
 XI_MAX = 0.19
 
 # Where the numbers came from, so a run can print its own provenance.
-CALIBRATION = ('experiment D, strongest_AGN, z=0.74, x=1, nb30 logM 11-15, '
-               '3d384 k_split 1; xi measured over 0.2 < k r200m < 12')
+CALIBRATION = ('experiment D (branch 3d-stitch-expD), strongest_AGN, '
+               'z=0.74, x=1, nb30 logM 11-15, 3d384 k_split 1; '
+               'xi measured over 0.2 < k r200m < 12')
 
 # The cap is reached here, for reporting: (XI_MAX / CLUMP_A) ** (1 / CLUMP_ALPHA)
 KR_SATURATES = (XI_MAX / CLUMP_A) ** (1.0 / CLUMP_ALPHA)
