@@ -263,7 +263,7 @@ def run_experiment_A(cfg, data):
             models += f'_cm-{cfg.colossus_conc_model}'
         if cfg.power_spectrum != PmxConfig.power_spectrum:
             models += f'_ps-{cfg.power_spectrum}'
-        models += prof.tag                    # empty unless --profile measured
+        models += prof.tag         # --profile measured and/or --clumping
         if cfg.ngrid_3d:
             models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
         stem = (f'expA_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}{mr.tag()}'

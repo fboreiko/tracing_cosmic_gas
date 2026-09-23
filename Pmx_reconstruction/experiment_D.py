@@ -451,6 +451,7 @@ def _finish(cfg, data, d, mr, prod, rand, randomise, aperture):
     models = ''
     if cfg.colossus_conc_model != PmxConfig.colossus_conc_model:
         models += f'_cm-{cfg.colossus_conc_model}'
+    models += cfg.clump_tag
     if cfg.ngrid_3d:
         models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
     stem = (f'expD_spherise_gas_{cfg.mass_def}_nb{cfg.nbins}'

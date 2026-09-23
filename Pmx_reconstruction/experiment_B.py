@@ -445,6 +445,7 @@ def run_experiment_B(cfg, data, apertures,
             models += f'_ps-{cfg.power_spectrum}'
         if cfg.profile_source != PmxConfig.profile_source:
             models += f'_prof-{cfg.profile_source}'
+        models += cfg.clump_tag          # empty unless --clumping
         if cfg.ngrid_3d:
             models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
         mode_tag = '' if kind == 'shellmass' or not err_mode \
