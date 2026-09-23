@@ -274,11 +274,16 @@ def run_experiment_B(cfg, data, apertures,
 
     # --- the halo model, only if a U mode needs it -----------------------------
     modes = [m for m in cfg.extrap if m != 'simhc']
+    err_mode = modes[-1] if modes else None
     if 'simhc' in cfg.extrap:
         print("[B] dropping mode 'simhc': it needs measured spectra below "
               "M_r, which only experiment A's validation uses.")
+    with np.errstate(divide='ignore', invalid='ignore'):
+        resp = np.asarray(data['P_halo_dm'], float)[ref] / P_halo_gas[ref]
+    resp = np.where(np.isfinite(resp), resp, 1.0)
+
     hm = None
-    if any(m in ('bias', 'halomodel') for m in modes):
+    if any(m in ('bias', 'halomodel', 'gascdm') for m in modes):
         from Pmx_reconstruction.pmxlib.halo_model import HaloModel
         print("[B] building the halo model ...")
         hm = HaloModel(cfg, z, power_spectrum=cfg.power_spectrum)
@@ -302,7 +307,8 @@ def run_experiment_B(cfg, data, apertures,
             res = compute_U(
                 cfg, k, P_halo_gas[ref], M_ref, mr.M_u_hi, mode,
                 mr.int_logm_lo, hm=hm, z=z,
-                f_u=runs[x]['f_u_model'], trunc=float(x), profile=prof_x)
+                f_u=runs[x]['f_u_model'], trunc=float(x), profile=prof_x,
+                resp=resp)
             runs[x]['U_models'][mode] = res
 
     # --- the two weights, side by side -----------------------------------------
@@ -441,18 +447,19 @@ def run_experiment_B(cfg, data, apertures,
             models += f'_prof-{cfg.profile_source}'
         if cfg.ngrid_3d:
             models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
+        mode_tag = '' if kind == 'shellmass' or not err_mode \
+            else f'_mode{err_mode}'
         stem = (f'expB_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}'
                 f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
                 f'{"" if mr.is_default else mr.tag()}'
                 f'_ap{"-".join(f"{x:g}" for x in apertures)}'
-                f'_mode{"-".join(modes)}_w{weights}{models}')
+                f'{mode_tag}_w{weights}{models}')
         path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
         ensure_parents(path)
         pl.save_figure(fig, path)
         print(f"[B][plot] {path}")
         return path
 
-    err_mode = modes[-1] if modes else None
     pdata = pl.ApertureData(
         k=k, k_Ny=k_Ny, apertures=apertures, runs=runs, P_true=P_true,
         profile_source=cfg.profile_source,

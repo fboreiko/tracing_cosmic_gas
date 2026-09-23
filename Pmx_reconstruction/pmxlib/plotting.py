@@ -46,8 +46,10 @@ __all__ = [
 # ==============================================================================
 # Palette, type, layout
 # ==============================================================================
-MODE_COLOURS = {'flat': '0.35', 'simhc': 'C3', 'bias': 'C2', 'halomodel': 'C0'}
-MODE_STYLES = {'flat': '--', 'simhc': '-', 'bias': '--', 'halomodel': '-.'}
+MODE_COLOURS = {'flat': '0.35', 'simhc': 'C3', 'bias': 'C2', 'halomodel': 'C0',
+                'gascdm': 'C5'}
+MODE_STYLES = {'flat': '--', 'simhc': '-', 'bias': '--', 'halomodel': '-.',
+               'gascdm': (0, (4, 1, 1, 1))}
 MODE_FALLBACK = ('C4', ':')
 
 REF_STYLE = {

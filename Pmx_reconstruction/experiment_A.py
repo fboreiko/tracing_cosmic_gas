@@ -159,7 +159,7 @@ def run_experiment_A(cfg, data):
         print("[A] dropping mode 'simhc': it needs --validate.")
         modes.remove('simhc')
     # 'flat' needs it too whenever the mass integral is analytic.
-    needs_hm = (any(m in ('bias', 'halomodel') for m in modes)
+    needs_hm = (any(m in ('bias', 'halomodel', 'gascdm') for m in modes)
                 or (cfg.hmf == 'tinker' and any(m != 'simhc' for m in modes)))
     hm = None
     if needs_hm:
@@ -182,6 +182,14 @@ def run_experiment_A(cfg, data):
     print(f"[A] f_u source: --fu {cfg.fu}"
           + (f" -> f_u = {f_u_amp:.4f}" if f_u_amp is not None else
              " -> from the Tinker+08 integral, per mode"))
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        resp = P_halo_dm[ref] / P_halo_gas_ref
+    resp = np.where(np.isfinite(resp), resp, 1.0)
+    if 'gascdm' in modes:
+        print(f"[A] measured response P^hrc/P^hre: {_lowk(k, resp):.4f} at "
+              f"k -> 0, " + ", ".join(f"{kk:g}: {float(np.interp(kk, k, resp)):.3f}"
+                                      for kk in (1.0, 3.0) if kk <= k[-1]))
 
     # --- catalogue weights and T_sim, validation only ---------------------------
     T_sim = None
@@ -207,7 +215,7 @@ def run_experiment_A(cfg, data):
             cfg, k, P_halo_gas_ref, mr.M_ref, mr.M_u_hi, mode, mr.int_logm_lo,
             hm=hm, z=z, cat_M=cm, cat_w=cw,
             T_sim=T_sim if mode == 'simhc' else None, f_u=f_u_amp,
-            profile=prof,
+            profile=prof, resp=resp,
         )
         results[mode] = res
         S = res['S']

@@ -395,7 +395,7 @@ def _add_mass_range_args(ap, validate=True):
 def _add_extrapolation_args(ap):
     g = ap.add_argument_group('Extrapolating P_halo_gas(k|M) below M_r')
     g.add_argument('--extrap', nargs='+', default=list(_D.extrap),
-                   choices=['flat', 'simhc', 'bias', 'halomodel'],
+                   choices=['flat', 'simhc', 'bias', 'halomodel', 'gascdm'],
                    help="which extrapolations to run")
     g.add_argument('--hmf', default=_D.hmf, choices=['tinker', 'catalog'],
                    help="mass function used in the U integral: 'tinker' or "

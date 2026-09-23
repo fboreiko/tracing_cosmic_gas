@@ -174,13 +174,14 @@ def compute_R(cfg, k, P_halo_gas, M_i, n_i, z, trunc=1.0, profile=None,
     return np.sum(weight * u_im * P_halo_gas, axis=0)     # sum over mass bins
 
 
-def transfer_T(k, M_nodes, M_ref, mode, hm=None, T_sim=None):
-    """Mass transfer function T(k,M) = P_hc(k|M) / P_hc(k|M_r), shape (nM, nk).
+def transfer_T(k, M_nodes, M_ref, mode, hm=None, T_sim=None, resp=None):
+    """Mass transfer function T(k,M), shape (nM, nk).
 
     'flat'      -> 1
     'bias'      -> b(M)/b(M_r), the 2-halo limit
     'halomodel' -> full 1-halo + 2-halo ratio
     'simhc'     -> T_sim, supplied by the caller from measured P_halo_dm
+    'gascdm'    -> halomodel divided by the measured response at M_r
     """
     nM, nk = M_nodes.size, k.size
     if mode == 'flat':
@@ -195,14 +196,21 @@ def transfer_T(k, M_nodes, M_ref, mode, hm=None, T_sim=None):
     if mode == 'bias':
         return (hm.bias(M_nodes) / float(hm.bias(np.array([M_ref]))[0]))[:, None] \
             * np.ones((1, nk))
-    if mode == 'halomodel':
-        return hm.P_hc(k, M_nodes) / hm.P_hc(k, np.array([M_ref]))[0][None, :]
+    if mode in ('halomodel', 'gascdm'):
+        T = hm.P_hc(k, M_nodes) / hm.P_hc(k, np.array([M_ref]))[0][None, :]
+        if mode == 'halomodel':
+            return T
+        if resp is None:
+            raise ValueError("mode 'gascdm' needs `resp`, the measured "
+                             "P_halo_dm(k|M_r) / P_halo_gas(k|M_r)")
+        return T * np.asarray(resp, dtype=float)[None, :]
     raise ValueError(f"unknown extrapolation mode {mode!r}")
 
 
 def compute_U(cfg, k, P_halo_gas_ref, M_ref, M_u_hi, mode, int_logm_lo,
               hm=None, z=None, cat_M=None, cat_w=None, T_sim=None,
-              n_nodes=None, f_u=None, use_um=True, trunc=1.0, profile=None):
+              n_nodes=None, f_u=None, use_um=True, trunc=1.0, profile=None,
+              resp=None):
     """U(k) = f_u * S(k) * P_halo_gas(k|M_r),   S(k) = <u_m(k|M) T(k,M)>_w
 
     Two ways of supplying the mass weight w = M n(M):
@@ -222,6 +230,9 @@ def compute_U(cfg, k, P_halo_gas_ref, M_ref, M_u_hi, mode, int_logm_lo,
 
     trunc
         Multiple of r200m at which u_m is truncated (experiment_B varies it).
+
+    resp
+        Measured P_halo_dm(k|M_r) / P_halo_gas(k|M_r); 'gascdm' only.
 
     profile
         Where u_m comes from, the same object R was given. Default: the NFW
@@ -258,7 +269,7 @@ def compute_U(cfg, k, P_halo_gas_ref, M_ref, M_u_hi, mode, int_logm_lo,
     if T_sim is not None:
         T_sim = np.asarray(T_sim)[keep]
 
-    T = transfer_T(k, M_nodes, M_ref, mode, hm=hm, T_sim=T_sim)
+    T = transfer_T(k, M_nodes, M_ref, mode, hm=hm, T_sim=T_sim, resp=resp)
 
     if use_um and mode != 'flat':
         profile = Profile(cfg, z, aperture=trunc) if profile is None else profile

@@ -1,0 +1,1200 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm} % For \mathbfit
+\usepackage{xcolor} % For \textcolor
+\usepackage[a4paper, margin=2cm]{geometry}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\bx}{\mathbf{x}}
+\newcommand{\br}{\mathbf{r}}
+\newcommand{\bk}{\mathbf{k}}
+\newcommand{\Si}{\operatorname{Si}}
+\newcommand{\Ci}{\operatorname{Ci}}
+
+% Figures/ holds symlinks into ../plots/pme_reconstruction/, refreshed by
+%   python link_figures.py
+% A figure name encodes its whole run configuration, so a name with nothing
+% behind it means that run has not been done yet. Draw a box saying so rather
+% than failing the build, so the document always compiles while results are
+% still coming in.
+\usepackage{url}
+\def\UrlBreaks{\do\_\do\-\do\.\do\/\do\1\do\2\do\5}
+\urlstyle{tt}
+\let\realincludegraphics\includegraphics
+\renewcommand{\includegraphics}[2][]{%
+  \IfFileExists{#2}{\realincludegraphics[#1]{#2}}{%
+    \fbox{\begin{minipage}{0.86\textwidth}
+      \vspace{0.8em}\centering
+      \textbf{FIGURE NOT BUILT}\\[0.6em]
+      {\scriptsize\sloppy\path{#2}}\\[0.6em]
+      see \texttt{paper\_notes/README.md}
+      \vspace{0.8em}
+    \end{minipage}}}}
+
+\title{HATF Project Notes}
+\author{Fedir Boreiko}
+\date{July 2026}
+
+\begin{document}
+
+\section{Theory: $P^{mm}$ from $P^{hm}$}
+
+All matter in the universe is assumed to be bound in virialized halos. Under this assumption, we can build the full matter density field by stacking the density profiles of individual halos, weighted by their abundance.
+
+Halo mass function is number density at a fixed halo mass $n(M)$. The mean matter density of the universe, $\bar\rho_m$, is the total mass locked in all halos:
+\begin{equation} \label{eq:mass-conservation}
+    \bar\rho_m = \int \dd M \, M \, n(M)
+\end{equation}
+
+Every halo of mass $M$ has a matter density profile $\rho_m(\bx \mid M)$. We define $u_m(k \mid M)$ as the normalized Fourier transform of this profile:
+\begin{equation} \label{eq:u_def}
+    u_m(k \mid M) \;=\; \frac{1}{M} \int \dd^3x \; \rho_m(\bx \mid M) \, e^{-i \bk \cdot \bx},
+    \qquad u_m(k\to 0 \mid M) = 1
+\end{equation}
+We can define a dimensionless matter weight function, $W_m(k,M)$, which represents the fractional contribution of a halo's mass to the background density at a given scale:
+\begin{equation} \label{eq:Wm}
+    W_m(k,M) \;\equiv\; \frac{M}{\bar\rho_m} \, u_m(k \mid M)
+\end{equation}
+and Equation~\ref{eq:mass-conservation} ensures 
+
+\begin{equation} \label{eq:sumrule}
+    \int \dd M \, n(M)\, W_m(k\to 0, \,M) \;=\; 1
+\end{equation}
+
+Now, let $\delta_h(\bk \mid M)$ be the Fourier-space density contrast of halos of mass $M$. The total matter overdensity field $\delta_m(\bk)$ is the integral over all halo mass bins of the halo fluctuation field, weighted by the spatial profile and mass of those halos:
+\begin{equation}
+    \delta_m(\bk) \;=\; \int \dd M \, n(M) \, W_m(k,M) \, \delta_h(\bk \mid M)
+    \label{eq:stack}
+\end{equation}
+\textcolor{blue}{
+Proof:
+\[
+    \delta_m(\bk) \;=\; \int \dd M \, n(M) \, \left[ \frac{M}{\bar\rho_m} u_m(k \mid M) \right] \, \delta_h(\bk \mid M)
+\]
+Use $n(\bx, M) = \sum_j \delta^{(D)}(M - M_j)\delta^{(D)}(\bx - \bx_j)$, where $j$ runs over all halos, and hence (Fourier transformed), $n(M) \, \delta_h(\bk \mid M) = \sum_{j} \delta^{(D)}(M - M_j) \, e^{-i \bk \cdot \bx_j}$:
+\begin{align*}
+    \delta_m(\bk) \; &=\; \int \dd M \; \left[ \frac{M}{\bar\rho_m} u_m(k \mid M) \right] \left[ \sum_{j} \delta^{(D)}(M - M_j) \, e^{-i \bk \cdot \bx_j} \right] \\
+    &=\; \frac{1}{\bar\rho_m} \sum_{j} e^{-i \bk \cdot \bx_j} \int \dd M \; M \, u_m(k \mid M) \, \delta^{(D)}(M - M_j) \\
+    &=\; \frac{1}{\bar\rho_m} \sum_{j} M_j \, u_m(k \mid M_j) \, e^{-i \bk \cdot \bx_j} \\ &=\; \frac{1}{\bar\rho_m} \sum_{j}\int \dd^3x \; \rho_m(\bx \mid M_j) \, e^{-i \bk \cdot (\bx+\bx_j)}
+    \\ &= \frac{1}{\bar\rho_m} \sum_{j}\int \dd^3x \; \rho_m(\bx - \bx_j \mid M_j) \, e^{-i \bk \cdot \bx}
+\end{align*}
+Which is $\delta_m(\bk)$.
+}
+
+We are interested in the cross-spectrum between halos at a fixed mass $M$ and the total matter field:
+\begin{equation}
+    \big\langle \delta_h(\bk \mid M) \, \delta_m^*(\bk') \big\rangle
+    \;=\; \int \dd M' \; n(M') \, W_m(k',M') \, 
+    \big\langle \delta_h(\bk \mid M) \, \delta_h^*(\bk' \mid M') \big\rangle
+    \label{eq:cross-correlate-start}
+\end{equation}
+RHS contains the halo-halo power spectrum, $P^{hh}(k \mid M, M')$, which splits into a 1-halo term (a halo correlated with itself) and a 2-halo term (correlations between distinct halos).
+
+\paragraph{1-halo term.} 
+The auto-correlation of a discrete field contains a standard Poisson shot-noise term. A halo is perfectly correlated with itself only if $M = M'$. In a continuous mass function, this shot noise takes the form:
+\begin{equation}
+    P^{hh}_{\rm 1h}(k \mid M, M') \;=\; \frac{1}{n(M)} \, \delta^{(D)}(M - M')
+\end{equation}
+Substituting this into Equation~\eqref{eq:cross-correlate-start}:
+\begin{equation}
+    P^{hm}_{\rm 1h}(k \mid M) \;=\; W_m(k,M)
+\end{equation}
+
+\paragraph{2-halo term.} 
+Distinct halos cluster according to the underlying linear matter field, scaled by their linear halo bias $b(M)$. Using linear matter power spectrum $P_{\rm lin}(k)$, we write:
+\begin{equation}
+    P^{hh}_{\rm 2h}(k \mid M, M') \;=\; b(M) \, b(M') \, P_{\rm lin}(k)
+\end{equation}
+\textcolor{blue}{Note that the bias must satisfy the consistency relation $\int \dd M \, n(M) \, b(M) \, W_m(k\to 0, M) = 1$ to ensure that matter traces itself perfectly on large scales.} 
+Substituting this 2-halo spectrum back into Equation~\eqref{eq:cross-correlate-start}:
+\begin{equation}
+    P^{hm}_{\rm 2h}(k \mid M) \;=\; b(M) \, P_{\rm lin}(k)
+    \int \dd M' \; n(M') \, b(M') \, W_m(k, M')
+\end{equation}
+
+Combining the two pieces gives the halo-matter cross spectrum:
+\begin{equation}
+    P^{hm}(k \mid M) \;=\; W_m(k,M) \;+\; b(M) \, P_{\rm lin}(k)
+    \int \dd M' \; n(M') \, b(M') \, W_m(k, M')
+    \label{eq:Phm}
+\end{equation}
+\textcolor{blue}{As $k \to 0$, $W_m(k,M) \to 1$. By the bias consistency relation, the integral goes to 1, leaving $P^{hm}(k\to 0 \mid M) \to b(M) P_{\rm lin}(k)$, which is the standard large-scale linear bias relation.}
+
+Finally, we can recover the linear matter auto-power spectrum. Because the total matter field is a sum over all halos (Equation~\eqref{eq:stack}), the matter auto-spectrum $P^{mm}(k)$ can be found by integrating the halo-matter cross-spectrum over all halo masses:
+\begin{equation}
+    P^{mm}(k) \;=\; \int \dd M \; n(M) \, W_m(k,M) \, P^{hm}(k \mid M)
+    \label{eq:Pmm-master}
+\end{equation}
+We can substitute Equation~\eqref{eq:Phm} into~\eqref{eq:Pmm-master}:
+\begin{align} \label{eq:Pmm_decomposition}
+    P^{mm}(k) 
+    &\;=\; \int \dd M \; n(M) \, W_m(k,M) \Bigg[ W_m(k,M) \nonumber \\
+    &\phantom{= \int \dd M \; n(M) \, W_m(k,M) \Bigg[} 
+       \;+\; b(M) \, P_{\rm lin}(k) \int \dd M' \, n(M') \, b(M') \, W_m(k,M') \Bigg] \nonumber \\[4pt]
+    &\;=\; \underbrace{\int \dd M \; n(M) \, \big[W_m(k,M)\big]^2}_{\displaystyle P^{mm}_{\rm 1h}(k)}
+       \;+\; \underbrace{P_{\rm lin}(k) \left[\int \dd M \; n(M) \, b(M) \, W_m(k,M)\right]^2}_{\displaystyle P^{mm}_{\rm 2h}(k)}
+\end{align}
+
+\section{Practically going from $P^{he}$ to $P^{me}$}
+
+We are, in fact, interested in $P^{he}$ and $P^{me}$, but the formulas stay the same and I am too lazy to rewrite the previous section. In practise, we need to solve Equation~\ref{eq:Pmm-master} numerically by approximating the integral with a sum over halo mass bins:
+\begin{equation} \label{eq:Pme}
+    P^{me}(k) \;=\; \frac{1}{\bar \rho_m} \int_0^\infty dM \, M \, n(M) \, u_m(k\,|\,M) P^{he}(k\, |\, M)
+\end{equation}
+
+\subsection{Note on the self-pairing term in $P^{me}$}
+
+Since in practice we are working with finite-box simulations filled with discrete particles and not continuous matter fields, the true measured $P^{me}$ would contain an unphysical self-pairing term between $\delta_e$'s. This is an unphysical contribution which we have to subtract. 
+
+The term is derived as follows. Say we work at fixed $\mathbf{k} \neq 0$. Painting a set $S$ of particles with masses $m_p$ at positions 
+$\mathbf{x}_p$ onto the grid and Fourier transforming gives, up to the overall convention constant $c$ that turns $\langle |\cdot|^2\rangle$ into the pipeline's power units (the $\mathrm{BOX}^2$ and FFT normalisation),
+\begin{equation}
+    \rho_S(\mathbf{k}) \;=\; \sum_{p \in S} m_p \, W(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_p}, 
+\end{equation}
+with $W(\mathbf{k})$ the TSC assignment window. The fields are
+\begin{equation} \label{eq:ft_fields_def}
+    \delta_m^{(i)} (\mathbf{k}) \;=\; \frac{1}{M_\mathrm{tot}} \sum_{p \in i} m_p \, W(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_p}, \qquad \delta_x(\mathbf{k}) \;=\; \frac{1}{M_x} \sum_{q \in x} m_q \, W(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_q}
+\end{equation}
+Note that the mean subtraction only touches the $\mathbf{k}=0$ mode. Now, cross-correlate the $i$ bin with field $x$:
+\begin{equation}
+    \langle \delta_m^{(i)} \, \delta_x^* \rangle \;=\; c \,\frac{|W|^2}{M_\mathrm{tot}M_x} \sum_{p \in i}\sum_{q \in x} m_pm_q\langle e^{-i \mathbf{k}(\mathbf{x}_p - \mathbf{x}_q)} \rangle,
+\end{equation}
+Splitting the double sum into $p=q$ and $p \neq q$, we can single out the self-pairing term:
+\begin{equation} \label{eq:self_similar_term}
+    \langle \delta_m^{(i)} \, \delta_x^* \rangle_\mathrm{self} \;=\; c \, \frac{|W|^2}{M_\mathrm{tot}M_x} \sum_{q \in i \cap x} m_q^2
+\end{equation}
+Setting $i \rightarrow$ everything gives the same expression but with $\sum_{q \in x} m_q^2$, which is the term in the truth $P^{mx}$. To measure \eqref{eq:self_similar_term}, we can paint species $x$ with its own masses at uniform random $\mathbf{u}_q$:
+\begin{equation}
+    \langle|\delta_r|^2\rangle \;=\; c\,\frac{|W|^2}{M_x^2} \left[ \sum_q m_q^2 + \sum_{p \neq q} m_p m_q \langle e^{-i \mathbf{k}(\mathbf{u}_p - \mathbf{u}_q)} \rangle\right],
+\end{equation}
+and the cross-terms here vanish for $\mathbf{k} \neq 0$ because the positions are independent and uniform. Hence
+\begin{equation} \label{eq:P_shot_def}
+    P^{xx}_\mathrm{shot} \;=\; c \, \frac{|W|^2}{M_x^2} \sum_{q \in x} m_q^2
+\end{equation}
+Dividing Equation~\ref{eq:self_similar_term} by this gives 
+\begin{equation}
+    \langle \delta_m^{(i)} \, \delta_x^* \rangle_\mathrm{self} \;=\;P^{xx}_\mathrm{shot} \cdot \frac{M_x}{M_\mathrm{tot}} \cdot \frac{\sum_{q \in i \cap x} m_q^2}{\sum_{q \in x} m_q^2}
+\end{equation}
+For the entire field (not binned), the last fraction cancels and we just obtain
+\begin{equation}
+    \langle \delta_m \, \delta_x^* \rangle_\mathrm{self} \;=\; f_x \,P_\mathrm{shot}^{xx},
+\end{equation}
+with $f_x$ being the mass fraction of particles $x$. The reason of measuring $P^{xx}_\mathrm{shot}$ is that the unknown constant $c$ and the window $|W|^2$ cancel identically. For $x$ = matter, we have
+\begin{equation}
+    P^{mm}_\mathrm{shot} \;=\; c \, \frac{|W|^2}{M_\mathrm{tot}^2} \left( \sum_\mathrm{dm} m^2 + \sum_\mathrm{gas} m^2\right),
+\end{equation}
+and using $f_x^2 / M_x^2 = 1 / M_\mathrm{tot}^2$, we got 
+\begin{equation}
+    P^{mm}_\mathrm{shot} \;=\;f_c^2 P^{cc}_\mathrm{shot} + f_g^2 P^{gg}_\mathrm{shot}
+\end{equation}
+
+\textcolor{blue}{\textbf{The halo-dm self-pairing term.} Turns out halos are assigned positions of the most bound dm particle, meaning there is an unaccounted for shot term in my analysis. 
+Analogous to Equation~\ref{eq:ft_fields_def}, halo bin's overdensity field in $\mathbf{k}$ space is defined as
+\begin{equation}
+    \delta_h^{(i)}(\mathbf{k}) \;=\; \frac{1}{N_i}\sum_{a\in i}W(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_a},
+\end{equation}
+where $N_i$ is the number of halos in bin $i$ -- this is because each halo enters with unit weight, in contrast to cdm which are mass-weighted. As previously, the mean subtraction touches only $\mathbf{k} =0$ and there is a constant in front. The cross-power spectrum of bin $i$ with $\delta_h$ then
+\begin{equation}
+    \langle \delta_h^{(i)} \, \delta_c^* \rangle \;=\; c \,\frac{|W|^2}{N_iM_c} \sum_{a \in i}\sum_{q \in \mathrm{dm}} m_q\langle e^{-i \mathbf{k}(\mathbf{x}_a - \mathbf{x}_q)} \rangle,
+\end{equation}
+Splitting into coincident and non-coincident pairs: because each halo centre is the position of that halo's most bound cdm particle, the coincident set is not empty. Write $q(a)$ for the most bound particle of halo $a$. The pairs $q = q(a)$ have $\mathbf{x}_a - \mathbf{x}_q = 0$, so
+\begin{equation}
+    \langle \delta_h^{(i)} \, \delta_c^* \rangle_\mathrm{self} \;=\; c \,\frac{|W|^2}{N_iM_c} \sum_{a \in i} m_{q(a)}
+\end{equation}
+Then we divide out the measured cdm shot power spectrum as given by Equation~\ref{eq:P_shot_def} and obtain
+\begin{equation}
+    \langle \delta_h^{(i)} \, \delta_c^* \rangle_\mathrm{self} \;=\;P^{cc}_\mathrm{shot} \cdot \frac{M_c}{N_i} \cdot \frac{\sum_{a \in i} m_{q(a)}}{\sum_{q \in \mathrm{dm}} m_q^2}
+\end{equation}
+Introduce the mean mass of the most bound particles in bin $i$, $\langle m \rangle_{\mathrm{mb}, i} \equiv N_i^{-1} \sum _{a \in i} m_{q(a)}$, and the cdm moments $M_c = \sum m_q$, $S_c = \sum m_q^2$:
+\begin{equation}
+    \langle \delta_h^{(i)} \, \delta_c^* \rangle_\mathrm{self} \;=\;P^{cc}_\mathrm{shot} \cdot \frac{M_c \langle m \rangle_{\mathrm{mb}, i}}{S_c}\;=\;P^{cc}_\mathrm{shot} \cdot \frac{\langle m \rangle_{\mathrm{mb}, i}}{\langle m \rangle_c} \cdot \frac{N_\mathrm{eff}}{N_c},
+\end{equation}
+with $\langle m \rangle_c = M_c/N_c$ and $N_\mathrm{eff} = M_c^2/S_c$. Since cdm particles have equal weight in FLAMINGO, both fractions go to 1 and we have a constant self-pairing term:
+\begin{equation}
+    \langle \delta_h^{(i)} \, \delta_c^* \rangle_\mathrm{self} \;=\;P^{cc}_\mathrm{shot}
+\end{equation}
+In the binned $P^{mx}$ result the residual factor was ${\sum_{q \in i \cap x} m_q^2}\,/\,{\sum_{q \in x} m_q^2}$
+the share of species $x$'s $m^2$ living in bin 
+$i$---which genuinely depends on the bin. Here the self-pair floor is the same constant under every mass bin. It therefore matters most where $P^{hc}$ is smallest: high $k$, and the low-mass bins where the bias is low (honeslty I think even in the case where masses are unequal this is largely true).
+For matter, using $\delta_m = f_c \delta_c + f_e \delta_e$, we get:
+\begin{equation}
+     \langle \delta_h^{(i)} \, \delta_m^* \rangle_\mathrm{self} \;=\;f_c \, P^{cc}_\mathrm{shot}
+\end{equation}
+\textbf{However!} My tests show that subtracting this halo-dm shot term doesn't make sense at all. It is fine though, since we don't need to reconstruct $P^{mc}$ anyways.}
+
+
+
+\subsection{Setting NFW for $u_m(k\,|\,M)$}
+We get $u_m(k\,|\,M_i)$ from NFW + empirical concentration-mass relationship. To start, let me derive the NFW in Fourier Space.
+
+The NFW profile with scale radius $r_s$ and characteristic density $\rho_s$,
+truncated sharply at the halo boundary $r_{200}=c\,r_s$, is
+
+\begin{equation}
+  \rho(r) \;=\;
+  \begin{cases}
+    \dfrac{\rho_s}{(r/r_s)\,\bigl(1+r/r_s\bigr)^{2}}, & r \leq c\,r_s, \\[4ex]
+    \phantom{aaaaaaa}0, & r > c\,r_s,
+  \end{cases}
+  \label{eq:nfw}
+\end{equation}
+where $c$ is the concentration. The mass enclosed within radius $R$ follows from
+the integral,
+ 
+\begin{equation}
+  M(<R) \;=\; \int_{0}^{R} 4\pi r^{2}\rho(r)\,\dd r
+        \;=\; 4\pi\rho_s r_s^{3}
+          \left[\ln\!\left(1+\frac{R}{r_s}\right)-\frac{R/r_s}{1+R/r_s}\right],
+  \label{eq:menc}
+\end{equation}
+ so that the total mass of the truncated halo, obtained by setting $R=c\,r_s$, is
+ 
+\begin{equation} \label{eq:M_enclosed}
+  M \;=\; 4\pi\rho_s r_s^{3}\,m(c),
+  \qquad
+  m(c) \;\equiv\; \ln(1+c)-\frac{c}{1+c}
+\end{equation}
+ 
+To remind, the quantity we want is the mass-normalised three-dimensional Fourier transform,
+ 
+\begin{equation} \label{eq:udef}
+  u_m(k \mid M) \;=\; \frac{1}{M} \int \dd^3r \; \rho_m(\br \mid M) \, e^{-i \bk \cdot \br},
+\end{equation}
+Because $\rho$ is spherically symmetric, the angular integral can be done
+immediately. Writing $\bk\cdot\br=kr\mu$ with $\mu=\cos\theta$, 
+
+\begin{equation}
+  \int_{-1}^{1} e^{-ikr\mu}\,\dd\mu \;=\; \frac{2\sin(kr)}{kr},
+  \label{eq:angular}
+\end{equation}
+which leaves a purely radial integral,
+
+\begin{equation}
+  u_m(k\,|\,M) \;=\; \frac{4\pi}{M}\int_{0}^{cr_s} r^{2}\rho(r)\,
+             \frac{\sin(kr)}{kr}\,\dd r
+  \label{eq:radial}
+\end{equation}
+Now change to the dimensionless radius $x\equiv r/r_s$ and define the
+dimensionless wavenumber $\kappa \equiv k\,r_s$
+ 
+Inserting Equation~\eqref{eq:nfw} into Equation~\eqref{eq:radial}, the prefactor
+$4\pi\rho_s r_s^{3}$ cancels exactly against $M$ from Equation~\eqref{eq:M_enclosed},
+leaving only $m(c)$ behind:
+ 
+\begin{equation}
+  u_m \;=\; \frac{1}{m(c)}\int_{0}^{c}
+        \frac{x^{2}}{x(1+x)^{2}}\,\frac{\sin(\kappa x)}{\kappa x}\,\dd x
+      \;=\; \frac{1}{m(c)}\,I,
+  \quad
+  I \;\equiv\; \frac{1}{\kappa}\int_{0}^{c}\frac{\sin(\kappa x)}{(1+x)^{2}}\,\dd x
+  \label{eq:Idef}
+\end{equation}
+Everything therefore reduces to evaluating the single integral $I$.
+ 
+The obstacle in Equation~\eqref{eq:Idef} is the factor $(1+x)^{-2}$. Substituting
+$u=1+x$ turns it into $u^{-2}$ at the cost of a phase shift in the sine.
+Using $\sin(\kappa u-\kappa)=\sin(\kappa u)\cos\kappa-\cos(\kappa u)\sin\kappa$,
+ 
+\begin{equation}
+  \kappa I \;=\; \cos\kappa \underbrace{\int_{1}^{1+c}\frac{\sin(\kappa u)}{u^{2}}\dd u}_{\textstyle A}
+           \;-\; \sin\kappa \underbrace{\int_{1}^{1+c}\frac{\cos(\kappa u)}{u^{2}}\dd u}_{\textstyle B}
+  \label{eq:AB}
+\end{equation}
+Both $A$ and $B$ yield to integration by parts against
+$\dd\!\left(-1/u\right)=\dd u/u^{2}$. What is left over in each case is an
+integral of the form $\int \sin(\kappa u)/u\,\dd u$ or
+$\int \cos(\kappa u)/u\,\dd u$, which are precisely the sine and cosine
+integrals,
+ 
+\begin{equation}
+  \Si(z) \;\equiv\; \int_{0}^{z}\frac{\sin t}{t}\,\dd t,
+  \qquad
+  \Ci(z) \;\equiv\; -\int_{z}^{\infty}\frac{\cos t}{t}\,\dd t
+  \label{eq:sici}
+\end{equation}
+Carrying out the two
+integrations by parts gives
+ 
+\begin{align}
+  A &\;=\; \sin\kappa - \frac{\sin\bigl[(1+c)\kappa\bigr]}{1+c}
+       + \kappa\Bigl\{\Ci\bigl[(1+c)\kappa\bigr]-\Ci(\kappa)\Bigr\},
+  \label{eq:A} \\[1ex]
+  B &\;=\; \cos\kappa - \frac{\cos\bigl[(1+c)\kappa\bigr]}{1+c}
+       - \kappa\Bigl\{\Si\bigl[(1+c)\kappa\bigr]-\Si(\kappa)\Bigr\}.
+  \label{eq:B}
+\end{align}
+Substituting Equations~\eqref{eq:A} and~\eqref{eq:B} back into Equation~\eqref{eq:AB},
+three things happen:
+ 
+\begin{enumerate}
+  \item The leading terms cancel identically,
+        $\cos\kappa\sin\kappa-\sin\kappa\cos\kappa=0$.
+  \item The two $1/(1+c)$ terms recombine through the angle-subtraction
+        identity into a sine of the difference,
+        \begin{equation}
+          -\frac{\sin\bigl[(1+c)\kappa\bigr]\cos\kappa
+                 -\cos\bigl[(1+c)\kappa\bigr]\sin\kappa}{1+c}
+          \;=\; -\frac{\sin(c\kappa)}{1+c}.
+          \label{eq:collapse}
+        \end{equation}
+        This is the origin of the isolated $\sin(c\kappa)$ term in the final
+        expression: it is a difference of angles collapsing, not an independent
+        contribution.
+  \item The $\Si$ and $\Ci$ terms survive, each carrying a factor $\kappa$ that
+        cancels the overall $1/\kappa$.
+\end{enumerate}
+Collecting everything,
+ 
+\[
+  \kappa I \;=\; -\frac{\sin(c\kappa)}{1+c}
+           + \kappa\cos\kappa\Bigl\{\Ci\bigl[(1+c)\kappa\bigr]-\Ci(\kappa)\Bigr\}
+           + \kappa\sin\kappa\Bigl\{\Si\bigl[(1+c)\kappa\bigr]-\Si(\kappa)\Bigr\}
+\]
+Dividing this by $\kappa$ and by $m(c)$ as required by
+Equation~\eqref{eq:Idef} gives the closed form:
+ 
+\begin{equation}
+  \begin{aligned}
+  u_m(k\mid M) \;=\; \frac{1}{m(c)}
+    \Bigl[\;
+      &\sin\kappa\,\Bigl\{\Si\bigl[(1+c)\kappa\bigr]-\Si(\kappa)\Bigr\}
+      \;-\;\frac{\sin(c\kappa)}{(1+c)\,\kappa} \\[0.5ex]
+      &+\;\cos\kappa\,\Bigl\{\Ci\bigl[(1+c)\kappa\bigr]-\Ci(\kappa)\Bigr\}
+    \;\Bigr],
+  \qquad \kappa \;=\; k\,r_s,
+  \end{aligned}
+  \label{eq:result}
+\end{equation}
+with $m(c)=\ln(1+c)-c/(1+c)$ as in Equation~\eqref{eq:M_enclosed}.
+
+\subsection{Treatment of unresolved part of the power spectrum}
+\label{sec:unresolved}
+
+Coming back to our halo model, specifically derivation in blue, we saw that we have expression of the form
+\begin{equation}
+    \delta_m(\bk) \;=\; \frac{1}{\bar\rho_m} \sum_{j} M_j \, u_m(k \mid M_j) \, e^{-i \bk \cdot \bx_j} 
+\end{equation}
+This expression hinges on the assumption that all matter resides in halos. If we take $k \rightarrow 0$, where $u_m \rightarrow 1$, RHS becomes $\frac{1}{\bar \rho_m} \sum_i n_i M_i \delta_h^{(i)}$, so identity can only hold if the weights sum to unity:
+\begin{equation}
+\sum_i n_i \,M_i \;=\; \bar \rho_m
+\end{equation}
+This never holds though. Inspecting this a little further and writing the sum not over all halo bins but only the resolved ones, we can define the catalogue deficit as
+\begin{equation} \label{eq:fu_cat}
+f_u \;\equiv\; 1 - \sum_i f_i, \qquad f_i = \frac{n_i M_i}{\bar\rho_m},
+\end{equation}
+It receives contributions from at least four distinct sources:
+\begin{enumerate}
+    \item[(i)] halos below the resolution or selection limit $M_r$. This term can be described by the halo-model treatment.
+    \item[(ii)] matter outside the aperture of a \emph{resolved} halo. It has no mass function of its own. Its weight attaches to a resolved bin, it carries its host's cias and 1-halo structure.
+    \item[(iii)] diffuse, unbound matter. It has no mass label, no host, and essentially no 1-halo term, i.e. $u_m \approx 1$, smooth, $b < 1$.
+\end{enumerate}
+Identifying (ii) and (iii) with unresolved small halos is an idealization of the halo model and will undoubtedly cause problems. We therefore keep the theoretical and the measured quantity distinct throughout:
+\begin{equation} \label{eq:fu_def}
+    f_{\rm (i)} \;\equiv\; \frac{1}{\bar \rho_m} \int _0 ^{M_r} \dd M \, M \, n(M),
+    \qquad
+    f_u \;=\; f_{\rm (i)} + f_{\rm (ii)} + f_{\rm (iii)},
+\end{equation}
+where $f_{\rm (ii)}, \,f_{\rm (iii)} \ge 0$. We approximate $f_u \approx f_{\rm (i)}$, however this might somewhat crude.
+
+So, returning back to Equation~\ref{eq:Pme}, we can write
+\begin{equation}
+\begin{aligned}
+    P^{me} (k) &\;=\; \frac{1}{\bar \rho_m} \int_0 ^\infty dM\, M \,n(M) \, u_m(k \mid M) \, P^{he}(k \, | \, M) \\[2ex]
+    &\;\approx\; \sum_{i=0}^{N-1} f_i \, u_m (k \mid M_i)\, P^{he}(k \mid M_i) \;+\; \frac{1}{\bar \rho_m} \int_0 ^{M_r} dM\, M \,n(M) \, u_m(k \mid M) \, P^{he}(k \mid M),\\
+\end{aligned}
+\label{eq:Pme_expansion}
+\end{equation}
+assuming that for all bins $j > N-1$: $n_j=0$. We define 
+the resolved part of the power spectrum:
+\begin{equation} \label{eq:Resolved}
+    R (k) \;=\; \sum_{i=0}^{N-1}f_i \, u_m (k \mid M_i)\, P^{he}(k \mid M_i),
+\end{equation}
+and the unresolved part of the power spectrum:
+\begin{equation} \label{eq:DeltaP}
+    U(k) \;=\; \frac{1}{\bar \rho_m} \int_0 ^{M_r} dM\, M \,n(M) \, u_m(k \mid M) \, P^{he}(k \mid M),
+\end{equation}
+where $M_r$ is the lowest accessible mass, e.g. in our observational samples. With $f_{\rm (i)}$ as defined in Equation~\eqref{eq:fu_def}, and setting $f_u \approx f_{\rm (i)}$, we introduce the normalized weight
+\[
+w(M) \;=\; \frac{M\,n(M)}{\int _0 ^{M_r} \dd M' \, M'n(M')},
+\qquad \int_0^{M_r} w(M) \, \dd M \;=\; 1 .
+\] 
+Multiplying and dividing Equation~\ref{eq:DeltaP} by $\int M'\, n(M')\,dM'$ gives
+\begin{equation} \label{eq:DeltaP_braket}
+    U(k) \;=\; f_u \,\langle u_m(k\mid M)\, P^{he}(k \mid M) \rangle_w
+\end{equation}
+The task is to somehow approximate this integral in the practical implementation.
+
+To get the first order approximation for $U$, consider the decomposition we derived a while ago in Equation~\ref{eq:Phm}:
+\[
+P^{he}(k \mid M) \;=\; \frac{M_\mathrm{gas}}{\bar \rho_\mathrm{gas}}  \, u_g(k \mid M)\;+\; b(M) \, P_{\rm lin}(k)
+    \int \dd M' \; n(M') \, b(M') \, W_g(k,\, M')
+\]
+Pay attention -- here, $u_g$ and $W_g$ refer to gas density profiles, which follows from a derivation analogous to one before. For low halo masses, ${M_\mathrm{gas}}/{\bar \rho_\mathrm{gas}}$ is $\sim 10^{-2}-10^{-1} \, (\text{Mpc}/h)^3$, plus under strongest AGN setting these halos are getting (indirectly) mass stripped, so this is the low end. Compared with $b(M)P_\mathrm{lin}(k)$, which is $\sim 0.7 \cdot O(10)$ at these mass scales, the 1-halo term is negligible. Therefore, 
+\[
+P^{he}(k \mid M) \;\approx\; b(M) \, P_{\rm lin}(k)
+    \int \dd M' \; n(M') \, b(M') \, W_g(k, \,M') \;\equiv\; b(M) \, P_\mathrm{lin}(k)\, I_e(k)
+\]
+Since the $P_\mathrm{lin}(k)\, I_e(k)$ term carries no $M$ dependence (it integrates over the whole $M$), we can write Equation~\ref{eq:DeltaP_braket} as follows:
+\begin{equation}
+    U(k) \;=\; f_u \,\langle u_m(k\mid M)\, P^{he}(k \mid M) \rangle_w \;\approx\; f_u \, \langle u_m(k\mid M)\, b(M) \rangle_w \, P_\mathrm{lin}(k)\, I_e(k)
+\end{equation}
+For low masses, $u_\mathrm{NFW}$ is close to 1 even at Nyquist frequency. So we can safely take $u_m \rightarrow 1$ and get 
+\begin{equation} \label{eq:DeltaP_approx}
+    \frac{U(k)}{P^{he}(k \mid M_r)} \;=\; f_u \, \frac{\langle b\rangle_w}{b(M_r)} \;\approx\; f_u \quad \rightarrow \quad U(k) \;\approx\; f_u \, P^{he}(k \mid M_r) 
+\end{equation}
+when we are in mass range where $b$ already plateaus. To stress, here $\langle b\rangle_w$ is the mass-weighted $b(M)$ over the range $[0, \, M_r]$, i.e.\ the linear bias of component (i) alone. If we want to treat the (ii) and (iii) components correctly, the quantity that ought to appear in Equation~\eqref{eq:DeltaP_approx} is instead the effective bias of the \emph{entire} unaccounted-for matter field,
+\begin{equation} \label{eq:b_eff}
+    b_{\rm eff} \;=\; \frac{f_{\rm (i)} \langle b \rangle_w + f_{\rm (ii)} b_{\rm (ii)} + f_{\rm (iii)} b_{\rm (iii)}}{f_u},
+\end{equation}
+for which the plateau argument gives no bound: $b_{\rm (ii)}$ exceed $b(M_r)$ by construction, while the bias of truly unbound matter is not a halo-model quantity at all. Whether $b_\mathrm{eff}/b(M_r) \approx 1$ survives is thus an empirical
+question about the catalogue, and it is worth noting that the errors it collects have opposite signs, so agreement
+at the few per cent level does not by itself imply that each term is small.
+
+\subsection{Extrapolating the low-mass end}
+
+\subsubsection{Transfer function}
+
+The approximation in Equation~\ref{eq:DeltaP_approx} breaks down as we increase the lower bound of the halo sample. We ought to develop a better model for the unresolved bit of power spectrum $U$.
+
+Let us have a reference halo bin $h_r$, which is the lowest mass bin around which we have measurements. We can extrapolate downwards the $P^{he}$ by "freezing in" the baryon effects at this reference scale. To do this, we apply a dimensionless \emph{mass transfer function} defined as follows
+\begin{equation} \label{eq:T_def}
+    P^{he} (k \mid M) \; \approx \; T(k,\, M) \, P^{h_re}(k), \qquad T(k, \, M) \;\equiv\; \frac{P^{hc}(k \mid M)}{P^{h_rc}(k)},
+\end{equation}
+where $P^{h_re} \equiv P^{h_re}(k \mid M_r)$ and the ratio is taken mode-by-mode. By construction, $T(k, \, M_r) = 1$. Here, $c$ stands for cold dark matter, and we can (generally) trust it. $P^{hc}$ can be taken either from simulations or some semi-analytical halo model. For now though, it is interesting to test whether Equation~\eqref{eq:DeltaP_approx} can be replaced by the honest integral \eqref{eq:DeltaP} with \eqref{eq:T_def} in the integrand:
+\begin{equation} \label{eq:expA_master}
+    U(k) \;=\; f_u \, \big\langle u_m(k \mid M) \, T(k, \,M) \big\rangle_w \, P^{h_re}(k)
+    \;\equiv\; f_u \, S(k) \, P^{h_re}(k)
+\end{equation}
+The flat approximation of Equation~\eqref{eq:DeltaP_approx} is the special case $S \equiv 1$. This is therefore a strict generalisation of what we already had: it restores, one at a time, the two things that were thrown away in getting to \eqref{eq:DeltaP_approx}---the departure of $\langle b \rangle_w / b(M_r)$ from unity, and the $k$ dependence of $u_m(k \mid M)$ inside the average.
+
+Equation~\eqref{eq:T_def} is usually motivated as ``baryonic effects vary slowly with mass''. To give a bit more mathematical foundation to this statement, we can write both cross-spectra using the decomposition of Equation~\eqref{eq:Phm}:
+\begin{equation} \label{eq:two_tracers}
+\begin{aligned}
+    P^{he}(k \mid M) &= W_e(k, M) \;+\; b(M)\, P_\mathrm{lin}(k)\, I_e(k), \\
+    P^{hc}(k \mid M) &= W_c(k, M) \;+\; b(M)\, P_\mathrm{lin}(k)\, I_c(k),
+\end{aligned}
+\qquad
+I_x(k) \equiv \int \dd M' \, n(M')\, b(M')\, W_x(k, M').
+\end{equation}
+The integrals $I_e$ and $I_c$ run over all masses and therefore carry no $M$ dependence whatsoever. We can further write
+\begin{equation} \label{eq:eps_def}
+    \varepsilon_x(k, M) \;\equiv\; \frac{W_x(k,M)}{b(M)\, P_\mathrm{lin}(k)\, I_x(k)},
+    \qquad
+    P^{hx}(k \mid M) \;=\; b(M)\, P_\mathrm{lin}(k)\, I_x(k) \, \big[1 + \varepsilon_x(k,M)\big],
+\end{equation}
+so that $\varepsilon_x$ is the 1-halo-to-2-halo ratio of tracer $x$. If we take $\varepsilon_e \approx \varepsilon_c$ over the $M$ extrapolation range, the ratio of the two lines is
+\begin{equation} \label{eq:factorisation}
+    \frac{P^{he}(k \mid M)}{P^{hc}(k \mid M)} \;=\; \frac{I_e(k)}{I_c(k)} \qquad \mathrm{for \, every} \, M < M_r,
+\end{equation}
+which is independent of $M$. So, the condition $\varepsilon_e \approx \varepsilon_c$ means we assume that the relative departure of gas from cdm is the same from $M_r$ down. This gives a more solid ground to Equation~\eqref{eq:T_def}. There are several things to note:
+\begin{enumerate}
+    \item[(a)] Since $\varepsilon_x$ grows monotonically with $k$, the high-$k$ error will be larger;
+    \item[(b)] the error is largest at the top of the extrapolation range. We extrapolate \emph{downwards} from $M_r$, and $W_x \propto M$ while $b$ varies slowly at low mass, so the 1-halo contamination shrinks as we move away from the reference. The error committed at $M_r$ therefore bounds the error committed anywhere in $[0, M_r]$;
+\end{enumerate}
+
+\subsubsection{Estimators of $T$}
+
+The goal is to model $T(k, \, M)$ in various fashion. It is useful to define the truth here:
+\begin{equation} \label{eq:T_exact}
+    T_e(k,M) \;\equiv\; \frac{P^{he}(k \mid M)}{P^{h_re}(k)}
+    \;=\; \frac{b(M)}{b(M_r)} \cdot \frac{1 + \varepsilon_e(k,M)}{1 + \varepsilon_e(k,M_r)}
+\end{equation}
+which has been written out with the decomposition~\eqref{eq:eps_def}. So the entire problem reduces to estimating one factor, $[1+\varepsilon_e(k,M)]/[1+\varepsilon_e(k,M_r)]$, which involves the gas profile and gas fraction of halos we cannot resolve. In what follows, we will consider estimators:
+\begin{align}
+    \textbf{bias-based estimator:} \quad & T_b \;=\; \frac{b(M)}{b(M_r)}
+    &&\text{sets the factor to } 1, \label{eq:T_bias} \\[0.5ex]
+    \textbf{halo model-based estimator:} \quad & T_c \;=\; \frac{b(M)}{b(M_r)} \cdot \frac{1 + \varepsilon_c(k,M)}{1 + \varepsilon_c(k,M_r)}
+    &&\text{substitutes the CDM analogue,} \label{eq:T_halomodel}
+\end{align}
+Looking at equation~\eqref{eq:expA_master} we see that $U/U_\mathrm{exact} = S/S_e$ up to the separate $f_u$-versus-$f_\mathrm{(i)}$ issue of Equation~\eqref{eq:fu_def}. This is the reason why we are sometimes interested in the $S(k)$ plot alongside $R(k) + U(k)$---this isolates the performance of transfer function from hmf (hmf still enters into $S$ through $w$ but it largely cancels). The full list of estimators includes:
+ 
+\begin{center}
+\renewcommand{\arraystretch}{1.2} 
+\begin{tabular}{llll}
+\hline
+mode & $T(k,M)$ & $u_m$ & $S(k)$ \\
+\hline
+\texttt{flat}      & $1$ & $1$ & $ 1$ \\
+\texttt{bias}      & $T_b$ of \eqref{eq:T_bias}, Tinker+10 & $u_\mathrm{NFW}$ & $S_b = \langle u_m b \rangle_w / b(M_r)$ \\
+\texttt{simhc}     & $T_c^\mathrm{\,sim}$, measured $P^{hc}$ of the hidden bins & $u_\mathrm{NFW}$ & $S_c^\mathrm{\,sim}$ \\
+\texttt{halomodel} & $T_c^\mathrm{\,hm}$ from the full $W_c + bP_\mathrm{lin}I_c$ model & $u_\mathrm{NFW}$ & $S_c^\mathrm{\,hm}$ \\
+\hline
+exact              & $T_e$ of \eqref{eq:T_exact} & $u_\mathrm{NFW}$ & $S_e$ \\
+\hline
+\end{tabular}
+\end{center}
+ 
+\noindent
+\texttt{simhc} and \texttt{halomodel} estimate the same $T_c$ by different routes, the first straight from the measured halo--CDM cross spectra and the second from Tinker+CAMB+NFW; \texttt{simhc} needs no cosmology, no mass function and no bias model, so it tests only the ansatz~\eqref{eq:T_def}. Running with the catalogue's own $n_iM_i$ as the weight in $\langle\cdot\rangle_w$ isolates $T$ completely; running with Tinker+08 instead puts the mass function on trial as well, and the difference between the two runs is a clean measurement of how much the HMF is costing us.
+
+Writing $\Delta \varepsilon_x \equiv \varepsilon_x(k,M_r) - \varepsilon_x(k,M) \ge 0$, which is positive because we extrapolate downwards and $W_x$ grows with mass, the two fractional errors are, to first order in $\varepsilon$,
+\begin{equation} \label{eq:mode_errors}
+    \frac{T_b}{T_e} - 1 \;\approx\; +\,\Delta \varepsilon_e,
+    \qquad
+    \frac{T_c}{T_e} - 1 \;\approx\; -\big(\Delta \varepsilon_c - \Delta \varepsilon_e\big).
+\end{equation}
+The two estimators agree wherever $\varepsilon \ll 1$, which is basically the large scales, $k \ll 1$. On small scales, retaining $W_c$ is an improvement only if it is a better guess than zero, i.e.\ only if
+\begin{equation} \label{eq:criterion}
+    0 \;<\; \Delta \varepsilon_c \;<\; 2 \, \Delta \varepsilon_e ,
+\end{equation}
+which says that the $W_c$ term must vary with mass by less than twice as much as $W_e$. If gas and CDM were similarly distributed, $\Delta \varepsilon_c \approx \Delta \varepsilon_e$ and halo model estimator would be exact; if feedback has stripped the gas from the low-mass halos, $\Delta \varepsilon_e \to 0$ and bias is the better estimator while halo model is worse than doing nothing. 
+
+\subsubsection{Validation test: manufacturing the truth}
+
+The obstacle to testing any of this is that the unresolved range is, by definition, unmeasured. The way around it is to manufacture one. Choose a split mass $M_\mathrm{split}$ inside the catalogue, declare every bin below it unresolved and hide it from the reconstruction. Its exact contribution is then known,
+\begin{equation} \label{eq:expA_exact}
+    U_\mathrm{exact}(k) \;=\; \sum_{i \,:\, M_i < M_\mathrm{split}} f_i \, u_m(k \mid M_i) \, P^{he}(k \mid M_i),
+\end{equation}
+and every candidate for $U$ can be scored against a truth rather than against the final reconstruction, where many unrelated errors are superposed.
+
+\subsubsection{Splitting the error contributions}
+
+
+Take a look at the reconstruction (Equation~\ref{eq:Resolved}):
+
+\begin{equation}
+    R(k) \; = \; \sum_i f_i \, u_m^\mathrm{NFW}(k \mid M_i) \, P^{he}(k \mid M_i) \; = \; \langle \delta_m^\mathrm{\,model} \, \delta_e^*\rangle
+\end{equation}
+It contains exactly one modelled ingredient, namely $u_m$: the per-bin halo cross-spectra are measured, so
+they carry the true gas profile whatever it happens to be. On the other hand, we have the measured cross-spectrum of the two full fields,
+\begin{equation}
+  P^{me}(k) \;=\; \big\langle \delta_m\, \delta_e^* \big\rangle ,
+\end{equation}
+with no reference to any halo catalogue. To compare it with the bin sum
+$R(k)$ we partition the matter
+particles by whether they lie inside $r_{200b}$ of a catalogue central,
+$\delta_m = \delta_m^{\,\rm in} + \delta_m^{\,\rm out}$. This is a partition of the
+particles, so it is exact and linear, and
+\begin{equation}
+  P^{me}(k) \;=\; R_\star(k) \;+\; U_\star(k), \qquad
+  R_\star \;\equiv\; \big\langle \delta_m^{\,\rm in} \, \delta_e^* \big\rangle, \qquad
+  U_\star \;\equiv\; \big\langle \delta_m^{\,\rm out} \, \delta_e^* \big\rangle .
+  \label{eq:T_split}
+\end{equation}
+Note that $R_\star$ and $U_\star$ are not $R$ and $U$ -- the former are measured, the latter are modelled. Every particle in $\delta_m^{\,\rm in}$ carries a halo label, so $R_\star$ can be written as a bin sum of exactly the same form as $R$. Remember, our starting point is $\delta_m(\mathbf{k}) = \sum_j \frac{M_j}{\rho_m} \, u_m(k \mid M_j) \, e^{-i\mathbf{k}\cdot \mathbf{x}_j}$, where $j$ runs over individual halos. Cross this with $\delta_e$ and write $C_j \equiv \langle e^{-i\mathbf{k}\cdot \mathbf{x}_j} \, \delta_e^*\rangle$ for halo $j$'s own cross-correlation with the gas field. Grouping into bins, the contribution of bin $i$ is exactly 
+\[
+\langle \delta_m ^{(i)} \, \delta_e^*\rangle \; = \; \frac{1}{\bar \rho_m} \sum_{j \, \in \, i}M_j\,u_m^{(i)}(k)\,C_j(k)
+\]
+Previously, we obtained equation for $R$ by pulling out $u_m$ from the sum, replacing every halo's profile by $u_m^\mathrm{NFW}(k \mid M_i)$ at the bin's representative mass and a deterministic $c(M, z)$. Now, we can define $\tilde u_m$ as whatever makes it exact:
+%
+\begin{equation}
+  \tilde u_m(k\mid M_i) \;\equiv\; \frac{1}{\bar \rho_m}\frac{\sum_{j \, \in \, i}M_j\,u_m^{(i)}(k)\,C_j(k)}{f_i \, P^{he}(k \mid M_i)} ,
+  \label{eq:utilde_def}
+\end{equation}
+%
+Thus $\tilde u_m$ is not a median NFW profile but the \emph{gas-cross-weighted} mean
+matter profile of the bin. We got:
+\begin{equation} \label{R_Rstar}
+R(k) \; = \; \sum_i f_i \, u_m^\mathrm{NFW}(k \mid M_i) \, P^{he}(k \mid M_i), \qquad R_\star(k) \; = \; \sum_i \tilde f_i \, \tilde u_m(k \mid M_i) \, P^{he}(k \mid M_i)
+\end{equation}
+where we defined
+\begin{equation}
+    \tilde f_i \;\equiv\; \frac{1}{M_{\rm tot}}\sum_{p\,\in\,i} m_p,
+  \qquad
+  \tilde f_u \;\equiv\; 1-\sum_i \tilde f_i,
+  \label{eq:ftilde}
+\end{equation}
+where $p$ runs over the matter particles lying within $r_{200m}$ of a central
+in bin $i$, each particle being assigned to exactly one halo. The two weights
+differ slightly: we find
+$\sum_i f_i = 0.255$ and $\sum_i \tilde f_i = 0.249$. Its per-bin
+structure is the stellar mass fraction \textcolor{blue}{(because $M_{200b}$ includes gas and stars)}: $\tilde f_i/f_i$ dips to $0.96$ near
+$10^{11.9}\,M_\odot$ and returns to $\simeq0.99$ at both ends of the range.
+
+In further results sections, we often plot $R+U / P^{me}$ in the bottom left panel. It is useful to decompose the contribution to the discrepancy in this plot into ones coming from $R$ and $U$ via
+%
+\begin{equation} \label{eq:error_budget}
+  \frac{R+U}{R_\star + U_\star} - 1 \;=\;
+  \underbrace{\frac{R - R_\star}{R_\star + U_\star}}_{\text{profile error}}
+  \;+\;
+  \underbrace{\frac{U - U_\star}{R_\star + U_\star}}_{\text{template error}} ,  
+\end{equation}
+%
+The two terms are separately measurable in the simulation: $\tilde u_m$
+by stacking matter profiles per bin and transforming them, and $U_\star$ by painting only the
+particles outside $r_{200b}$ of any catalogue central onto the grid and crossing with
+$\delta_e$.
+
+\subsection{Preliminary Results}
+
+\subsubsection{Split validation tests} \label{sec:split}
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expA_validation_panel_gas_m200b_nb30_Mr12.00_Mmax14.91_val_hmfcatalog_fucatalog_3d384k1.pdf}
+    \caption{Split validation test over $[10^{11}, \, 10^{12}] \; M_\odot$ halos. \textbf{Left top panel:} comparison of true $P^{me}(k)$ and $R(k) + U(k)$, with $R(k)$ taken over the range $[10^{12}, \, 10^{15}] \; M_\odot$, and $U(k)$ estimated via the four modes. \textbf{Left bottom panel:} comparison of $(R+U)(R+U_\mathrm{exact})$ for the four modes. \textbf{Right top panel:} comparison of $S(k)$ \textcolor{blue}{(this mode is useful because it largely subtracts the effects of hmf which comes in $w$, although hmf is set to \texttt{catalogue} in this run, so wouldn't impacted anyways)}. \textbf{Right bottom panel:} comparison of $U/U_\mathrm{exact}$.}
+    \label{fig:split_validation_test_mg}
+\end{figure}
+
+The first result that we obtained is the split validation test over the range of masses $[10^{11}, \, 10^{12}] \; M_\odot$ for gas, presented in Figure~\ref{fig:split_validation_test_mg}. Firstly, paying attention to the large-scale part of the left and right bottom panels, we see that accounting for bias ratio $\langle b\rangle_w / b(M_r) \approx 0.8$ (from Tinker) resolves the $\sim20 \%$ over-correction by \texttt{flat}. We see that \texttt{bias}, being just a rescaled version of \texttt{flat} (modulo $u_m$ correction), still diverges upwards from the truth as $k$ increases---this is to be expected as seen from Equations~\ref{eq:expA_master}--\ref{eq:T_exact}:
+\begin{equation}
+    \frac{S_b}{S_e} \;\simeq\; \frac{1 + \varepsilon_e(k, \,M_r)}{1 + \langle \varepsilon_e(k, \, M)\rangle_w}
+\end{equation}
+In this hidden bins run $10^{11}$--$10^{12}$ the weight $w \sim Mn(M)$ piles up on top, so the average is dominated by masses right below $M_r$. Setting $\varepsilon_e \simeq \varepsilon_\mathrm{hm}$, the estimate is around $S_b/S_e \sim 2.2$ at Nyquist $k=9.4$, which is about right order of magnitude.
+
+Next we can take a look at \texttt{simhc} and \texttt{halomodel} modes. They agree closely everywhere, which means the halo model (Tinker+CAMB+NFW) is reproducing what cdm cross-spectra actually do. However, both under-predict the power spectra after $k\sim 1$. Coming back to Equation~\ref{eq:mode_errors}, we can say that up to first order (modulo profile $u_m$, bias and hmf weighting in $w$), $\Delta \varepsilon_c > \Delta \varepsilon _e$, which means the cdm 1-halo term collapses faster than the gas one does, going down in mass below $M_r$.
+
+\textcolor{blue}{Note: switching hmf from catalog to tinker doesn't change results at all in here.}
+
+\subsubsection{Full $P^{me}$ reconstruction}
+\label{sec:production}
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expA_production_panel_gas_m200b_nb30_Mr11.07_Mmax14.91_prod_hmftinker_fucatalog_3d384k1.pdf}
+    \caption{Reconstruction of entire  $P^{me}$, $M_r = 10^{11} \; M_\odot$. \textbf{Left top panel:} comparison of true $P^{me}(k)$ and $R(k) + U(k)$, with $R(k)$ taken over the range $[M_r, \, 10^{15}] \; M_\odot$, and $U(k)$ over $[10^8, \, M_r]\; M_\odot$, estimated via \texttt{flat}, \texttt{bias}, and \texttt{halomodel} modes. \textbf{Left bottom panel:} comparison of $(R+U)/P^{me}$ for the three modes. \textbf{Right top panel:} split of the reconstruction error for \texttt{halomodel} mode onto resolved range error and unresolved range error. \textbf{Right bottom panel:} plot of $S(k)$ for the three modes along with $S_\mathrm{eff}(k)$.}
+    \label{fig:production_mg_11}
+\end{figure}
+
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expA_production_panel_gas_m200b_nb30_Mr12.00_Mmax14.91_prod_hmftinker_fucatalog_3d384k1.pdf}
+    \caption{Reconstruction of entire  $P^{me}$, $M_r = 10^{12} \; M_\odot$. \textbf{Left top panel:} comparison of true $P^{me}(k)$ and $R(k) + U(k)$, with $R(k)$ taken over the range $[M_r, \, 10^{15}] \; M_\odot$, and $U(k)$ over $[10^8, \, M_r]\; M_\odot$, estimated via \texttt{flat}, \texttt{bias}, and \texttt{halomodel} modes. \textbf{Left bottom panel:} comparison of $(R+U)/P^{me}$ for the three modes. \textbf{Right top panel:} split of the reconstruction error for \texttt{halomodel} mode onto resolved range error and unresolved range error. \textbf{Right bottom panel:} plot of $S(k)$ for the three modes along with $S_\mathrm{eff}(k)$.}
+    \label{fig:production_mg_12}
+\end{figure}
+
+
+Now we can move on to computing $P^{me}$. The two runs with different $M_r$ are
+shown in Figures~\ref{fig:production_mg_11} and~\ref{fig:production_mg_12}. The
+agreement is worse than in the split validation test of
+Section~\ref{sec:split}. Here, the challenge is considerably harder: the resolved bins accounts for only $\sum_i f_i = 0.255$ of the matter, so
+$f_u^{\rm cat} = 0.745$. Consequently, $U_\star/P^{me} = 0.58$ at $k=0.1$ and $0.37$ at
+$k=1\;h/{\rm cMpc}$. Hence, $U$ is the majority of the signal on large scales. 
+ 
+Both the \texttt{bias} and \texttt{halomodel}
+curves sit at $\simeq0.94$ on large scales, where $u_m=1$ and the template shape
+is irrelevant. This is essentially because $b_\mathrm{eff} \neq \langle b \rangle_w$. We can quantify this mismatch by writing
+\begin{equation}
+  U_\star \;=\; \tilde f_u \, S_\mathrm{eff} \, P^{he}(k \mid M_r) \quad \rightarrow \quad S_\mathrm{eff} \;=\; \frac{U_\star}{\tilde f_u \, P^{he}(k \mid M_r)}
+\end{equation}
+This is to be compared with $S_b = \langle b \rangle_w / b(M_r)$, which holds given $k \rightarrow 0$. After averaging over the first 5 $k$ values we find $S_\mathrm{eff} = 0.945$, while Tinker gives 
+$S_b =\langle b\rangle_w/b(M_r) = 0.832$. This implies an error in $U$ of
+$0.832/0.945 = 0.881$, and since $U_\star$ carries $58\%$ of $P^{me}$ at these
+scales this predicts a reconstruction low by $\sim7\%$, which is the offset seen
+in the figures. The matter that $U$ represents
+is cumulatively more biased than the low-mass halos the model identifies it with.
+ 
+Beyond the large-scale offset, both runs show a
+dip near $k\sim1\,h\,{\rm cMpc}^{-1}$. In the bottom right panel of Figure~\ref{fig:production_mg_11}, we measure $S_{\rm eff} = 0.945$ as
+$k\to0$, rising to $1.234$ at $k=1$, then falling to $0.570$ at $k=3$ and
+$0.099$ at $k=10\,h\,{\rm cMpc}^{-1}$. The collapse at high $k$ is expected---the unassigned matter is smooth on small scales. But the rise above 1 near
+$k=1$ is not something a population of sub-resolution halos can produce---this requires the unassigned matter to be
+more strongly correlated with the gas than the lowest resolved bin is, which is
+the signature of a one-halo-like term that the template $P^{h_re}(k)$ does not
+contain. The resolved bins have
+$r_{200m} = 0.12,\,0.55$ and $1.01\;{\rm cMpc}/h$ at
+$\log_{10}M = 11.1,\,13.1$ and $13.9$, whereas the unresolved
+$10^{9}$---$10^{11}\,M_\odot$ halos that component~(i) describes have
+$r_{200m}\lesssim0.12\;{\rm cMpc}/h$. $k\sim1\;h/{\rm cMpc}$ is on the scale of the outer regions of
+group-- and cluster--mass halos, not of anything below $M_r$. This is
+component~(ii)---matter beyond $r_{200b}$ of a
+halo well above $M_r$, which clusters like its parent and carries that
+parent's one-halo term.
+
+\subsection{Capturing the unresolved matter}
+
+\subsubsection{Extending the halo boundary}
+
+To recap, Section~\ref{sec:unresolved} listed three contributions to the catalogue deficit
+$f_u$ and pointed out that only the first is described by the treatment applied to all of it. This section develops the machinery for component (ii), matter that lies outside
+$r_{200b}$ of a resolved halo.
+
+Nothing in theory required the halo to end at $r_{200m}$. Let $x$ denote the aperture in units of $r_{200m}$, so halo $i$ now occupies the
+sphere of radius $x\,r_{200m}$ about its centre. Write $M_i(x)$ for the
+mass it contains and
+\begin{equation}
+  u_m(k \mid M;\,x) \;\equiv\; \frac{1}{M(x)}
+  \int_{r<x\,r_{200m}}\!\!\! \dd^3 r\; \rho_m(\mathbf{r}\mid M)\, e^{-i\mathbf{ k}\cdot\mathbf{r}},
+  \qquad u_m(k\to0\mid M;\,x)\;=\;1,
+  \label{eq:B-um}
+\end{equation}
+for the profile normalised to that same mass. Every step from Equation~\eqref{eq:Wm} to Equation~\eqref{eq:Phm}
+goes through verbatim with $(M,\,u_m)\to(M(x),\,u_m(x))$. The aperture is
+therefore a relabelling of where one halo
+stops and the field between halos begins.
+What is not invariant under $x$ are the mass fractions:
+\begin{equation}
+  \int\!\dd M\, n(M)\, W_m(k\to0,M;\,x)
+  \;=\; \frac{1}{\bar\rho_m}\int\!\dd M\, M(x)\, n(M)
+  \;=\; \sum_i f_i(x) \;=\; 1 - f_u(x),
+  \label{eq:B-sumrule}
+\end{equation}
+with $f_i(x) \equiv {n_i M_i(x)}/{\bar\rho_m}$ and $f_u(x)$ decreasing monotonically in $x$. Parameter $x$ moves matter across the boundary between the part of the field
+the model resolves and the part it has to stand in for. If most of the deficit really is the outskirts of resolved
+halos, it should be possible to absorb a measurable part of it by moving the
+boundary outwards. We have to be careful about particle assignment though. At $x=1$ spherical-overdensity spheres
+mostly do not overlap, but at $x=2$ they overlap
+substantially. We therefore implement an exclusive particle assignment---each particle goes to the most
+massive halo whose sphere contains it. 
+
+The NFW profile gets updated as 
+\begin{equation}
+  \rho(r) \;=\;
+  \begin{cases}
+    \dfrac{\rho_s}{(r/r_s)\left(1+r/r_s\right)^2}, & r \le xc\,r_s,\\[2ex]
+    0, & r > xc\,r_s,
+  \end{cases}
+  \qquad r_s \;=\; \frac{r_{200m}(M)}{c(M)},
+  \label{eq:B-nfw}
+\end{equation}
+in which $c$ fixes the scale radius and is a property of the halo, while the
+product $xc$ fixes where the profile is cut off. Writing $c_t \equiv x c$ for the truncation radius in units of $r_s$, theory holds with $c\to c_t$ throughout. It is convenient to introduce the enclosed-mass ratio,
+\begin{equation}
+  \mu(x,\,c) \;\equiv\; \frac{M(<x\,r_{200m})}{M_{200m}} \;=\; \frac{m(xc)}{m(c)}, \qquad
+  m(c) \;\equiv\; \ln(1+c)-\frac{c}{1+c}
+  \label{eq:B-mu}
+\end{equation}
+which gives $\mu(2,\,c)\simeq1.4$--$1.55$ for
+$c=10$--$5$. Note that $m(\cdot)$ diverges
+logarithmically, so $\mu$ grows without bound and the aperture cannot be taken
+large---the NFW profile has no total mass, which is why the truncation was
+there in the first place.
+
+Upon assigning particles we compute $\tilde f_i(x) = M_i^{\rm assigned}(x)/M_{\rm tot}$. Alternatively, we could have computed $f_i(x) = f_i \,\mu (x, \, c_i)$. The problem is that this double counts the overlap, since $\mu$ is an integral over a sphere and takes
+no notice of neighbours. Moreover, this assumes the NFW form survives beyond
+$r_{200m}$, which might very well not be the case. However, the ratio of the two total resolved mass fractions, ${\sum_i \tilde f_i(x)}\,/\,{\sum_i f_i\,\mu(x,c_i)}$, is a useful diagnostic.
+At $x=1$ it measures the stellar
+mass, and its decline with
+$x$ measures both the overlap and the failure of NFW beyond $r_{200m}$.
+ 
+With $\tilde f_i(x)$ and $u_m(k\mid M_i;\,x)$ in hand, the reconstruction becomes
+\begin{equation}
+\begin{aligned} \label{eq:B-RU}
+    P^{me}(k) &\;\simeq\; R(k;\,x) + U(k;\,x),\\[1ex]
+    R(k;\,x) &\;=\; \sum_i \tilde f_i(x)\, u_\mathrm{NFW}(k \mid M_i;\,x)\, P^{he}(k \mid M_i), \\
+    U(k;\,x) &\;=\; \tilde f_u(x)\, S(k;\,x)\, P^{h_re}(k)
+\end{aligned}
+\end{equation}
+We will call this type of reconstruction with $\tilde f_i (x)$ weights hybrid, and with $f_i(x)$---pure.
+Note that the mass bins are still labelled by
+$M_{200b}$ so that bin $i$ contains the same halos at every $x$ and $R_i$
+stays comparable across different $x$. In addition, we leave the transfer function $T(k,M)$ of Equation~\eqref{eq:T_def} and the halo model quantities behind it ($P^{hc}$, $I_c(k)$, $b(M)$) at $x=1$, as they describe the real halo--CDM cross spectrum of the
+simulation.
+
+For each $x$ we ought to recompute $R_\star$ and $U_\star$ accordingly by whether the matter particles by whether they lie within
+$x\,r_{200m}$ of a catalogue central. An interesting quantity to look into is the difference in $R_\star$:
+\begin{equation}
+  \Delta R_{\star \, i}(k;\,x) \;\equiv\; R_{\star \, i}(k;\,x)-R_{\star \, i}(k;\,1)
+  \;=\;\big\langle \delta_m^{\rm \,shell}(x)\,\delta_e^*\big\rangle,
+  \label{eq:B-shell}
+\end{equation}
+which is the per-bin cross-spectrum with the gas of exactly the matter lying between $r_{200m}$
+and $x\,r_{200m}$, and it says
+which host masses that matter belongs to.
+
+\subsubsection{Effects of varying $x$}
+ 
+ 
+ 
+ 
+The reconstructions for $x = 1,\,1.2,\,1.5,\,2$ are shown in Figures~\ref{fig:varying_x_11_hybrid}--\ref{fig:varying_x_12_pure}. Generally, across all regimes, we see that the characteristic dip in the intermediate scales disappears with increasing $x$.
+
+On large scales, the curves rise monotonically with $x$. The $\sim 7\%$ deficit at $x=1$ (Section~\ref{sec:production}) closes near $x=1.5$ and becomes an excess at $x=2$.
+The right top panels show that in the hybrid runs, this is carried entirely by $U - U_\star$, while $R - R_\star$ stays close to zero. In order to quantify this effect, let us consider a generalisation of Equation~\eqref{eq:Pmm_decomposition} to arbitrary fields $x$ and $y$,
+\begin{equation}
+    P^{xy}(k) \;=\; \int \dd M \, n(M) \, W_x(k,M) \, W_y(k,M) \;+\; I_x \, I_y \, P_\mathrm{lin}(k), \qquad I_x \;\equiv\; \int \dd M \, n \, b \, W_x
+    \label{eq:Pxy}
+\end{equation}
+The first integral tends to a constant as $k\to0$ and is negligible against the 2-halo term (since $P_\mathrm{lin} \propto k^{n_s}$), so $P^{xy} \to b_x\, b_y\, P_\mathrm{lin}$ with $b_x \equiv I_x$ the linear bias of field $x$, and $b_m = 1$ by Equation~\eqref{eq:sumrule}. Writing $b_i$ for the halo bias of bin $i$ and $\tilde b_u(x)$ for that of the matter outside $x\,r_{200m}$ (using $\delta_m^{\rm out} = \tilde f_u\,\delta_{\rm out}$),
+\begin{equation}
+    \frac{P^{he}(k\mid M_i)}{P^{me}(k)} \to b_i, \qquad
+    \frac{U_\star(k;\,x)}{P^{me}(k)} \to \tilde f_u(x)\, \tilde b_u(x), \qquad
+    \frac{U(k;\,x)}{P^{me}(k)} \to \tilde f_u(x)\, S(0; \, x) \, b_{h_r},
+    \label{eq:LS-limits}
+\end{equation}
+It will be argued later that $S(k; \, x) \simeq S(k; \, 1)$, so we can write $S(0; \, x) \, b_{h_r} \simeq \langle b\rangle_w\, b_{h_r}/b(M_r) \equiv b_u$. Here, $b(M_r)$ is the model bias from Tinker, and $b_{h_r} = \lim _{k \to 0} P^{h_re}/P^{me}$ is the true bias of the reference bin. In the hybrid method $R$ and $R_\star$ share the weights $\tilde f_i(x)$, so $R - R_\star \to 0$ due to $u_m \to 1$, and
+\begin{equation}
+    \left[\frac{R+U}{P^{me}} - 1 \right]_{k\to0} \;=\; \tilde f_u(x)\,\left[\,b_u  - \tilde b_u(x) \,\right]
+    \label{eq:LS-error}
+\end{equation}
+Because $\delta_m = \sum_i \delta_m^{\,\mathrm{in} \,(i)} + \delta_m^{\,\rm out}$ exactly, $b_m = 1$ gives the sum rule
+\begin{equation}
+    \sum_i \tilde f_i(x)\, \tilde u_m (k \mid M_i) \, b_i \;+\; \tilde f_u(x)\, \tilde  b_u(x) \;=\; 1
+    \label{eq:LS-sumrule}
+\end{equation}
+For the sake of qualitative argument it is enough to set $\tilde u_m(k \to 0 \mid M) \simeq 1$. It is not exactly 1 because of a non-zero covariance of halo mass with halo bias inside bin $i$, which, as it turns out, enters the definition \eqref{eq:utilde_def} of $\tilde u_m$. Then, we can remove $\tilde b_u$ with \eqref{eq:LS-sumrule}, and using $\Delta \tilde f_u = -\sum_i \Delta \tilde f_i$ with $\Delta \tilde f_i \equiv \tilde f_i(x) - \tilde f_i(1) \ge 0$,
+\begin{equation}
+    \Delta\!\left[\frac{R+U}{P^{me}}\right]_{k\to0} \;\simeq\; \sum_i \Delta \tilde f_i(x)\, \left[ \,b_i - b_u \,\right]
+    \label{eq:LS-shift}
+\end{equation}
+This equation can be interpreted as follows: increasing $x$ moves each shell out of $U$, where it is assigned $b_u$, and into $R$, where it carries its host's bias $b_i$. All hosts lie above $M_r$, so $b_i > b_u$ and the large-scale curves rise monotonically with $x$. Nothing in Equation~\eqref{eq:LS-shift} stops this rise: by Equation~\eqref{eq:LS-error}, the error changes sign at $\tilde b_u(x) = b_u$ and becomes an excess.
+ 
+ 
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expB_aperture_gas_m200b_nb30_logMmin11.00_logMmax15.00_ap1-1.2-1.5-2_modehalomodel_waperture_3d384k1.pdf}
+    \caption{Reconstruction of entire  $P^{me}$ for \texttt{halomodel} mode under several truncation parameters $x=1, \, 1.2,\, 1.5,\, 2$, $M_r = 10^{11} \; M_\odot$. Weights $\tilde f_i(x)$ are calculated directly from the aperture (hybrid modelling method). \textbf{Left top panel:} comparison of true $P^{me}(k)$ and $R(k; \, x) + U(k; \, x)$, with $R(k; \, x)$ taken over the range $[M_r, \, 10^{15}] \; M_\odot$, and $U(k; \, x)$ over $[10^8, \, M_r]\; M_\odot$. \textbf{Left bottom panel:} comparison of $(R+U)/ P^{me}$ for all $x$. \textbf{Right top panel:} split of the reconstruction error onto resolved range error and unresolved range error for all $x$. \textbf{Right bottom panel:} plot of $S(k; \, x)$ along with $S_\mathrm{eff}(k)$.}
+    \label{fig:varying_x_11_hybrid}
+\end{figure}
+ 
+ 
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expB_aperture_gas_m200b_nb30_logMmin11.00_logMmax15.00_ap1-1.2-1.5-2_modehalomodel_wcatalogue_3d384k1.pdf}
+    \caption{Reconstruction of entire  $P^{me}$ for \texttt{halomodel} mode under several truncation parameters $x=1, \, 1.2,\, 1.5,\, 2$, $M_r = 10^{11} \; M_\odot$. Weights $\tilde f_i(x)$ are calculated from $\mu(x)$ (pure modelling method). \textbf{Left top panel:} comparison of true $P^{me}(k)$ and $R(k; \, x) + U(k; \, x)$, with $R(k; \, x)$ taken over the range $[M_r, \, 10^{15}] \; M_\odot$, and $U(k; \, x)$ over $[10^8, \, M_r]\; M_\odot$. \textbf{Left bottom panel:} comparison of $(R+U)/ P^{me}$ for all $x$. \textbf{Right top panel:} split of the reconstruction error onto resolved range error and unresolved range error for all $x$. \textbf{Right bottom panel:} plot of $S(k; \, x)$ along with $S_\mathrm{eff}(k)$.}
+    \label{fig:varying_x_11_pure}
+\end{figure}
+
+
+On the other hand, near $k \simeq 3$--$7\;h/\mathrm{cMpc}$ the curves for different $x$ very nearly coincide, so the aperture has little effect there. Since $R_\star + U_\star = P^{me}$ does not depend on $x$, we need to follow $R + U$.  Writing out the difference between two
+apertures,
+\begin{equation}
+\begin{aligned}
+\Big[R(k;\,x) + U(k;\,x)\Big] - \Big[R(k;\,1) + U(k;\,1)\Big]
+\;&=\;
+\sum_i \Big[
+    \tilde f_i(x)\,u_m(k \mid M_i;\, x)
+    - \tilde f_i(1)\,u_m(k\mid M_i;\, 1)
+\Big] P^{he}(k\mid M_i)
+\\
+&\quad+\;
+\Big[
+    \tilde f_u(x)\,S(k;\,x)
+    - \tilde f_u(1)\,S(k;\,1)
+\Big] P^{h_r e}(k)
+\end{aligned}
+\label{eq:AB-split}
+\end{equation}
+Using
+$\tilde f_i(x) = n_i M_i(x)/\bar\rho_m$ together with the definition
+\eqref{eq:u_def} of $u_m(k\mid M;\, x)$,
+%
+\begin{equation}
+  \tilde f_i(x)\, u_m(k\mid M_i; \, x)
+  \;=\; \frac{n_i}{\bar\rho_m}
+        \int_{r \,<\, x\,r_{200m}} \!\!\! \dd^3 r \;
+        \rho_m(r\mid M_i)\, e^{-i\,\mathbf{k}\cdot\mathbf{r}} .
+  \label{eq:unnormalised}
+\end{equation}
+%
+The two $M_i(x)$ cancel only if they are the same one: in the hybrid runs
+$\tilde f_i(x)$ carries the assigned mass while $u_m$ is still normalised to
+the NFW mass inside $x\,r_{200m}$, so what follows is exact for the pure
+weighting and approximate for the hybrid one.
+Subtracting the $x=1$ case leaves the
+integral over the shell only, and the angular integral \eqref{eq:angular} gives
+%
+\begin{equation}
+  \tilde f_i(x)\, u_m(k\mid M_i;\, x) \,-\, \tilde f_i(1)\, u_m(k\mid M_i; \, 1)
+  \;=\; \frac{n_i}{\bar\rho_m}
+        \int_{r_{200m}}^{x\,r_{200m}} \!\!\! 4\pi r^2 \rho_m(r\mid M_i)\,
+        \frac{\sin kr}{kr}\, \dd r
+  \label{eq:shell-transform}
+\end{equation}
+%
+Because $r \ge r_{200m}$,
+$\left|\,\sin(kr)/kr\,\right| \,\le\, 1/(k\,r_{200m})$. Pulling this bound out
+of the integral and recognising what is left as the shell mass,
+%
+\begin{equation}
+  \Big|\, \tilde f_i(x)\, u_m(k\mid M_i; \, x) \, - \, \tilde f_i(1)\, u_m(k\mid M_i; \, 1) \, \Big|
+  \;\le\; \frac{\tilde f_i(x) - \tilde f_i(1)}{k\, r_{200m}(M_i)} ,
+  \label{eq:A-bound}
+\end{equation}
+%
+and therefore
+%
+\begin{equation}
+  \sum_i \Big[
+    \tilde f_i(x)\,u_m(k \mid M_i;\, x)
+    - \tilde f_i(1)\,u_m(k\mid M_i;\, 1)
+\Big] P^{he}(k\mid M_i)
+  \;\le\; \frac{1}{k} \, \sum_i
+          \frac{\tilde f_i(x) - \tilde f_i(1)}{r_{200m}(M_i)} \,
+          P^{he}(k\mid M_i)
+  \;\xrightarrow[\;k \to \infty\;]{}\; 0 ,
+  \label{eq:A-vanishes}
+\end{equation}
+%
+What comes to $U$, the aperture enters $S(k;\,x)$ only
+through the truncation of $u_m$. The average runs over $M < M_r$,
+for which $r_{200m} \,\lesssim\, 0.12\;\mathrm{cMpc}/h$ and $c \simeq 10$, so that
+$\kappa = k\,r_{200m}/c \,\lesssim\, 0.1$ out to the Nyquist frequency. In this
+regime, $u_m \simeq 1$ irrespective of where the profile is truncated, hence
+$S(k;\,x) \simeq S(k;\,1)$ and
+%
+\begin{equation}
+  \Big[
+    \tilde f_u(x)\,S(k;\,x)
+    - \tilde f_u(1)\,S(k;\,1)
+\Big] P^{h_r e}(k)
+  \;\simeq\; \Big[\tilde f_u(x) - \tilde f_u(1)\Big]\, S(k;\,1)\,
+        P^{h_r e}(k)
+  \label{eq:B-rescaling}
+\end{equation}
+%
+We know that $S(k;\, 1) \to 0$ at large $k$. This follows from the tranfer function: for $M \ll M_r$ the one-halo term $W_c(k,M) \propto M$ is
+negligible, so $\varepsilon_c(k,M) \to 0$ while $\varepsilon_c(k,M_r)$ grows
+with $k$, and therefore
+%
+\begin{equation}
+  T(k,\,M) \;=\; \frac{b(M)}{b(M_r)}\,
+               \frac{1 + \varepsilon_c(k,\,M)}{1 + \varepsilon_c(k,\,M_r)}
+         \;\simeq\; \frac{b(M)}{b(M_r)}\,
+               \frac{1}{1 + \varepsilon_c(k,\,M_r)}
+         \;\xrightarrow[\;k \to \infty\;]{}\; 0
+  \label{eq:T-vanishes}
+\end{equation}
+%
+We measure $S \simeq 0.30$ at $k = 3$ and $S \simeq 0.09$ at
+$k = 10\;h/\mathrm{cMpc}$.
+ 
+Therefore, both terms of \eqref{eq:AB-split} vanish at large $k$, and we have
+\begin{equation}
+    \Big[R(k;\,x) + U(k;\,x)\Big] - \Big[R(k;\,1) + U(k;\,1)\Big]  \;\xrightarrow[\;k \to \infty\;]{}\; 0
+    \label{eq:A-absolute}
+\end{equation}
+However, in the bottom left panel we show $(R+U)/P^{me}$, and $P^{me}$
+vanishes at large $k$ too. It turns out that $P^{me}$ falls off with $k$ faster
+than $\Delta (R+U)$ does --- at $k \simeq 3-7 \; h/\mathrm{cMpc}$ $\Delta (R+U)$ still wins, 
+but later $P^{me}$ overtakes and profiles diverge again. The window opens where
+it does because the shell sits at $r \gtrsim r_{200m}$, so by \eqref{eq:A-bound}
+it only begins to wash out once $k\,r_{200m} > 1$ --- a couple of
+$h/\mathrm{cMpc}$ for the halos holding most of the moved mass.
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expB_aperture_gas_m200b_nb30_logMmin11.00_logMmax15.00_Mr12.00_Mmax14.91_prod_ap1-1.2-1.5-2_modehalomodel_waperture_3d384k1.pdf}
+    \caption{Reconstruction of entire  $P^{me}$ for \texttt{halomodel} mode under several truncation parameters $x=1, \, 1.2,\, 1.5,\, 2$, $M_r = 10^{12} \; M_\odot$. Weights $\tilde f_i(x)$ are calculated directly from the aperture (hybrid modelling method). \textbf{Left top panel:} comparison of true $P^{me}(k)$ and $R(k; \, x) + U(k; \, x)$, with $R(k; \, x)$ taken over the range $[M_r, \, 10^{15}] \; M_\odot$, and $U(k; \, x)$ over $[10^8, \, M_r]\; M_\odot$. \textbf{Left bottom panel:} comparison of $(R+U)/ P^{me}$ for all $x$. \textbf{Right top panel:} split of the reconstruction error onto resolved range error and unresolved range error for all $x$. \textbf{Right bottom panel:} plot of $S(k; \, x)$ along with $S_\mathrm{eff}(k)$.}
+    \label{fig:varying_x_12_hybrid}
+\end{figure}
+ 
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expB_aperture_gas_m200b_nb30_logMmin11.00_logMmax15.00_Mr12.00_Mmax14.91_prod_ap1-1.2-1.5-2_modehalomodel_wcatalogue_3d384k1.pdf}
+    \caption{Reconstruction of entire  $P^{me}$ for \texttt{halomodel} mode under several truncation parameters $x=1, \, 1.2,\, 1.5,\, 2$, $M_r = 10^{12} \; M_\odot$. Weights $\tilde f_i(x)$ are calculated from $\mu(x)$ (pure modelling method). \textbf{Left top panel:} comparison of true $P^{me}(k)$ and $R(k; \, x) + U(k; \, x)$, with $R(k; \, x)$ taken over the range $[M_r, \, 10^{15}] \; M_\odot$, and $U(k; \, x)$ over $[10^8, \, M_r]\; M_\odot$. \textbf{Left bottom panel:} comparison of $(R+U)/ P^{me}$ for all $x$. \textbf{Right top panel:} split of the reconstruction error onto resolved range error and unresolved range error for all $x$. \textbf{Right bottom panel:} plot of $S(k; \, x)$ along with $S_\mathrm{eff}(k)$.}
+    \label{fig:varying_x_12_pure}
+\end{figure}
+ 
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=0.7\textwidth]{Figures/expB_shellmass_gas_m200b_nb30_logMmin11.00_logMmax15.00_ap1-1.2-1.5-2_waperture_3d384k1.pdf}
+    \caption{Plot of the individual halo bins' $R_{\star \, i}$ shells at $k=0.1, \, 1,\, 3$. Shell of $R_{\star \, i}$ is defined as $R_{\star \, i}(k; \, x=2) - R_{\star \, i}(k; \, x=1)$.}
+    \label{fig:shells}
+\end{figure}
+
+\subsection{Measuring true matter profiles around halos} \label{sec:profiles}
+
+Remember the blue derivation following right after Equation~\ref{eq:stack}. One of the lines read
+\begin{equation}
+    \delta_m(\mathrm{k}) \;=\; \frac{1}{\bar \rho_m} \sum_j \int \dd^3x \, \rho_m (\mathbf{x} - \mathbf{x}_j \mid M_j) \, e^{-i \mathbf{k} \cdot \mathbf{x}},
+\end{equation}
+where the sum goes over haloes. We can express $\rho_m(\mathbf{x} - \mathbf{x}_j \mid M_j)$ as
+\begin{equation}
+    \rho_j(\mathbf{r}) \;=\; \sum_{p \, \in \, j} m_p \, \delta^{(D)} (\mathbf{r} - (\mathbf{x}_p - \mathbf{x}_j)), \qquad M_j^a \;=\; \int \dd^3r \, \rho_j \;=\; \sum_{p \, \in \, j} \, m_p
+\end{equation}
+Then inserting this into definition of $u_m(k \mid M)$ \eqref{eq:u_def} gives
+\begin{equation}
+    u_j(\mathbf{k}) \; =\; \frac{1}{M_j^a} \sum_{p \, \in \, j} \, m_p \, e^{-i \mathbf{k} \cdot (\mathbf{x}_p - \mathbf{x}_j)}, \qquad u_j(0) = 1
+\end{equation}
+Now we define the bin's stacked profile:
+\begin{equation}
+    \bar \rho_i (\mathbf{r}) \;=\; \frac{1}{N_i} \sum_{j \, \in \, i} \, \rho_j (\mathbf{r}) \;=\; \frac{1}{N_i}\sum_{j \, \in \, i} \,\sum_{p \, \in \, j} \, m_p \, \delta^{(D)} (\mathbf{r} - (\mathbf{x}_p - \mathbf{x}_j))
+\end{equation}
+Its total mass is $\int\dd^3r\,\bar\rho_i = 1/{N_i}\sum_{j\in i}M_j^a \equiv \langle M^a\rangle_i$. Now \eqref{eq:u_def} with $M \to \langle M^a\rangle_i$:
+\begin{equation}
+\begin{aligned}
+    \bar u_m (\mathbf{k} \mid M_i)
+    &\;=\;
+    \frac{1}{\langle M^a\rangle_i}
+    \int \dd^3r \, \bar \rho_i(\mathbf{r}) \,
+    e^{-i \mathbf{k} \cdot \mathbf{r}}
+    \;=\;
+     \frac{1}{\langle M^a\rangle_i} \sum_{j \, \in \, i} \,\sum_{p \, \in \, j} \, m_p \, e^{-i \mathbf{k} \cdot (\mathbf{x}_p - \mathbf{x}_j)}
+    \\[2ex]
+    &\;=\; \frac{\frac{1}{N_i}\sum_j M_j^a u_j(\mathbf{k})}
+         {\frac{1}{N_i}\sum_j M_j^a}
+         \;=\; \frac{\sum_j M_j^a u_j(\mathbf{k})}
+         {\sum_j M_j^a}
+\end{aligned}
+\end{equation}
+Our pipeline bins spectra in $k$, so we want a $\hat{\mathbf{k}}$--average. That's Equation \eqref{eq:angular}, $\tfrac12\int_{-1}^{1}e^{-ikr\mu}\dd\mu \,=\, j_0(kr)$, applied to each particle's own displacement:
+\begin{equation}
+    \langle \,e^{-i \mathbf{k} \cdot (\mathbf{x}_p - \mathbf{x}_j)} \,\rangle_{\hat{\mathbf{k}}} \;=\; j_0(k\,r_p), \qquad r_p \; \equiv \; \mid \mathbf{x}_p - \mathbf{x}_j\mid
+\end{equation}
+giving the estimator:
+\begin{equation} \label{eq:u_bar_estimator}
+    \bar u_m(k \mid M_i) \;=\; \frac{\sum_{p \, \in \, i} m_p \, j_0(k\,r_p)}
+         {\sum_{p \, \in \, i} m_p}
+\end{equation}
+This equation is normalised to $\langle M^a \rangle_i$, the mass
+of the particles assigned inside the aperture. That means we got to use the 
+mass fractions $\tilde f_i$'s and the reconstruction reads
+%
+\begin{equation} \label{eq:R_measured}
+    R(k) \;=\; \sum_i \tilde f_i \, \bar u_m(k \mid M_i) \, P^{he}(k \mid M_i),
+    \qquad
+    \tilde f_i \;=\; \frac{1}{M_{\rm tot}} \sum_{p \, \in \, i} m_p ,
+\end{equation}
+%
+We note that in practical implementation, $\bar u_m$ exists
+only where the catalogue and the particle sampling allow for a stack; below that
+floor the reconstruction keeps $u_m^{\rm NFW}$, which matters little anyway because
+$u_m \to 1$ for those haloes at every $k$ the box resolves.
+
+\begin{figure}
+    \centering
+    \begin{minipage}{0.495\textwidth}
+        \centering
+        \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expC_profile_m200b_nbu56_logMu8-15_nshow6.pdf}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.495\textwidth}
+        \centering
+        \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expC_profile_m200b_nbu56_logMu8-15_nshow6_ap2.pdf}
+    \end{minipage}
+    \caption{Measured $\bar u_m(k\mid M_i)$ against the NFW model it replaces,
+    for six mass bins spanning the range the stack resolves.
+    \textbf{Left:} $x=1$. \textbf{Right:} $x=2$, with both the stack and the
+    NFW comparison truncated at $2\,r_{200m}$; the two share their axes, so the
+    growth of the residual with aperture can be read across.
+    \textbf{Top panels:} solid is the measurement, dashed is $u_{\rm NFW}$ at
+    $c(M,z)$ from Diemer \& Joyce, dotted is $u_{\rm NFW}$ at a concentration
+    fitted to the measurement. Faint verticals mark $k\,r_{200m}=1$ per bin.
+    \textbf{Bottom panels:} the same as a ratio, which is exactly the factor by
+    which bin $i$'s term of $R$ is wrong; solid is against $c(M,z)$, dotted
+    against the fitted $c$. The band is $\pm5\%$.}
+    \label{fig:expC}
+\end{figure}
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expB_aperture_gas_m200b_nb30_logMmin11.00_logMmax15.00_Mr12.00_Mmax14.91_prod_ap1-1.2-1.5-2_modehalomodel_waperture_prof-measured_3d384k1.pdf}
+    \caption{The aperture sweep of Figure~\ref{fig:varying_x_12_hybrid} repeated
+    with $u_m$ taken from the measured stack instead of NFW, $M_r = 10^{12}\,
+    M_\odot$, \texttt{halomodel} mode, hybrid weighting. The weights
+    $\tilde f_i(x)$ are identical between the two runs, so the only thing that
+    changes is the profile.}
+    \label{fig:expB_measured}
+\end{figure}
+
+Figure~\ref{fig:expC} puts the two profiles side by side. Below $\log_{10} M \simeq 12$ the measurement and the model are
+indistinguishable, not necessarily because NFW is right but because $u_m \simeq 1$ across
+the whole range the box resolves. Where the comparison does have leverage, $\bar u_m$ falls
+consistently below NFW. The matter profiles of these haloes are some $15\%$ less concentrated than
+a relation calibrated on dark-matter-only runs predicts. At $x=2$
+the fitted concentrations fall further, which is the expected verdict on the
+assumption flagged under Equation~\eqref{eq:unnormalised} that the NFW form
+survives past $r_{200m}$: extending the truncation radius tests the model exactly where
+it is least accurate, and the measurement demonstrates it. Substituting the measured profile into the reconstruction,
+Figure~\ref{fig:expB_measured}, shows that nothing really changes. The discrepancy on 
+intermediate to small scales therefore is not caused by profile mismatch, so we need to turn our attention back to
+the transfer function.
+
+
+\subsection{Adding another extrapolation mode}
+
+Coming back to Equation~\eqref{eq:factorisation}, we remind ourself that the main
+assumption behind \texttt{halomodel} is $\varepsilon_e \approx \varepsilon_c$,
+which is the same thing as
+\[
+    \frac{P^{he}(k \mid M)}{P^{hc}(k \mid M)} \;=\; \frac{I_e(k)}{I_c(k)}
+    \qquad \text{for every } M < M_r
+\]
+Essentially, this is saying that whatever the gas is doing relative to the CDM at
+the reference bin---how much of it has been blown out, and how far out it has been
+pushed---is carried down unchanged to every halo below. With
+$M_r = 10^{12}\,M_\odot$ in a strongest AGN run, the reference halo is one that
+feedback has substantially emptied. We therefore assert that a $10^{9}\,M_\odot$
+halo is emptied in exactly the same proportion, at every $k$, which is not quite
+accurate.
+
+The opposite limit is to switch the feedback off entirely below the reference
+bin, so that an unresolved halo holds its gas at the cosmic fraction and
+distributes it exactly like its dark matter. Then the halo cannot tell the two
+fields apart, and
+%
+\begin{equation} \label{eq:gascdm_def}
+    P^{he}(k \mid M) \;=\; P^{hc}(k \mid M) \qquad \text{for } M < M_r .
+\end{equation}
+%
+The transfer function for \texttt{gascdm} mode is
+%
+\begin{equation} \label{eq:T_gascdm}
+    T_{gc}(k,M) \;=\; \frac{P^{hc}(k \mid M)}{P^{h_re}(k)} \;=\; \frac{P^{h_rc}(k)}{P^{h_re}(k)} \; T_c(k, \, M)
+\end{equation}
+%
+Note that $T_{gc}(k, M_r) \neq 1$, the model is discontinuous at $M_r$.
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expB_aperture_gas_m200b_nb30_logMmin11.00_logMmax15.00_ap1-1.2-1.5-2_modegascdm_waperture_3d384k1.pdf}
+    \caption{The aperture sweep run with \texttt{gascdm} in place of
+    \texttt{halomodel}, $M_r = 10^{11}\,M_\odot$, hybrid weighting. To be read
+    against Figure~\ref{fig:varying_x_11_hybrid}, which is the same run with
+    \texttt{halomodel}.}
+    \label{fig:gascdm_11}
+\end{figure}
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expB_aperture_gas_m200b_nb30_logMmin11.00_logMmax15.00_Mr12.00_Mmax14.91_prod_ap1-1.2-1.5-2_modegascdm_waperture_3d384k1.pdf}
+    \caption{As Figure~\ref{fig:gascdm_11}, but $M_r = 10^{12}\,M_\odot$; the
+    \texttt{halomodel} counterpart is Figure~\ref{fig:varying_x_12_hybrid}.}
+    \label{fig:gascdm_12}
+\end{figure}
+
+Figures~\ref{fig:gascdm_11} and~\ref{fig:gascdm_12} behave very differently, and
+Equation~\eqref{eq:T_gascdm} points to the reason why: the entire effect of \texttt{gascdm} is
+the factor $P^{h_rc}/P^{h_re}$ at the reference bin, and that factor substantially departs
+from unity only once the reference bin's own one-halo term is large enough ($I_e$ is fairly close to $I_c$). At $M_r = 10^{11}\,M_\odot$ the
+reference halo is two-halo dominated across the whole $k$ range, so its
+spectrum never reveals that it has been stripped, the factor stays near unity and
+the curves barely move. At $M_r = 10^{12}\,M_\odot$ the one-halo term takes over
+well before the Nyquist frequency, and since the gas one-halo term is far more
+suppressed than the CDM one the factor grows steeply, so the correction overshoots
+catastrophically at small scales.
+
+\subsection{Addressing the residual small-scale dip}
+
+\subsubsection{Why the dip appears?}
+
+The residual dip sits at $k \sim 3$--$7$, and the first thing to say about it is
+that the aperture does not touch it. The four $x$ curves, which are
+spread widely at $k \sim 1$, lie on top of one another across this window. As was derived previously in Equation~\eqref{eq:A-vanishes}: the shell
+between $r_{200m}$ and $x\,r_{200m}$ contributes to $R$ with the $\sin(kr)/kr$ of
+Equation~\eqref{eq:A-bound}, suppressed by $1/(k\,r_{200m})$, so once
+$k\,r_{200m} > 1$ it has washed out and moving the truncation boundary changes nothing. At $k \sim 1$, the
+trouble was matter sitting just outside the aperture, and growing $x$ addressed it by
+handing that matter to $R$. At $k \sim 3$--$7$ we are resolving structure well
+inside $r_{200m}$ of the haloes that carry the weight, and it is the interiors of
+resolved haloes that the model is getting wrong.
+
+Inside $r_{200m}$ the reconstruction still describes a halo as a smooth ball: one
+radial profile $u_m(k \mid M_i)$, blurring the halo centre's correlation with the
+gas. A real halo is not smooth. It contains subhaloes, and those subhaloes hold
+gas, so matter and gas sit together clump by clump and correlate more strongly
+than a smooth ball does. $R$ therefore falls short of the $R_\star$ of
+Equation~\eqref{eq:T_split}, and it falls short precisely on the scales of the
+clumps rather than on the scale of the halo.
+
+Measuring the profile does not repair this, and the reason is now sharper than a
+statement about NFW being the wrong shape: $\bar u_m$ is \emph{still a radial
+profile}. It records how much matter lies at each radius and remains silent on
+whether that matter is spread evenly around the shell or piled into a few
+subhaloes, which is the only thing that matters here. Substituting it in fact
+makes things worse, since NFW is too concentrated
+\textcolor{blue}{(Section~\ref{sec:profiles})}, and that error had been pushing
+$R$ up and masking part of the shortfall.
+
+The same objection disposes of the $U$ side and of \texttt{gascdm}. The material
+in question belongs to resolved haloes, so no choice of $S = \langle u_m T
+\rangle_w$ over $M < M_r$ describes it, and rescaling $T$---which is all
+\texttt{gascdm} does---cannot help either. Every term in the reconstruction routes
+the correlation between matter and gas through a halo centre: in $R$ through the
+resolved halo's own centre, blurred by a profile; in $U$ through the reference
+bin's centre, rescaled by $T$. Substructure correlates with the gas locally, on
+its own scale, and that correlation is not inherited from any centre.
+
+What is missing is therefore a substructure term. It is not the one-halo term,
+which ties matter and gas to a common centre through a shared radial profile, and
+it is not the two-halo term, which ties them through linear bias at large
+separation. It is the contribution of gas-bearing clumps within a halo, correlated
+with each other at the scale of their own separation, and until the model carries
+something of that form the small-scale dip will survive every adjustment to the
+ingredients it already has.
+
+\end{document}
