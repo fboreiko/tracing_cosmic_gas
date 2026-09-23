@@ -130,76 +130,14 @@ def self_pair_terms(data):
     }
 
 
-def smeared_share(cache):
-    """sum_{q in i} m_q^2 j0(k r_q)^2 / sum_gas m_q^2, shape (nbins, nk).
-
-    The self-pair share of bin i AFTER its members have been randomised. A
-    member gas particle still sits in the gas field at its true position while
-    its copy in delta_m^(i) has been moved to a random direction at the same
-    radius, so the pair survives at a separation of order r rather than
-    vanishing: averaging over the new direction and over the k shell turns the
-    coincident pair's 1 into j0(k r)^2.
-
-    Built from the radial histogram of m^2 that spherise.selfpair_shells
-    accumulates, each shell transformed at its own mass-weighted mean radius,
-    which is what makes the shell width a second-order error rather than a
-    first-order one -- the same construction u_bar uses for the profile.
-
-    j0(k r)^2 -> 1 as k -> 0, so this reduces to the ordinary share on large
-    scales: the randomisation cannot hide a self-pair, only move it.
-    """
-    W = np.asarray(cache['m2_shell_gas'], dtype=float)
-    S = np.asarray(cache['m2r_shell_gas'], dtype=float)
-    k = np.asarray(cache['k_center'], dtype=float)
-    with np.errstate(invalid='ignore', divide='ignore'):
-        r_bar = np.where(W > 0, S / np.where(W > 0, W, 1.0), 0.0)
-    out = np.zeros((W.shape[0], k.size))
-    for i in range(W.shape[0]):
-        occ = W[i] > 0
-        if not np.any(occ):
-            continue
-        # np.sinc(x) = sin(pi x)/(pi x), so j0(k r) = np.sinc(k r / pi).
-        j0 = np.sinc(np.outer(r_bar[i][occ], k) / np.pi)
-        out[i] = W[i][occ] @ (j0 ** 2)
-    return out / float(cache['m2_tot_gas'])
-
-
-def rstar_self_pair_terms(cache, randomised=False):
-    """The same, for the R*/U* cache's spectra. Its ingredients, its keys.
-
-    `randomised` is for the experiment D caches (see rstar_ustar), and it does
-    NOT switch the correction off -- it changes its shape, differently for the
-    two spectra:
-
-      R*_i  a member gas particle has been moved away from its own copy in the
-            gas field, but only to the far side of its own orbit, so the pair
-            is smeared rather than removed and what comes off is
-            m^2 j0(k r)^2 instead of m^2. See smeared_share.
-      U*    an unassigned gas particle has not moved at all, so this keeps
-            exactly the term it always had, built from the UNsmeared shares.
-
-    Getting either one wrong is quiet rather than loud. Leaving R*_i
-    uncorrected pushes R*(randomised) up by nearly the full self-pair at low
-    k, which subtracts straight out of the intra-halo term experiment D
-    measures and can turn it negative where the spectrum is shot-dominated.
-    """
+def rstar_self_pair_terms(cache):
+    """The same, for the R*/U* cache's spectra. Its ingredients, its keys."""
     f_g = float(cache['f_g'])
     P_gg = np.asarray(cache['P_shot_gg'], dtype=float)
     share = (np.asarray(cache['m2_bin_gas'], dtype=float)
              / float(cache['m2_tot_gas']))
     R_i = f_g * share[:, None] * P_gg[None, :]
-    U = f_g * P_gg - R_i.sum(axis=0)
-    if not randomised:
-        return {'R_star_gas': R_i, 'U_star_gas': U}
-    if 'm2_shell_gas' not in cache:
-        print("  [shot] WARNING: this randomised cache predates the smeared "
-              "self-pair correction and carries no m2_shell_gas, so R*_i is "
-              "left UNCORRECTED and is biased high by up to the full "
-              "self-pair term. Re-measure it with --randomise ... "
-              "--recompute.")
-        return {'U_star_gas': U}
-    return {'R_star_gas': f_g * smeared_share(cache) * P_gg[None, :],
-            'U_star_gas': U}
+    return {'R_star_gas': R_i, 'U_star_gas': f_g * P_gg - R_i.sum(axis=0)}
 
 
 def subtract_self_pairs(data, terms=None, report=True):
