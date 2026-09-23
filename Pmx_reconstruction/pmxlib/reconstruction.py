@@ -58,9 +58,7 @@ class Profile:
     def from_config(cls, cfg, z, aperture=1.0, allow_compute=False):
         """The profile this run asked for. u_bar is imported only if needed."""
         if cfg.profile_source == 'nfw':
-            obj = cls(cfg, z, aperture=aperture)
-            obj.report_clumping()
-            return obj
+            return cls(cfg, z, aperture=aperture)
         from Pmx_reconstruction.pmxlib import u_bar as ub
         cache = ub.load_or_measure_u_bar(cfg, aperture=aperture,
                                          allow_compute=allow_compute)
@@ -78,28 +76,12 @@ class Profile:
         print(f"[profile] measured u_bar, aperture {aperture:g}, nodes over "
               f"logM {obj.range[0]:.2f}..{obj.range[1]:.2f}; the NFW model "
               f"covers anything outside that")
-        obj.report_clumping()
         return obj
-
-    def report_clumping(self):
-        """Say once, loudly, whether R is carrying the clumping correction.
-
-        It changes R by up to 19% at the top of the mass range and leaves no
-        other trace in the log, so a run must not be able to have it on
-        silently.
-        """
-        if not getattr(self.cfg, 'clumping', False):
-            return
-        from Pmx_reconstruction.pmxlib import clumping
-        a, alpha, xi_max, apply = self.cfg.clump_params
-        print(f"[profile] CLUMPING ON: u_m -> u_m x "
-              f"{clumping.describe(a, alpha, xi_max, apply)}")
 
     @property
     def tag(self):
         """Filename/label token. Empty for the default, so old stems survive."""
-        base = '' if self.source == 'nfw' else '_prof-measured'
-        return base + self.cfg.clump_tag
+        return '' if self.source == 'nfw' else '_prof-measured'
 
     def u(self, k, M, trunc=1.0):
         """u_m(k|M), shape (nM, nk). M may be any array of masses.
@@ -107,13 +89,6 @@ class Profile:
         In measured mode `trunc` is not free: u_bar is normalised to the mass
         inside the aperture the cache was measured at, so asking for a
         different truncation is asking for a profile that was never measured.
-
-        With cfg.clumping the radial profile -- whichever of the two it is --
-        is multiplied by pmxlib.clumping's factor, 1/(1 - xi(k r200m)). That is
-        applied LAST and to both sources on purpose: it is the non-radial part
-        of the halo, which is precisely what neither NFW nor the measured stack
-        contains, so it is not double counting either of them. xi -> 0 as
-        k -> 0, so u_m(0) = 1 still holds and the mass budget does not move.
         """
         k = np.atleast_1d(np.asarray(k, dtype=float))
         M = np.atleast_1d(np.asarray(M, dtype=float))
@@ -126,19 +101,10 @@ class Profile:
                                   self.cfg.rhobar_m, trunc=trunc)
                             if m > 0 else np.ones(k.size) for m in M])
         if self.source == 'nfw':
-            return self._clumped(u_model, k, M)
+            return u_model
         from Pmx_reconstruction.pmxlib.u_bar import u_bar_interp
         u_meas, inside = u_bar_interp(self.cache, k, M)
-        return self._clumped(np.where(inside[:, None], u_meas, u_model), k, M)
-
-    def _clumped(self, u, k, M):
-        """u times the clumping factor, or u untouched when it is off."""
-        if not getattr(self.cfg, 'clumping', False):
-            return u
-        from Pmx_reconstruction.pmxlib import clumping
-        a, alpha, xi_max, apply = self.cfg.clump_params
-        return u * clumping.factor(k, M, self.cfg.rhobar_m, a=a, alpha=alpha,
-                                   xi_max=xi_max, apply=apply)
+        return np.where(inside[:, None], u_meas, u_model)
 
 
 def reconstruction_weights(cfg, mr, tot=None):

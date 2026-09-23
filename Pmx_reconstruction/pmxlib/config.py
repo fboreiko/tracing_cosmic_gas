@@ -187,17 +187,6 @@ class PmxConfig:
     # mass actually assigned inside the aperture: u_bar is normalised to that
     # mass, so the two are a matched pair and mixing them is silently wrong.
     profile_source: str = 'nfw'
-    # The intra-halo clumping correction of pmxlib.clumping, measured by
-    # experiment D: u_m -> u_m [1 + xi(k r200m)]. Orthogonal to
-    # profile_source, and deliberately so -- it is the NON-radial part, which
-    # is exactly what neither NFW nor the measured stack can carry, so it
-    # composes with either. It is not an --extrap mode: those are transfer
-    # functions T(k, M) for U, and this changes R.
-    clumping: bool = False
-    clump_a: float = None          # None -> clumping.CLUMP_A
-    clump_alpha: float = None      # None -> clumping.CLUMP_ALPHA
-    clump_max: float = None        # None -> clumping.XI_MAX; inf uncaps it
-    clump_apply: str = 'self-consistent'   # or 'linear'; see clumping
 
     # --- mass range, resolved against a bundle by MassRange.from_config -------
     # R sums the bins in [M_r, M_max]; U models the mass below M_r.
@@ -296,41 +285,6 @@ class PmxConfig:
         return f'kd{self.kbins_per_decade:g}{w}'
 
     @property
-    def clump_params(self):
-        """(a, alpha, xi_max) with pmxlib.clumping's defaults filled in.
-
-        The defaults live in clumping rather than in the dataclass so that the
-        calibration and the text explaining it sit in one file; None here
-        means 'whatever experiment D measured'.
-        """
-        from Pmx_reconstruction.pmxlib import clumping as cl
-        return (cl.CLUMP_A if self.clump_a is None else float(self.clump_a),
-                cl.CLUMP_ALPHA if self.clump_alpha is None else float(self.clump_alpha),
-                cl.XI_MAX if self.clump_max is None else float(self.clump_max),
-                self.clump_apply)
-
-    @property
-    def clump_tag(self):
-        """Filename token, empty when the correction is off.
-
-        Off-default parameters go in the stem too: two runs of the same
-        reconstruction with different clumping amplitudes are different
-        results and must not land on the same file.
-        """
-        if not self.clumping:
-            return ''
-        a, alpha, xi_max, apply = self.clump_params
-        from Pmx_reconstruction.pmxlib import clumping as cl
-        tag = '_clump'
-        if apply != 'self-consistent':
-            tag += f'-{apply}'
-        if (a, alpha) != (cl.CLUMP_A, cl.CLUMP_ALPHA):
-            tag += f'-a{a:g}p{alpha:g}'
-        if xi_max != cl.XI_MAX:
-            tag += f'-max{xi_max:g}'
-        return tag
-
-    @property
     def rhobar_m(self):
         """Comoving mean matter density in (Msun/h)/(Mpc/h)^3."""
         from Pmx_reconstruction.pmxlib.cosmology import mean_matter_density
@@ -414,30 +368,6 @@ def _add_profile_args(ap):
                         "(f_part instead of n_i M_i / rhobar_m), because the "
                         "two only mean anything together. Below the measured "
                         "floor the model is kept")
-    g.add_argument('--clumping', action='store_true',
-                   help="apply the intra-halo clumping correction measured by "
-                        "experiment D: u_m -> u_m / [1 - xi(k r200m)], so R "
-                        "carries the matter-gas correlation inside a halo "
-                        "that no radial profile can. Composes with --profile "
-                        "and with any --extrap mode; --extrap halomodel "
-                        "--clumping is 'halomodel plus the correction'")
-    g.add_argument('--clump-a', dest='clump_a', type=float, default=None,
-                   help="amplitude of xi = a (k r200m)^alpha "
-                        "(default: the fitted value in pmxlib.clumping)")
-    g.add_argument('--clump-alpha', dest='clump_alpha', type=float,
-                   default=None, help="index of the same (default: fitted)")
-    g.add_argument('--clump-max', dest='clump_max', type=float, default=None,
-                   help="cap on xi, where the power law leaves the range "
-                        "experiment D measured. 'inf' uncaps it, which "
-                        "extrapolates to a >100%% correction for the most "
-                        "massive bins near Nyquist -- read pmxlib.clumping "
-                        "before using it")
-    g.add_argument('--clump-apply', dest='clump_apply',
-                   default=_D.clump_apply, choices=['self-consistent', 'linear'],
-                   help="how xi becomes a multiplier on u_m. xi was measured "
-                        "as C_i/R*_i, against the TRUTH, so inverting it is "
-                        "1/(1-xi); 'linear' is the (1+xi) form, which "
-                        "under-corrects by xi/(1-xi)")
     return g
 
 
