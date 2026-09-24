@@ -6,6 +6,7 @@
     2. MassRange                     M_r / M_max resolved against a bundle
     3. PmxConfig                     every knob, one frozen dataclass
     4. the command line              argparse groups, assembled by base_parser
+    5. figure stems                  stem_A / stem_B / stem_C, one per script
 """
 import argparse
 from dataclasses import dataclass, fields
@@ -150,8 +151,7 @@ class PmxConfig:
 
     # --- large scales, measured in 3-D and stitched under the 2-D run ---------
     # Projecting to k_z = 0 throws away a factor 2k/k_f in modes: 4.7x in sigma
-    # at k = 0.1, 10x at k = 0.5. ngrid_3d = None leaves the pipeline purely
-    # 2-D, exactly as before.
+    # at k = 0.1, 10x at k = 0.5. ngrid_3d = None leaves the pipeline purely 2-D
     ngrid_3d: int = None
     k_split: float = 0.5         # 3-D below, 2-D above [h/cMpc]
 
@@ -160,13 +160,11 @@ class PmxConfig:
     logm_min: float = 11.0       # log10(M / [Msun/h])
     logm_max: float = 15.0       # (the physics cut is logm_r / logm_max_rec)
     nbins: int = 30              # log-spaced bins between logm_min and logm_max
-    # k binning. Log-spaced: on a log axis a linear grid puts 93% of its bins
-    # above k = 1 and four below k = 0.1, so the small scales read as a noise
-    # band and the large ones are four points. kbin_wmin_kf floors the width
-    # at that many fundamentals, below which a bin holds too few modes to mean
-    # anything; see log_k_bin_edges.
+
+    # --- k binning ------------------------------------------------------------
     kbins_per_decade: float = 25.0
     kbin_wmin_kf: float = 2.0
+
     centrals_only: bool = True   # satellites repeat their host's m200b; counting
                                  # them would double-count halo mass in n_i M_i
     # Unit of the catalogue's halo-mass array, in Msun/h. Particle masses in
@@ -175,8 +173,6 @@ class PmxConfig:
     halo_mass_unit_msun_h: float = 1.0
 
     # --- halo profile ---------------------------------------------------------
-    # c(M,z). colossus is the only source; which published relation it uses is
-    # colossus_conc_model, and that is the knob to turn when comparing fits.
     concentration_source: str = 'colossus'
     colossus_conc_model: str = 'diemer19'
     # Where u_m(k|M) comes from in R and in U's S(k).
@@ -184,9 +180,16 @@ class PmxConfig:
     #   'measured' the stacked profile from pmxlib.u_bar, interpolated in
     #              log M, with the model kept only below the measured floor.
     # 'measured' also switches the mass weights from n_i M_i / rhobar_m to the
-    # mass actually assigned inside the aperture: u_bar is normalised to that
-    # mass, so the two are a matched pair and mixing them is silently wrong.
+    # mass actually assigned inside the aperture.
     profile_source: str = 'nfw'
+
+    # --- clumping correction --------------------------------------------------
+    # The intra-halo clumping correction of pmxlib.clumping, measured by
+    # experiment D: u_m -> u_m [1 + xi(k r200m)].
+    clumping: bool = False
+    clump_a: float = None          # None -> clumping.CLUMP_A
+    clump_alpha: float = None      # None -> clumping.CLUMP_ALPHA
+    clump_max: float = None        # None -> clumping.XI_MAX; inf uncaps it
 
     # --- mass range, resolved against a bundle by MassRange.from_config -------
     # R sums the bins in [M_r, M_max]; U models the mass below M_r.
@@ -202,11 +205,6 @@ class PmxConfig:
     power_spectrum: str = 'camb'   # 'camb' | 'eisenstein98'
 
     def __post_init__(self):
-        # The 0.6 k_Nyquist ceiling is where TSC aliasing survives the window
-        # deconvolution. Measured on a painted uniform random catalogue (a flat
-        # spectrum, so the worst case; the matter field falls as k^-2 and
-        # aliases less): +0.02% at 0.4-0.5 k_Ny, +0.1% at 0.5-0.6, +0.4% at
-        # 0.6-0.7, +2.4% at 0.7-0.85.
         if self.ngrid_3d:
             k_ny3 = np.pi * self.ngrid_3d / self.box
             if self.k_split > 0.6 * k_ny3:
@@ -227,6 +225,20 @@ class PmxConfig:
                 f"mass_def is {self.mass_def!r}, but r200m_of_M assumes a "
                 f"mean-background (200m) definition. Either use 'm200b' or "
                 f"change r200m_of_M to match.")
+        if self.clumping:
+            from Pmx_reconstruction.pmxlib import clumping as cl
+            a, alpha, xi_max = self.clump_params
+            if a <= 0 or alpha <= 0:
+                raise ValueError(
+                    f"--clumping is on with clump_a={a:g}, clump_alpha="
+                    f"{alpha:g}; both must be positive. a = 0 would leave the "
+                    f"correction switched on and doing nothing, which is the "
+                    f"one outcome that looks like a result.")
+            if xi_max >= 1.0:
+                raise ValueError(
+                    f"clump_max={xi_max:g} makes the 1/(1 - xi) factor "
+                    f"diverge or change sign. Cap below 1; the measured "
+                    f"plateau is {cl.XI_MAX:g}.")
 
     # --- derived from the simulation's own parameter file ---------------------
     @property
@@ -283,6 +295,14 @@ class PmxConfig:
         """Filename token for the k binning."""
         w = '' if self.kbin_wmin_kf == 2.0 else f'w{self.kbin_wmin_kf:g}'
         return f'kd{self.kbins_per_decade:g}{w}'
+
+    @property
+    def clump_params(self):
+        """(a, alpha, xi_max) with pmxlib.clumping's defaults filled in."""
+        from Pmx_reconstruction.pmxlib import clumping as cl
+        return (cl.CLUMP_A if self.clump_a is None else float(self.clump_a),
+                cl.CLUMP_ALPHA if self.clump_alpha is None else float(self.clump_alpha),
+                cl.XI_MAX if self.clump_max is None else float(self.clump_max))
 
     @property
     def rhobar_m(self):
@@ -368,6 +388,24 @@ def _add_profile_args(ap):
                         "(f_part instead of n_i M_i / rhobar_m), because the "
                         "two only mean anything together. Below the measured "
                         "floor the model is kept")
+    g.add_argument('--clumping', action='store_true',
+                   help="apply the intra-halo clumping correction measured by "
+                        "experiment D: u_m -> u_m / [1 - xi(k r200m)], so R "
+                        "carries the matter-gas correlation inside a halo "
+                        "that no radial profile can. Composes with --profile "
+                        "and with any --extrap mode; --extrap halomodel "
+                        "--clumping is 'halomodel plus the correction'")
+    g.add_argument('--clump-a', dest='clump_a', type=float, default=None,
+                   help="amplitude of xi = a (k r200m)^alpha "
+                        "(default: the fitted value in pmxlib.clumping)")
+    g.add_argument('--clump-alpha', dest='clump_alpha', type=float,
+                   default=None, help="index of the same (default: fitted)")
+    g.add_argument('--clump-max', dest='clump_max', type=float, default=None,
+                   help="cap on xi, where the power law leaves the range "
+                        "experiment D measured. 'inf' uncaps it, which "
+                        "extrapolates to a >100%% correction for the most "
+                        "massive bins near Nyquist -- read pmxlib.clumping "
+                        "before using it")
     return g
 
 
@@ -429,3 +467,78 @@ def base_parser(description, validate=True):
     _add_mass_range_args(ap, validate=validate)
     _add_extrapolation_args(ap)
     return ap
+
+
+def models_tag(cfg, power_spectrum=True, profile=True, grid_3d=True,
+               kbins=True):
+    """The run-configuration suffix every figure name ends with."""
+    out = ''
+    if cfg.concentration_source != PmxConfig.concentration_source:
+        out += f'_conc-{cfg.concentration_source}'
+    if cfg.colossus_conc_model != PmxConfig.colossus_conc_model:
+        out += f'_cm-{cfg.colossus_conc_model}'
+    if power_spectrum and cfg.power_spectrum != PmxConfig.power_spectrum:
+        out += f'_ps-{cfg.power_spectrum}'
+    if profile:
+        if cfg.profile_source != PmxConfig.profile_source:
+            out += f'_prof-{cfg.profile_source}'
+        if cfg.clumping:
+            from Pmx_reconstruction.pmxlib import clumping as cl
+            a, alpha, xi_max = cfg.clump_params
+            out += '_clump'
+            if (a, alpha) != (cl.CLUMP_A, cl.CLUMP_ALPHA):
+                out += f'-a{a:g}p{alpha:g}'
+            if xi_max != cl.XI_MAX:
+                out += f'-max{xi_max:g}'
+    if kbins and (cfg.kbins_per_decade != PmxConfig.kbins_per_decade
+                  or cfg.kbin_wmin_kf != PmxConfig.kbin_wmin_kf):
+        out += f'_{cfg.kbin_tag}'
+    if grid_3d and cfg.ngrid_3d:
+        out += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
+    return out
+
+
+def stem_A(cfg, kind, mr):
+    """experiment_A's figure name. `kind` is the panel, `mr` its MassRange."""
+    return (f'expA_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}{mr.tag()}'
+            f'_hmf{cfg.hmf}_fu{cfg.fu}{models_tag(cfg)}')
+
+
+def stem_B(cfg, kind, mr, apertures, weights, err_mode):
+    """experiment_B's figure name.
+
+    `apertures` is the swept list, `weights` 'aperture' or 'catalogue', and
+    `err_mode` the mode the error budget panel is drawn for -- dropped for the
+    shell-mass figure, which has no budget panel to name."""
+    mode_tag = '' if kind == 'shellmass' or not err_mode else f'_mode{err_mode}'
+    return (f'expB_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}'
+            f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
+            f'{"" if mr.is_default else mr.tag()}'
+            f'_ap{"-".join(f"{x:g}" for x in apertures)}'
+            f'{mode_tag}_w{weights}{models_tag(cfg)}')
+
+
+def stem_D(cfg, mr, randomise, aperture):
+    """experiment_D's figure name.
+
+    `randomise` is the spherisation mode and `aperture` the membership radius,
+    both of which change WHAT was measured rather than how it was modelled, so
+    they sit in the stem before the model suffix.
+
+    Like stem_B, the mass range appears only when it is not the default.
+    """
+    ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
+    return (f'expD_spherise_gas_{cfg.mass_def}_nb{cfg.nbins}'
+            f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
+            f'{"" if mr.is_default else mr.tag()}'
+            f'_{randomise}{ap}{models_tag(cfg)}')
+
+
+def stem_C(cfg, nbins_u, logm_lo, logm_hi, n_show, aperture):
+    """experiment_C's figure name."""
+    ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
+    models = models_tag(cfg, power_spectrum=False, profile=False,
+                        grid_3d=False, kbins=False)
+    return (f'expC_profile_{cfg.mass_def}_nbu{int(nbins_u)}'
+            f'_logMu{float(logm_lo):g}-{float(logm_hi):g}'
+            f'_nshow{n_show}{ap}{models}')

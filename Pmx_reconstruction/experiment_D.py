@@ -74,7 +74,8 @@ from utils.pipeline_paths import ensure_parents, plot_path
 from utils.plot_data import save_plot_data
 
 from Pmx_reconstruction.pmxlib.bundle import load_or_measure
-from Pmx_reconstruction.pmxlib.config import MassRange, PmxConfig, base_parser
+from Pmx_reconstruction.pmxlib.config import (MassRange, PmxConfig,
+                                              base_parser, stem_D)
 from Pmx_reconstruction.pmxlib.reconstruction import Profile
 from Pmx_reconstruction.pmxlib import plotting as pl
 from Pmx_reconstruction.pmxlib import rstar_ustar as ru
@@ -447,17 +448,8 @@ def _report_bins(k, logM, C_i, R_star_i, mr):
 
 
 def _finish(cfg, data, d, mr, prod, rand, randomise, aperture):
-    ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
-    models = ''
-    if cfg.colossus_conc_model != PmxConfig.colossus_conc_model:
-        models += f'_cm-{cfg.colossus_conc_model}'
-    if cfg.ngrid_3d:
-        models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
-    stem = (f'expD_spherise_gas_{cfg.mass_def}_nb{cfg.nbins}'
-            f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
-            f'{"" if mr.is_default else mr.tag()}'
-            f'_{randomise}{ap}{models}')
-    path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
+    path = plot_path('pme_reconstruction', cfg.feedback,
+                     stem=stem_D(cfg, mr, randomise, aperture))
     ensure_parents(path)
     pl.save_figure(pl.spherise_figure(d), path)
     print(f"\n[D][plot] {path}")
