@@ -1194,4 +1194,296 @@ with each other at the scale of their own separation, and until the model carrie
 something of that form the small-scale dip will survive every adjustment to the
 ingredients it already has.
 
+\subsubsection{Isolating the term: spherising the halo interiors}
+\label{sec:spherise}
+
+The argument above says what the missing term must be, but it is an argument.
+What follows measures it.
+
+Return to Equation~\eqref{eq:utilde_def}. Writing $u_j(k)$ for halo $j$'s own
+(clumpy, non-spherical) profile, $M_j^a$ for the mass assigned to it and
+$C_j(k) = \langle e^{-i\bk\cdot\bx_j}\delta_e^*\rangle$ for its own cross with
+the gas, bin $i$'s exact contribution and the model's version of it are
+\begin{equation}
+  R_{\star\,i} \;=\; \frac{1}{M_{\rm tot}}\sum_{j\,\in\,i} M_j^a\,u_j(k)\,C_j(k),
+  \qquad
+  R_i \;=\; \tilde f_i\,\bar u_m(k\mid M_i)\,P^{he}(k\mid M_i) ,
+\end{equation}
+and since $\bar u_m = \sum_j M_j^a u_j / \sum_j M_j^a$ and
+$P^{he}(k\mid M_i) = \langle C\rangle_i$, the second is the first with the sum
+of products replaced by the product of sums. Subtracting,
+\begin{equation}
+  R_{\star\,i} - R_i \;=\; \frac{N_i}{M_{\rm tot}}\,
+  \mathrm{Cov}_{j\,\in\,i}\!\big(M_j^a\,u_j(k),\; C_j(k)\big) .
+  \label{eq:cov-identity}
+\end{equation}
+Nothing here is an approximation: Equation~\eqref{eq:cov-identity} holds for
+the realised fields, bin by bin, at each $\bk$. It is the same statement as
+$\tilde u_m \neq \bar u_m$, now written so that what separates them is visible.
+
+Two physically different things live inside that covariance. The
+\emph{intra-halo} part is the one Section~\ref{sec:profiles} argues for: a
+halo's clumps hold gas, so where its mass sits and how it correlates with the
+gas are not independent. The \emph{halo-to-halo} part survives even if every
+halo is a smooth sphere --- inside a bin of finite width the more massive
+haloes have both a larger $M u$ and a larger $C$ --- and it is the $k\to0$
+limit of the same covariance, the mass--bias covariance already noted under
+Equation~\eqref{eq:LS-sumrule}. Separating them is what the experiment does.
+
+\paragraph{The randomisation.} Move every particle that carries a halo label to
+a new position inside the \emph{same} host, chosen so that its distance from
+the halo centre is preserved exactly. Two ways:
+\begin{align}
+  \texttt{shuffle}\quad & \text{each particle to a random direction at its own
+  radius; the halo is spherised,} \notag \\
+  \texttt{rotate}\quad & \text{the whole halo rigidly turned by one random
+  rotation; every clump survives.} \notag
+\end{align}
+For a fixed $\bk$, $\langle e^{-i\bk\cdot r\hat n}\rangle_{\hat n} = j_0(kr)$,
+and a Haar-uniform rotation gives the same. \textbf{Both modes therefore have
+the same expectation}, namely the halo's own spherised profile $\bar u_j$, and
+\texttt{rotate} is not an independent physical control: it cannot preserve the
+clump--gas alignment either, because the gas is not turned with the matter.
+What distinguishes them is variance --- \texttt{shuffle} draws once per
+particle and averages down as $N_{\rm part}^{-1/2}$, \texttt{rotate} once per
+halo and only as $N_{\rm halo}^{-1/2}$ --- so \texttt{shuffle} is the estimator
+and \texttt{rotate} a cross-check.
+
+Because the new directions are drawn independently of everything else, taking
+the expectation replaces $u_j$ by $\bar u_j$ and leaves $C_j$ alone. So the
+randomised measurement retains exactly the halo-to-halo part of
+Equation~\eqref{eq:cov-identity}, and the difference
+\begin{equation}
+  C(k) \;\equiv\; R_\star(\text{true}) \;-\; R_\star(\text{randomised})
+  \label{eq:Cdef}
+\end{equation}
+is the intra-halo part, measured rather than modelled. It is the term the
+reconstruction has no representation for.
+
+\paragraph{What moves and what does not.} $\delta_m^{(i)}$ is the
+\emph{matter} field of bin $i$, so it is painted from dark matter \emph{and}
+gas, and both species' member particles are randomised --- a halo with its gas
+left in place would not be spherised at all. What is held fixed is the gas
+\emph{field} $\delta_e$ the result is crossed against: it is painted from every
+gas particle at its true position, before anything moves. The asymmetry is the
+design, for three reasons. It is the reference, and one cannot ask how much of
+$R_\star$ depends on the matter's non-radial structure while varying both
+sides. The model it is scored against, $R = \tilde f_i \bar u_m P^{he}$, uses a
+$P^{he}$ measured against the true gas field, so moving $\delta_e$ would put
+measurement and model on different footings unless $P^{he}$ were re-measured
+too. And randomising the gas independently would change nothing in expectation,
+the two draws being uncorrelated, while adding noise.
+
+The control that \emph{would} preserve the clump--gas alignment is a rigid
+rotation of each halo's matter \emph{and} its gas by the same rotation, which
+destroys the halo's alignment with its environment while leaving its interior
+intact. That separates gas-bearing clumps from a triaxial halo pointing down a
+filament. It requires $P^{he}$ re-measured against the rotated gas field, so it
+is a second measurement and has not been done; at $k \gtrsim 3$ the scales in
+question are well inside $r_{200m}$, where alignment with the large-scale field
+is not a plausible carrier.
+
+\paragraph{A self-pairing term that is smeared, not removed.} Since
+$\delta_m^{(i)}$ contains gas, a member gas particle appears twice: at its
+randomised position in $\delta_m^{(i)}$ and at its true position in $\delta_e$.
+Its self-pair is therefore \emph{displaced} rather than deleted. Averaging over
+the new direction and over the $\bk$ shell, the coincident pair's $1$ becomes
+$j_0(kr)^2$, so what must come off $R_{\star\,i}$ is
+\begin{equation}
+  \big\langle \delta_m^{(i)}\,\delta_e^*\big\rangle_{\rm self}^{\rm rand}
+  \;=\; f_g\,P^{gg}_{\rm shot}\,
+  \frac{\sum_{q\,\in\,i} m_q^2\, j_0(k\,r_q)^2}{\sum_{q\,\in\,\rm gas} m_q^2} ,
+  \label{eq:smeared-selfpair}
+\end{equation}
+against the plain $\sum_{q\in i}m_q^2$ of the production run. The
+\emph{unassigned} gas particles never move, so $U_\star$ keeps precisely the
+term it always had. Equation~\eqref{eq:smeared-selfpair} $\to$ the ordinary
+share as $k\to0$: the randomisation cannot hide a self-pair, only move it.
+\textcolor{blue}{This matters more here than the algebra suggests. $C$ is a
+difference of two nearly equal spectra, so a term that is a few per cent of
+$R_\star$ is a large fraction of $C$; left uncorrected it drove the measured
+intra-halo term negative wherever the gas spectrum is shot-dominated --- which,
+with $P^{gg}$ up to $94\%$ self-pairs below Nyquist, is most of the small
+scales.}
+
+\paragraph{Consistency checks.} Labels do not change under the randomisation,
+so $f_i$, $\tilde f_i$, the counts, $\langle M\rangle_i$ and the mass moments
+must be bit-identical to the production cache, and they are. $U_\star$ is
+re-measured by painting the unassigned particles directly rather than copied,
+and agrees with the production value (taken there as a residual) to
+$1\times10^{-4}$. And since $u_j \to 1$ whatever the angles,
+$R_\star(\text{randomised})/R_\star(\text{true}) \to 1$ as $k\to 0$: measured,
+$4\times10^{-4}$ over $k < 0.15$.
+
+\subsubsection{What the spherisation measures}
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expD_spherise_gas_m200b_nb30_logMmin11.00_logMmax15.00_Mr12.00_Mmax14.91_prod_shuffle_3d384k1.pdf}
+    \caption{Spherising the halo interiors, \texttt{shuffle}, $x=1$,
+    $M_r = 10^{12}\,M_\odot$. \textbf{Left top:} the four bin sums, with
+    $C(k)$ of Equation~\eqref{eq:Cdef} drawn beside them --- they lie on top of
+    one another on a log axis, the whole effect being a few per cent, so $C$
+    itself is the only informative curve. \textbf{Left bottom:} each as a
+    fraction of the measured $R_\star$. \textbf{Right top:} the exact split
+    $(R-R_\star) = (R-R_\star^{\rm rand}) - C$, as fractions of $P^{me}$.
+    \textbf{Right bottom:} $C_i/R_{\star\,i}$ per bin against host mass, at
+    three $k$.}
+    \label{fig:expD_x1}
+\end{figure}
+
+\begin{figure}
+    \centering
+    \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expD_spherise_gas_m200b_nb30_logMmin11.00_logMmax15.00_Mr12.00_Mmax14.91_prod_shuffle_ap1.5_3d384k1.pdf}
+    \caption{As Figure~\ref{fig:expD_x1} but at $x = 1.5$. The residual is
+    larger and the intra-halo share is not: $90.5\%$ against $89.5\%$.}
+    \label{fig:expD_x15}
+\end{figure}
+
+The answer is that the residual is intra-halo. Over $k = 2$--$8$, the median
+split of $R - R_\star$ is
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lccc}
+\hline
+ & $R-R_\star$ & intra-halo & halo-to-halo \\
+\hline
+$x=1$   & $-0.0578\,P^{me}$ & $89.5\%$ & $-0.0061\,P^{me}$ \\
+$x=1.5$ & $-0.0921\,P^{me}$ & $90.5\%$ & $-0.0094\,P^{me}$ \\
+\hline
+\end{tabular}
+\end{center}
+so what survives spherisation is under one per cent of $P^{me}$. The
+bin-width objection is therefore not what is happening: the halo-to-halo term
+is real but small, and it does not grow with aperture.
+
+Three features make this more than a number. First, $C(k)$ has the right
+shape. It vanishes at both ends --- as it must, since $u_j \to 1$ at $k\to0$
+whatever the angles, and since $u_j \to 0$ at large $k$ either way --- and
+peaks at $k = 1.69\;h/\mathrm{cMpc}$, i.e.\ $1/k = 0.59\;\mathrm{cMpc}/h$.
+That is neither the size of a halo nor the size of a clump but the scale of
+clump \emph{positions within} the halo, around $0.6\,r_{200m}$ of a
+$10^{14}M_\odot$ host, which is where subhaloes sit. It is detected at
+$13$--$21\sigma$ against the randomisation noise over $k = 1.5$--$7$.
+
+Second, and most tellingly, the term lives in the haloes that host satellites
+rather than in the haloes that hold the mass:
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lcccc}
+\hline
+host bin & $k=1$ & $k=3$ & $k=5$ & mass held, $\sum\tilde f_i$ \\
+\hline
+$\log_{10}M = 11$--$12$ & $0.00$ & $-0.01$ & $0.01$ & $0.084$ \\
+$12$--$13$              & $0.03$ & $0.06$  & $0.11$ & $0.096$ \\
+$13$--$14$              & $0.26$ & $0.40$  & $0.49$ & $0.055$ \\
+$14$--$15$              & $0.71$ & $0.55$  & $0.39$ & $0.014$ \\
+\hline
+\end{tabular}
+\end{center}
+Haloes above $10^{13}M_\odot$ carry $95\%$ of $C$ at $k=3$ with $28\%$ of the
+resolved mass, and cluster-mass haloes over half of it with $5.6\%$. This is
+the cleanest discriminator available: a bin-width or mass-scatter artefact
+would track the \emph{mass}, and this tracks the \emph{host mass}. Third, the
+per-bin $C_i/R_{\star\,i}$ grows with both host mass and $k$, which is what a
+substructure term does and what a binning artefact does not.
+
+\subsubsection{Modelling it: a clumping factor on $u_m$}
+\label{sec:clumping}
+
+Write the correction as a multiplicative factor on the profile, so that it
+enters wherever $u_m$ does and needs no new term in the bin sum:
+\begin{equation}
+  u_m(k\mid M) \;\longrightarrow\; u_m(k\mid M)\,\big[1+\eta(k,M)\big],
+  \qquad \eta \;=\; \frac{C_i}{R_i} .
+  \label{eq:clump-apply}
+\end{equation}
+Since $R_i = \tilde f_i u_m P^{he}$, multiplying $u_m$ and multiplying $R_i$
+are the same arithmetic; putting it in $u_m$ says that it is a statement about
+the effective matter profile of a halo of mass $M$.
+
+\paragraph{The scaling variable.} Measured per bin as $\xi_i \equiv
+C_i/R_{\star\,i}$, the correction collapses on $k$ times the \emph{aperture}
+radius, $k\,x\,r_{200m}$, and on nothing else. Fitting the two apertures
+separately:
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lccc}
+\hline
+fit variable & $x=1$ & $x=1.5$ & ratio \\
+\hline
+$k\,r_{200m}$   & $a = 0.0067$ & $a = 0.0149$ & $2.21$ \\
+$k\,x\,r_{200m}$ & $a = 0.0067$, $\alpha = 1.74$ & $a = 0.0074$, $\alpha = 1.75$ & $1.10$ \\
+\hline
+\end{tabular}
+\end{center}
+Against $r_{200m}$ the amplitude more than doubles between the two, close to
+the $1.5^{1.74} = 2.02$ the aperture scaling predicts; against $x\,r_{200m}$ it
+moves by $10\%$ and the index does not move at all. This is what a
+self-similar subhalo population gives: a subhalo mass function universal in
+$m/M$ and a radial distribution universal in $r/r_{200m}$ can only leave a
+correction depending on $k\,x\,r_{200m}$. Physically the aperture belongs there
+because the correction describes clumping inside the region \emph{assigned} to
+the halo, so the scale that matters is where that region stops --- growing $x$
+swallows more subhaloes, and at large $x$ whole neighbouring haloes, since
+assignment gives a particle to the most massive sphere containing it.
+
+\paragraph{The law.} Fitting the $x = 1.5$ run over $0.2 < k\,x\,r_{200m} < 6$,
+$675$ points from the $19$ bins above $\log_{10}M = 12.5$ weighted by each
+bin's own $R_{\star\,i}$:
+\begin{equation}
+  \xi \;=\; 0.0074\,\big(k\,x\,r_{200m}\big)^{1.75},
+  \qquad \xi \;\le\; \xi_{\max} = 0.20 ,
+  \label{eq:clump-law}
+\end{equation}
+with a scatter of $0.48$ in $\ln\xi$ and a collapse across $\log_{10}M > 13$ of
+$0.30$--$0.36$. The cap is not cosmetic. The measured $\xi$ saturates --- the
+median over the massive bins is $0.183$ at $k\,x\,r_{200m} = 8$, $0.197$ at
+$10$ and $0.221$ at $12$, while the power law has reached $0.28$, $0.42$ and
+$0.57$ --- and past $k\,x\,r_{200m}\sim18$ the per-bin values are differences
+of two spectra that are mostly self-pairs. Uncapped, the largest haloes in a
+$681\;\mathrm{cMpc}/h$ box reach $k\,x\,r_{200m} = 42$ at the grid's Nyquist
+frequency, where Equation~\eqref{eq:clump-law} would ask for a $400\%$
+correction on no evidence. $\xi_{\max} = 0.20$ is both the plateau the
+measurement reaches and the value that closes the residual best.
+
+\paragraph{Inverting it.} $\xi$ is calibrated against the \emph{truth},
+$\xi = C_i/R_{\star\,i}$, not against the model, so converting it into the
+$\eta$ of Equation~\eqref{eq:clump-apply} is a division rather than an addition:
+\begin{equation}
+  R_{\star\,i} \;=\; R_i + C_i \;=\; R_i + \xi_i R_{\star\,i}
+  \qquad\Longrightarrow\qquad
+  R_{\star\,i} \;=\; \frac{R_i}{1-\xi_i},
+  \qquad \eta_i = \frac{\xi_i}{1-\xi_i} .
+  \label{eq:clump-invert}
+\end{equation}
+Using $(1+\xi)$ instead --- which is what an $R$-normalised calibration
+$\xi' = C_i/R_i$ would call for --- under-corrects by $\xi/(1-\xi)$, some
+$23\%$ at the cap. \textcolor{blue}{$\xi$ is normalised by $R_\star$ rather than
+by $R$ deliberately: $C_i$ and $R_{\star\,i}$ are both measured, so $\xi$ is a
+property of the simulation, whereas $R_i$ depends on the profile source and the
+concentration relation and would make the calibration differ by up to $7.6\%$
+between \texttt{--profile nfw} and \texttt{--profile measured}. The price is
+that Equation~\eqref{eq:clump-invert} takes the whole $R$-to-$R_\star$ gap to
+be $C$, i.e.\ neglects the halo-to-halo term; measured, $\eta$ comes out at
+$0.986$ of exact, a $1.4\%$ under-correction of a $\sim15\%$ correction.}
+
+\paragraph{What it buys.} At $x = 1.5$, where it was fitted, the law takes
+$R/R_\star - 1$ from $-10.0\%$ to $+0.4\%$ at $k = 3$, $-14.4\%$ to $-0.5\%$ at
+$k=5$ and $-16.0\%$ to $-0.6\%$ at $k=7$, reproducing the measured $C(k)$ to
+$0.86$--$1.12$ over $k = 1$--$9$. Carried to $x = 1$, which it was \emph{not}
+fitted on, it still gives $-6.5\%\to-0.9\%$ at $k=3$ and
+$-11.9\%\to-1.2\%$ at $k=7$. That transfer is the check on the aperture
+scaling, not a second calibration.
+
+\paragraph{What it does not.} Three things. The law is calibrated on one
+feedback model, one redshift and one aperture, so $a$, $\alpha$ and the cap are
+all left on the command line. It recovers most of the term and not all: the
+power law runs low around $k\,x\,r_{200m} = 6$ and the cap takes over above
+$6.6$, so a smooth saturating form would fit better than a power law with a
+knee. And it does not touch the halo-to-halo residual, correctly --- $\xi\to0$
+as $k\to0$ by construction --- which at $x = 1.5$ leaves about $1.5\%$ on large
+scales that belongs to the within-bin mass--bias covariance and is a
+bin-width question rather than this one.
+
 \end{document}
