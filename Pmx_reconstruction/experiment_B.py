@@ -56,7 +56,7 @@ from utils.plot_data import save_plot_data
 
 from Pmx_reconstruction.pmxlib.bundle import load_or_measure
 from Pmx_reconstruction.pmxlib.config import (MassRange, PmxConfig,
-                                              base_parser)
+                                              base_parser, stem_B)
 from Pmx_reconstruction.pmxlib.nfw import conc_of, r200m_of_M
 from Pmx_reconstruction.pmxlib.reconstruction import Profile, compute_U
 from Pmx_reconstruction.pmxlib import plotting as pl
@@ -436,25 +436,9 @@ def run_experiment_B(cfg, data, apertures,
     # --- figures ---------------------------------------------------------------
     def _save(fig, kind):
         """Save one of this run's figures, under a stem naming the whole run."""
-        models = ''
-        if cfg.concentration_source != PmxConfig.concentration_source:
-            models += f'_conc-{cfg.concentration_source}'
-        if cfg.colossus_conc_model != PmxConfig.colossus_conc_model:
-            models += f'_cm-{cfg.colossus_conc_model}'
-        if cfg.power_spectrum != PmxConfig.power_spectrum:
-            models += f'_ps-{cfg.power_spectrum}'
-        if cfg.profile_source != PmxConfig.profile_source:
-            models += f'_prof-{cfg.profile_source}'
-        if cfg.ngrid_3d:
-            models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
-        mode_tag = '' if kind == 'shellmass' or not err_mode \
-            else f'_mode{err_mode}'
-        stem = (f'expB_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}'
-                f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
-                f'{"" if mr.is_default else mr.tag()}'
-                f'_ap{"-".join(f"{x:g}" for x in apertures)}'
-                f'{mode_tag}_w{weights}{models}')
-        path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
+        path = plot_path('pme_reconstruction', cfg.feedback,
+                         stem=stem_B(cfg, kind, mr, apertures, weights,
+                                     err_mode))
         ensure_parents(path)
         pl.save_figure(fig, path)
         print(f"[B][plot] {path}")

@@ -50,7 +50,7 @@ from scipy.optimize import minimize_scalar
 from utils.pipeline_paths import ensure_parents, plot_path
 from utils.plot_data import save_plot_data
 
-from Pmx_reconstruction.pmxlib.config import PmxConfig, base_parser
+from Pmx_reconstruction.pmxlib.config import PmxConfig, base_parser, stem_C
 from Pmx_reconstruction.pmxlib import plotting as pl
 from Pmx_reconstruction.pmxlib import u_bar as ub
 from Pmx_reconstruction.pmxlib.nfw import conc_of, r200m_of_M, u_nfw
@@ -231,15 +231,8 @@ def _finish(cfg, cache, a):
                        u_model=a['u_model'], u_fit=a['u_fit'],
                        c_model=a['c_model'], c_fit=a['c_fit'],
                        r200m=a['r200m'], aperture=aperture)
-    models = ''
-    if cfg.concentration_source != PmxConfig.concentration_source:
-        models += f'_conc-{cfg.concentration_source}'
-    if cfg.colossus_conc_model != PmxConfig.colossus_conc_model:
-        models += f'_cm-{cfg.colossus_conc_model}'
-    ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
-    stem = (f'expC_profile_{cfg.mass_def}_nbu{int(cache["nbins"])}'
-            f'_logMu{float(cache["logm_min"]):g}-{float(cache["logm_max"]):g}'
-            f'_nshow{idx.size}{ap}{models}')
+    stem = stem_C(cfg, cache['nbins'], cache['logm_min'], cache['logm_max'],
+                  idx.size, aperture)
     path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
     ensure_parents(path)
     pl.save_figure(pl.profile_figure(d), path)

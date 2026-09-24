@@ -51,7 +51,7 @@ matplotlib.use('Agg')
 from utils.pipeline_paths import ensure_parents, plot_path
 from utils.plot_data import save_plot_data
 
-from Pmx_reconstruction.pmxlib.config import (MassRange, PmxConfig,
+from Pmx_reconstruction.pmxlib.config import (MassRange, PmxConfig, stem_A,
                                               base_parser)
 from Pmx_reconstruction.pmxlib.halo_model import HaloModel
 from Pmx_reconstruction.pmxlib import plotting as pl
@@ -256,19 +256,8 @@ def run_experiment_A(cfg, data):
 
     def _save(fig, kind):
         """Save one of this run's figures, under a stem naming the whole run."""
-        models = ''
-        if cfg.concentration_source != PmxConfig.concentration_source:
-            models += f'_conc-{cfg.concentration_source}'
-        if cfg.colossus_conc_model != PmxConfig.colossus_conc_model:
-            models += f'_cm-{cfg.colossus_conc_model}'
-        if cfg.power_spectrum != PmxConfig.power_spectrum:
-            models += f'_ps-{cfg.power_spectrum}'
-        models += prof.tag                    # empty unless --profile measured
-        if cfg.ngrid_3d:
-            models += f'_3d{cfg.ngrid_3d}k{cfg.k_split:g}'
-        stem = (f'expA_{kind}_gas_{cfg.mass_def}_nb{cfg.nbins}{mr.tag()}'
-                f'_hmf{cfg.hmf}_fu{cfg.fu}{models}')
-        path = plot_path('pme_reconstruction', cfg.feedback, stem=stem)
+        path = plot_path('pme_reconstruction', cfg.feedback,
+                         stem=stem_A(cfg, kind, mr))
         ensure_parents(path)
         pl.save_figure(fig, path)
         print(f"[A][plot] {path}")

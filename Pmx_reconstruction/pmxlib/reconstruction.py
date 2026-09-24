@@ -78,17 +78,20 @@ class Profile:
               f"covers anything outside that")
         return obj
 
-    @property
-    def tag(self):
-        """Filename/label token. Empty for the default, so old stems survive."""
-        return '' if self.source == 'nfw' else '_prof-measured'
-
     def u(self, k, M, trunc=1.0):
         """u_m(k|M), shape (nM, nk). M may be any array of masses.
 
         In measured mode `trunc` is not free: u_bar is normalised to the mass
         inside the aperture the cache was measured at, so asking for a
         different truncation is asking for a profile that was never measured.
+
+        With cfg.clumping the radial profile -- whichever of the two it is --
+        is multiplied by pmxlib.clumping's factor, 1/(1 - xi(k trunc r200m)).
+        That is
+        applied LAST and to both sources on purpose: it is the non-radial part
+        of the halo, which is precisely what neither NFW nor the measured stack
+        contains, so it is not double counting either of them. xi -> 0 as
+        k -> 0, so u_m(0) = 1 still holds and the mass budget does not move.
         """
         k = np.atleast_1d(np.asarray(k, dtype=float))
         M = np.atleast_1d(np.asarray(M, dtype=float))
@@ -101,10 +104,26 @@ class Profile:
                                   self.cfg.rhobar_m, trunc=trunc)
                             if m > 0 else np.ones(k.size) for m in M])
         if self.source == 'nfw':
-            return u_model
+            return self._clumped(u_model, k, M, trunc)
         from Pmx_reconstruction.pmxlib.u_bar import u_bar_interp
         u_meas, inside = u_bar_interp(self.cache, k, M)
-        return np.where(inside[:, None], u_meas, u_model)
+        return self._clumped(np.where(inside[:, None], u_meas, u_model),
+                             k, M, trunc)
+
+    def _clumped(self, u, k, M, trunc=1.0):
+        """u times the clumping factor, or u untouched when it is off.
+
+        `trunc` is the aperture and it is part of the scaling variable, not a
+        detail: xi depends on k * trunc * r200m. Dropping it would leave the
+        correction flat in x, which experiment B's aperture sweep rules out --
+        see THE APERTURE in pmxlib.clumping.
+        """
+        if not getattr(self.cfg, 'clumping', False):
+            return u
+        from Pmx_reconstruction.pmxlib import clumping
+        a, alpha, xi_max = self.cfg.clump_params
+        return u * clumping.factor(k, M, self.cfg.rhobar_m, aperture=trunc,
+                                   a=a, alpha=alpha, xi_max=xi_max)
 
 
 def reconstruction_weights(cfg, mr, tot=None):
