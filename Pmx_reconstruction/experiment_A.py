@@ -123,7 +123,7 @@ def run_experiment_A(cfg, data):
     # --- where u_m comes from, and the weights that go with it ------------------
     # Both are decided here, once, and handed to R, to U and to the validation
     # truth. The measured partition is needed BEFORE R now, not just for
-    # scoring afterwards: under --profile measured it is where f_part lives.
+    # scoring afterwards: under --profile measured it is where f_in lives.
     # allow_compute matches the measured partition's below: a production run
     # already measures what it is missing, so refusing to measure the profile
     # would be the one inconsistent thing in the run.
@@ -137,7 +137,7 @@ def run_experiment_A(cfg, data):
             "      python -m Pmx_reconstruction.pmxlib.rstar_ustar --recompute")
     w_R, f_u_weights = reconstruction_weights(cfg, mr, tot=tot)
     print(f"[A] profile {prof.source}, weights "
-          f"{'f_part (assigned mass)' if prof.source == 'measured' else 'n_i M_i / rhobar_m'}: "
+          f"{'f_in (assigned mass)' if prof.source == 'measured' else 'n_i M_i / rhobar_m'}: "
           f"sum_i w_i = {float(np.sum(w_R)):.4f}, f_u = {f_u_weights:.4f}")
 
     # --- the exact target, validation only --------------------------------------

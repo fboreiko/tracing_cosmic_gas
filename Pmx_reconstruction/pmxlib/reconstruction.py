@@ -22,7 +22,7 @@ WHERE u_m COMES FROM
 
 WHICH WEIGHTS GO WITH IT
     reconstruction_weights pairs them. u_bar is normalised to the mass actually
-    assigned inside the aperture, so a measured profile takes f_part and
+    assigned inside the aperture, so a measured profile takes f_in and
     f_out; the model profile takes the catalogue's n_i M_i / rhobar_m and its
     deficit. Mixing them is silently wrong rather than loudly wrong -- the
     0.255-versus-0.249 gap would simply sit inside the profile error looking
@@ -87,11 +87,6 @@ class Profile:
 
         With cfg.clumping the radial profile -- whichever of the two it is --
         is multiplied by pmxlib.clumping's factor, 1/(1 - xi(k trunc r200m)).
-        That is
-        applied LAST and to both sources on purpose: it is the non-radial part
-        of the halo, which is precisely what neither NFW nor the measured stack
-        contains, so it is not double counting either of them. xi -> 0 as
-        k -> 0, so u_m(0) = 1 still holds and the mass budget does not move.
         """
         k = np.atleast_1d(np.asarray(k, dtype=float))
         M = np.atleast_1d(np.asarray(M, dtype=float))
@@ -131,13 +126,13 @@ def reconstruction_weights(cfg, mr, tot=None):
 
     'nfw'       the catalogue's n_i M_i / rhobar_m, masked to the resolved
                 bins, and f_u = 1 - (resolved + above).
-    'measured'  the mass actually assigned inside the aperture, f_part, and
+    'measured'  the mass actually assigned inside the aperture, f_in, and
                 f_out = 1 - sum of it. These are the masses u_bar is
                 normalised to, so R + U closes on the mass budget exactly --
                 which the f_i pairing does not (0.255 against 0.249).
 
     `tot` is pmxlib.rstar_ustar.measured_partition's dict, already split at
-    M_r, and is required in measured mode: it is where f_part lives on the
+    M_r, and is required in measured mode: it is where f_in lives on the
     BUNDLE's mass grid. The u_bar cache has its own grid and cannot supply it.
     """
     if cfg.profile_source == 'nfw':
@@ -146,10 +141,10 @@ def reconstruction_weights(cfg, mr, tot=None):
         raise SystemExit(
             "--profile measured needs the R*/U* cache: the profile is "
             "normalised to the assigned mass, so R must be weighted by "
-            "f_part rather than n_i M_i / rhobar_m, and f_part is measured "
+            "f_in rather than n_i M_i / rhobar_m, and f_in is measured "
             "there. Build it with\n"
             "      python -m Pmx_reconstruction.pmxlib.rstar_ustar")
-    return np.asarray(tot['f_part'], dtype=float), float(tot['f_out'])
+    return np.asarray(tot['f_in'], dtype=float), float(tot['f_out'])
 
 
 def compute_R(cfg, k, P_halo_gas, M_i, n_i, z, trunc=1.0, profile=None,

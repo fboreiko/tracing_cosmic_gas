@@ -14,11 +14,9 @@ from utils.catalog_loaders import load_particle_properties
 from utils.delta_fields import compute_delta_2d, compute_delta_field_and_mass
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path, delta_2d_path)
-from utils.power_spectrum_utils import (bin_mode_stats, compute_2d_fft,
-                                        compute_k_grid_2d)
 
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos, log_mass_bin_edges
-from Pmx_reconstruction.pmxlib.painting import binned_spectrum
+from Pmx_reconstruction.pmxlib.kspace import bin_spectrum, fft, make_binning
 from Pmx_reconstruction.pmxlib.self_pairs import (measure_shot_spectra,
                                                  subtract_self_pairs)
 
@@ -126,20 +124,20 @@ def measure_spectra(cfg, nbins, logm_min, logm_max):
     delta_gas = _load_or_compute_delta(cfg, 'gas')
     delta_dm = _load_or_compute_delta(cfg, 'dm')
 
-    gas_fft = compute_2d_fft(delta_gas, cfg.grid)
-    dm_fft = compute_2d_fft(delta_dm, cfg.grid)
+    gas_fft = fft(delta_gas)
+    dm_fft = fft(delta_dm)
     del delta_gas, delta_dm
     gc.collect()
 
-    k_grid = compute_k_grid_2d(cfg.grid, cfg.box)
-    k_Nyquist = np.pi * cfg.grid / cfg.box
     k_bins = cfg.k_bins
+    binning = make_binning(cfg.grid, cfg.box, k_bins, 2)
+    k_Nyquist = binning['k_Nyquist']
     # k_center is the mode-weighted mean |k| of the bin, not the midpoint of
     # its edges: that is the k the bin's value refers to, and where a bin is
     # wide compared to the k it sits at -- the lowest few -- the two differ by
     # several per cent. Models are evaluated on this k, so they and the
     # measurement refer to the same place.
-    nmodes, k_center = bin_mode_stats(k_grid, k_bins)
+    nmodes, k_center = binning['nmodes'], binning['k_eff']
     print(f"  k binning: {k_center.size} log bins, "
           f"{cfg.kbins_per_decade:g}/decade, width floored at "
           f"{cfg.kbin_wmin_kf:g} k_f; k = {k_center[0]:.4f} .. {k_center[-1]:.3f}")
@@ -152,7 +150,7 @@ def measure_spectra(cfg, nbins, logm_min, logm_max):
 
     # --- the truths --------------------------------------------------------
     def _binned(prod):
-        return binned_spectrum(cfg, prod, k_grid)
+        return bin_spectrum(prod, binning)
 
     P_matter_gas = _binned((m_fft * np.conj(gas_fft)).real)
     P_dm_gas = _binned((dm_fft * np.conj(gas_fft)).real)
@@ -163,7 +161,7 @@ def measure_spectra(cfg, nbins, logm_min, logm_max):
     gc.collect()
 
     # --- the self-pair spectra ---------------------------------------------
-    shot = measure_shot_spectra(cfg)
+    shot = measure_shot_spectra(cfg, binning)
 
     # --- halo catalogue and log-spaced mass bins ---------------------------
     print("\nHalo catalogue:")
@@ -188,7 +186,7 @@ def measure_spectra(cfg, nbins, logm_min, logm_max):
         pos_i = np.ascontiguousarray(all_pos[sel], dtype=np.float32)
 
         delta_h = compute_delta_2d(pos_i, cfg.box, cfg.grid, None, nthread=cfg.threads)
-        halo_fft = compute_2d_fft(delta_h, cfg.grid)
+        halo_fft = fft(delta_h)
         del delta_h, pos_i
 
         P_halo_gas[i] = _binned((gas_fft * np.conj(halo_fft)).real)
@@ -286,7 +284,7 @@ def load_or_measure(cfg, nbins, logm_min, logm_max, recompute=False,
                             recompute=recompute_3d)
     d3 = subtract_self_pairs(d3, report=False)
     data = stitch_on_k(data, d3, cfg.k_split)
-    data['nmodes_2d'], data['k_eff_2d'] = bin_mode_stats(
-        compute_k_grid_2d(cfg.grid, cfg.box), k_bins)
+    b2 = make_binning(cfg.grid, cfg.box, k_bins, 2)
+    data['nmodes_2d'], data['k_eff_2d'] = b2['nmodes'], b2['k_eff']
     report_stitch(data)
     return data

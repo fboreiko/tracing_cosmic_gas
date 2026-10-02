@@ -11,9 +11,9 @@
 import argparse
 from dataclasses import dataclass, fields
 import numpy as np
-from utils.power_spectrum_utils import log_k_bin_edges
 from utils.sim_params import get_sim_params
 
+from Pmx_reconstruction.pmxlib.kspace import log_k_bin_edges
 from Pmx_reconstruction.pmxlib.nfw import CONCENTRATION_SOURCES
 
 
@@ -185,14 +185,14 @@ class PmxConfig:
 
     # --- clumping correction --------------------------------------------------
     # The intra-halo clumping correction of pmxlib.clumping, measured by
-    # experiment D: u_m -> u_m [1 + xi(k r200m)].
+    # experiment D: u_m -> u_m [1 + xi(k r200m)]
     clumping: bool = False
     clump_a: float = None          # None -> clumping.CLUMP_A
     clump_alpha: float = None      # None -> clumping.CLUMP_ALPHA
     clump_max: float = None        # None -> clumping.XI_MAX; inf uncaps it
 
     # --- mass range, resolved against a bundle by MassRange.from_config -------
-    # R sums the bins in [M_r, M_max]; U models the mass below M_r.
+    # R sums the bins in [M_r, M_max]; U models the mass below M_r
     logm_r: float = None          # None -> lowest occupied bin
     logm_max_rec: float = 15.0
     validate: bool = False        # experiment A: hide the bins below M_r
@@ -385,7 +385,7 @@ def _add_profile_args(ap):
                         "'measured' reads the stacked profile cached by "
                         "pmxlib.u_bar and ALSO switches the mass weights to "
                         "the assigned mass the profile is normalised to "
-                        "(f_part instead of n_i M_i / rhobar_m), because the "
+                        "(f_in instead of n_i M_i / rhobar_m), because the "
                         "two only mean anything together. Below the measured "
                         "floor the model is kept")
     g.add_argument('--clumping', action='store_true',
@@ -518,20 +518,22 @@ def stem_B(cfg, kind, mr, apertures, weights, err_mode):
             f'{mode_tag}_w{weights}{models_tag(cfg)}')
 
 
-def stem_D(cfg, mr, randomise, aperture):
+def stem_D(cfg, mr, randomise, aperture, seed=None):
     """experiment_D's figure name.
 
     `randomise` is the spherisation mode and `aperture` the membership radius,
     both of which change WHAT was measured rather than how it was modelled, so
     they sit in the stem before the model suffix.
 
-    Like stem_B, the mass range appears only when it is not the default.
+    Like stem_B, the mass range appears only when it is not the default, and
+    the seed only when one was given, so the legacy draw keeps its name.
     """
     ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
+    sd = '' if seed is None else f'_seed{int(seed)}'
     return (f'expD_spherise_gas_{cfg.mass_def}_nb{cfg.nbins}'
             f'_logMmin{cfg.logm_min:.2f}_logMmax{cfg.logm_max:.2f}'
             f'{"" if mr.is_default else mr.tag()}'
-            f'_{randomise}{ap}{models_tag(cfg)}')
+            f'_{randomise}{sd}{ap}{models_tag(cfg)}')
 
 
 def stem_C(cfg, nbins_u, logm_lo, logm_hi, n_show, aperture):

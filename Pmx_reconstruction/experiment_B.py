@@ -89,8 +89,8 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
 
     Measured, from the R*/U* cache at this aperture:
         R_star_i, R_star, U_star        the exact partition of P_matter_gas
-        f_part                          mass fraction inside each bin's spheres
-        f_out = 1 - sum f_part          mass outside every sphere
+        f_in                          mass fraction inside each bin's spheres
+        f_out = 1 - sum f_in          mass outside every sphere
 
     Modelled, from a profile truncated to match the aperture:
         R = sum_i w_i u_m(k|M_i, trunc=x) P_halo_gas(k; M_i)
@@ -103,7 +103,7 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
 
     Growing the aperture has to grow the weight, and `weights` says how:
 
-      'aperture'  (default) w = f_part(x), the mass actually inside the sphere.
+      'aperture'  (default) w = f_in(x), the mass actually inside the sphere.
                   Exact, no double counting, but it is measured, so R is a
                   hybrid: the weight knows about particles and only the profile
                   SHAPE is modelled. This is the clean choice for attributing
@@ -140,10 +140,10 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
     counts = np.asarray(data['counts'], float)
     occ = counts > 0
     resolved = mr.resolved
-    f_part, f_out = tot['f_part'], tot['f_out']
+    f_in, f_out = tot['f_in'], tot['f_out']
 
     # Mean mass inside the aperture per halo of the bin, in Msun/h. Only used
-    # for reporting: the model weight is f_part directly.
+    # for reporting: the model weight is f_in directly.
     M_tot = float(cache['M_tot_particles'])
     unit = cfg.rhobar_m * cfg.box ** 3 / M_tot
     mass_bin = (np.asarray(cache['mass_bin_dm'], float)
@@ -174,7 +174,7 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
     f_u_cat = 1.0 - float(f_cat_all[resolved | mr.above].sum())
 
     if weights == 'aperture':
-        w_model, f_u_model = f_part, f_out
+        w_model, f_u_model = f_in, f_out
     elif weights == 'catalogue':
         if profile.source == 'measured':
             raise SystemExit(
@@ -192,7 +192,7 @@ def measure_aperture(cfg, data, aperture, weights='aperture',
                 R_star_i=tot['R_star_i'], R_star=tot['R_star'],
                 U_star=tot['U_star'], V_star=tot['V_star'], total=tot['total'],
                 resolved=resolved, hidden=mr.hidden, above=mr.above,
-                f_part=f_part, f_out=f_out, f_u_cat=f_u_cat,
+                f_in=f_in, f_out=f_out, f_u_cat=f_u_cat,
                 f_u_model=f_u_model, profile_source=profile.source,
                 M_ap=M_ap, u_i=u_i, conc=conc,
                 f_i=f_i, f_cat=f_cat, w_model=w_model,
@@ -313,14 +313,14 @@ def run_experiment_B(cfg, data, apertures,
 
     # --- the two weights, side by side -----------------------------------------
     print("\n" + "=" * 70)
-    print("WEIGHTS      sum_i f_part (measured)  vs  sum_i f_i m(xc)/m(c) (NFW)")
+    print("WEIGHTS      sum_i f_in (measured)  vs  sum_i f_i m(xc)/m(c) (NFW)")
     print("=" * 70)
     print("     x    measured   NFW extrap   ratio   R(measured)/R(NFW) at k=0.1"
           "   f_u used")
     for x in apertures:
         r = runs[x]
-        sp, sc = float(np.sum(r['f_part'])), float(np.sum(r['f_cat']))
-        R_meas = np.sum(r['f_part'][:, None] * r['u_i'] * P_halo_gas, axis=0)
+        sp, sc = float(np.sum(r['f_in'])), float(np.sum(r['f_cat']))
+        R_meas = np.sum(r['f_in'][:, None] * r['u_i'] * P_halo_gas, axis=0)
         R_nfw = np.sum(r['f_cat'][:, None] * r['u_i'] * P_halo_gas, axis=0)
         with np.errstate(divide='ignore', invalid='ignore'):
             rr = float(np.interp(0.1, k, R_meas / R_nfw))
@@ -337,7 +337,7 @@ def run_experiment_B(cfg, data, apertures,
     print("\n" + "=" * 70)
     print("APERTURE SWEEP")
     print("=" * 70)
-    print("    x    sum f_part   f_out    <M_ap/M200b>   beta_out(low k)   "
+    print("    x    sum f_in   f_out    <M_ap/M200b>   beta_out(low k)   "
           "U*/(R*+U*) at k=1")
     base = runs[1.0]
     for x in apertures:
@@ -347,7 +347,7 @@ def run_experiment_B(cfg, data, apertures,
             frac1 = float(np.interp(1.0, k, r['U_star'] / r['total']))
             m_ratio = np.nanmedian(np.where(occ & (M_i > 0),
                                             r['M_ap'] / M_i, np.nan))
-        print(f"  {x:4.2f}   {np.sum(r['f_part']):9.4f}  {r['f_out']:7.4f}   "
+        print(f"  {x:4.2f}   {np.sum(r['f_in']):9.4f}  {r['f_out']:7.4f}   "
               f"{m_ratio:12.3f}   {beta_out:15.3f}   {frac1:16.3f}")
         r['beta_out_lowk'] = beta_out
 
@@ -472,7 +472,7 @@ def run_experiment_B(cfg, data, apertures,
     for x in apertures:
         r = runs[x]
         key = f'{x:g}'.replace('.', 'p')
-        payload[f'f_part_{key}'] = r['f_part']
+        payload[f'f_in_{key}'] = r['f_in']
         payload[f'f_cat_{key}'] = r['f_cat']
         payload[f'w_model_{key}'] = r['w_model']
         payload[f'f_out_{key}'] = r['f_out']

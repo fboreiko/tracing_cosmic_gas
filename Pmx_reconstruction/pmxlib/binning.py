@@ -29,7 +29,7 @@ def assign_mass_bins(mass, nbins, logm_min, logm_max):
 
     The right edge goes into the last bin (bin_index == nbins -> nbins - 1).
     That rule, and the half-open [logm_min, logm_max) test, are what make bin i
-    in a u_tilde cache the same bin i as in the spectra bundle.
+    in a per-bin cache (rstar_ustar, u_bar) the same bin i as in the spectra bundle.
     """
     logM_edges, _, _ = log_mass_bin_edges(nbins, logm_min, logm_max)
     with np.errstate(divide='ignore', invalid='ignore'):

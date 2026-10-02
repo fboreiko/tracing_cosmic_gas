@@ -12,12 +12,6 @@ P^shot_gg, so the self-pair content of the spectra that have one is
 P_matter_gas : f_g P^shot_gg
 P_gas_gas    :     P^shot_gg
 P_dm_dm      :     P^shot_dd
-
-HOW P^shot IS MEASURED
-Each species is painted at uniformly random 2-D positions with its real
-per-particle masses, and the auto spectrum of the resulting field is taken
-through binned_spectrum(). A random catalogue has no clustering, so in
-expectation that auto spectrum IS the self-pair term of the real field.
 ------------------------------------------------------------------------------
 """
 import gc
@@ -26,11 +20,8 @@ import numpy as np
 
 from utils.catalog_loaders import load_particle_properties
 from utils.pipeline_paths import get_particle_file_path
-from utils.power_spectrum_utils import (compute_2d_fft, compute_3d_fft,
-                                        compute_k_grid_2d)
-
-from Pmx_reconstruction.pmxlib.painting import (binned_spectrum,
-                                                binned_spectrum_3d, mass_moments,
+from Pmx_reconstruction.pmxlib.kspace import bin_spectrum, fft
+from Pmx_reconstruction.pmxlib.painting import (mass_moments,
                                                 paint_uniform_random_2d,
                                                 paint_uniform_random_3d)
 
@@ -39,51 +30,18 @@ SHOT_SPECIES = ('dm', 'gas')
 SHOT_SEED = 12345
 SHOT_CHUNK = 5e7
 
-def measure_shot_spectra(cfg):
-    """P^shot_dd and P^shot_gg, in this pipeline's own k-binning convention."""
-    print("\nSelf-pair (shot-noise) spectra, from uniformly random catalogues:")
-    k_grid = compute_k_grid_2d(cfg.grid, cfg.box)
-    particles_file = get_particle_file_path(cfg.feedback, sim_name=cfg.sim_name)
-    rng = np.random.default_rng(SHOT_SEED)
+def measure_shot_spectra(cfg, binning):
+    """P^shot_dd and P^shot_gg on the grid `binning` was built for.
 
-    out = {}
-    for species in SHOT_SPECIES:
-        part = load_particle_properties(particles_file, species,
-                                        requested=('mass',),
-                                        sim_name=cfg.sim_name, Lbox=cfg.box)
-        mass = np.asarray(part['mass'])
-        del part
-        gc.collect()
-
-        M_tot, M2 = mass_moments(mass, chunk=SHOT_CHUNK)
-        print(f"  [{species}] {mass.size:.4e} particles, "
-              f"sum m^2 / (sum m)^2 = {M2 / M_tot ** 2:.6e}")
-
-        dens = paint_uniform_random_2d(mass, cfg.box, cfg.grid, cfg.threads,
-                                       rng, chunk=SHOT_CHUNK)
-        delta = dens / (M_tot / cfg.grid ** 2) - 1.0
-        del dens, mass
-        gc.collect()
-        fft_r = compute_2d_fft(delta, cfg.grid)
-        del delta
-        P_shot = binned_spectrum(cfg, np.abs(fft_r) ** 2, k_grid)
-        del fft_r
-        gc.collect()
-
-        out[f'P_shot_{species}'] = P_shot
-        print(f"  [{species}] P^shot = {np.nanmedian(P_shot):.4e} (median over k)")
-
-    return out
-
-
-def measure_shot_spectra_3d(cfg, ngrid3, binner):
-    """measure_shot_spectra's 3-D twin, in the projected convention.
-
-    L^2 sum m^2 / (sum m)^2 is the exact expectation, so the ratio printed
-    here tests the painting normalisation and the window deconvolution at
-    once, with no clustering in the way.
+    Same code on the 2-D and 3-D grids. L^2 sum m^2 / (sum m)^2 is the exact
+    expectation in the projected convention. The 3-D grid is deconvolved, so
+    there the printed ratio tests the painting normalisation and the window
+    at once; the 2-D one is not, so there it is ~1 only where W ~ 1.
     """
-    print("\nSelf-pair (shot-noise) spectra on the 3-D grid:")
+    dim, ngrid = binning['dim'], binning['ngrid']
+    paint = paint_uniform_random_2d if dim == 2 else paint_uniform_random_3d
+    print(f"\nSelf-pair (shot-noise) spectra on the {ngrid}^{dim} grid, from "
+          f"uniformly random catalogues:")
     particles_file = get_particle_file_path(cfg.feedback, sim_name=cfg.sim_name)
     rng = np.random.default_rng(SHOT_SEED)
 
@@ -99,21 +57,20 @@ def measure_shot_spectra_3d(cfg, ngrid3, binner):
         M_tot, M2 = mass_moments(mass, chunk=SHOT_CHUNK)
         expected = cfg.box ** 2 * M2 / M_tot ** 2
 
-        dens = paint_uniform_random_3d(mass, cfg.box, ngrid3, cfg.threads,
-                                       rng, chunk=SHOT_CHUNK)
-        delta = dens / (M_tot / ngrid3 ** 3) - 1.0
+        dens = paint(mass, cfg.box, ngrid, cfg.threads, rng, chunk=SHOT_CHUNK)
+        delta = dens / (M_tot / ngrid ** dim) - 1.0
         del dens, mass
         gc.collect()
-        fft_r = compute_3d_fft(delta, ngrid3)
+        fft_r = fft(delta)
         del delta
-        P_shot = binned_spectrum_3d(cfg, np.abs(fft_r) ** 2, binner)
+        P_shot = bin_spectrum(np.abs(fft_r) ** 2, binning)
         del fft_r
         gc.collect()
 
         out[f'P_shot_{species}'] = P_shot
         med = float(np.nanmedian(P_shot))
         print(f"  [{species}] P^shot = {med:.4e}, analytic {expected:.4e}, "
-              f"ratio {med / expected:.4f} (1 = painting and window ok)")
+              f"ratio {med / expected:.4f} (~1 where the window is ~1 or divided out)")
 
     return out
 
@@ -132,21 +89,7 @@ def self_pair_terms(data):
 
 def smeared_share(cache):
     """sum_{q in i} m_q^2 j0(k r_q)^2 / sum_gas m_q^2, shape (nbins, nk).
-
-    The self-pair share of bin i AFTER its members have been randomised. A
-    member gas particle still sits in the gas field at its true position while
-    its copy in delta_m^(i) has been moved to a random direction at the same
-    radius, so the pair survives at a separation of order r rather than
-    vanishing: averaging over the new direction and over the k shell turns the
-    coincident pair's 1 into j0(k r)^2.
-
-    Built from the radial histogram of m^2 that spherise.selfpair_shells
-    accumulates, each shell transformed at its own mass-weighted mean radius,
-    which is what makes the shell width a second-order error rather than a
-    first-order one -- the same construction u_bar uses for the profile.
-
-    j0(k r)^2 -> 1 as k -> 0, so this reduces to the ordinary share on large
-    scales: the randomisation cannot hide a self-pair, only move it.
+    The self-pair share of bin i AFTER its members have been randomised.
     """
     W = np.asarray(cache['m2_shell_gas'], dtype=float)
     S = np.asarray(cache['m2r_shell_gas'], dtype=float)
@@ -165,24 +108,6 @@ def smeared_share(cache):
 
 
 def rstar_self_pair_terms(cache, randomised=False):
-    """The same, for the R*/U* cache's spectra. Its ingredients, its keys.
-
-    `randomised` is for the experiment D caches (see rstar_ustar), and it does
-    NOT switch the correction off -- it changes its shape, differently for the
-    two spectra:
-
-      R*_i  a member gas particle has been moved away from its own copy in the
-            gas field, but only to the far side of its own orbit, so the pair
-            is smeared rather than removed and what comes off is
-            m^2 j0(k r)^2 instead of m^2. See smeared_share.
-      U*    an unassigned gas particle has not moved at all, so this keeps
-            exactly the term it always had, built from the UNsmeared shares.
-
-    Getting either one wrong is quiet rather than loud. Leaving R*_i
-    uncorrected pushes R*(randomised) up by nearly the full self-pair at low
-    k, which subtracts straight out of the intra-halo term experiment D
-    measures and can turn it negative where the spectrum is shot-dominated.
-    """
     f_g = float(cache['f_g'])
     P_gg = np.asarray(cache['P_shot_gg'], dtype=float)
     share = (np.asarray(cache['m2_bin_gas'], dtype=float)

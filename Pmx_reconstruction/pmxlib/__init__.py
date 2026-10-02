@@ -16,10 +16,10 @@ one piece never drags CAMB or colossus in by side effect.
 # The mass fractions definitions:
 #
 #   f_i          per-bin catalogue mass fraction, n_i M_i / rhobar_m
-#   f_part       per-bin mass actually inside the membership spheres
-#                (\tilde f_i in the notes)
+#   f_in         per-bin mass actually inside the membership spheres
+#                (f_{in,i} in the notes)
 #   f_u          the catalogue deficit, 1 - sum_i f_i
-#   f_out        the measured deficit, 1 - sum_i f_part  (\tilde f_u)
+#   f_out        the measured deficit, 1 - sum_i f_in  (f_out in the notes)
 #   f_smallhalo  component (i): the integral of M n(M) below M_r, written f_(i)
 #                in the notes. NOT called f_i in code, because that name is
 #                taken by the per-bin fraction above.

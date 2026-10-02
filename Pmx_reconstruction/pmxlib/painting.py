@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""2-D and 3-D TSC painting, the assignment window, and azimuthal averaging."""
+"""2-D and 3-D TSC painting. The transforms and k binning live in kspace."""
 import numpy as np
 from abacusnbody.analysis.tsc import tsc_parallel
-
-from utils.power_spectrum_utils import bin_power_spectrum_2d
 
 _NZ_PAINT = 3
 
@@ -56,61 +54,8 @@ def mass_moments(mass, chunk=None):
         s2 += float(np.dot(m, m))
     return s1, s2
 
-# tsc_window_2d and azimuthal_mean are used for measuring u tilde directly from the 2-D projected fields
 
-
-def tsc_window_2d(box, ngrid):
-    """W(k) = prod_i sinc^3(k_i Delta/2) on the fft2 layout, Delta = L/ngrid.
-    One factor of the TSC assignment window."""
-    kf = 2.0 * np.pi * np.fft.fftfreq(ngrid, d=box / ngrid)
-    arg = 0.5 * kf * (box / ngrid)
-    s = np.ones_like(arg)
-    nz = arg != 0
-    s[nz] = np.sin(arg[nz]) / arg[nz]
-    return (s[:, None] * s[None, :]) ** 3
-
-
-def azimuthal_mean(field, box, ngrid, k_bins, deconvolve_tsc=False):
-    """Azimuthal average of a full fft2 layout field over the bundle's k bins."""
-    if deconvolve_tsc:
-        field = field / tsc_window_2d(box, ngrid)
-    kf = 2.0 * np.pi * np.fft.fftfreq(ngrid, d=box / ngrid)
-    kk = np.sqrt(kf[:, None] ** 2 + kf[None, :] ** 2)
-    ib = np.digitize(kk.ravel(), k_bins) - 1
-    ok = (ib >= 0) & (ib < k_bins.size - 1)
-    num = np.bincount(ib[ok], weights=field.ravel()[ok], minlength=k_bins.size - 1)
-    den = np.bincount(ib[ok], minlength=k_bins.size - 1).astype(float)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        return np.where(den > 0, num / den, np.nan)
-
-
-def binned_spectrum(cfg, prod, k_grid):
-    """The one and only k-binning convention in this pipeline.
-
-    Takes the real part of a product of two transforms (or |transform|^2),
-    azimuthally averages it over cfg.k_bins and applies the L_box^2 factor that
-    every spectrum in this repo carries.
-
-    It is not a wrapper around bin_power_spectrum_2d for its own sake. That
-    function is shared with HATF, which does NOT use the L_box^2 convention and
-    does not use this pipeline's log-spaced k grid, so neither can live down
-    there. Everything that ends up in a bundle, in the R*/U* cache or in a
-    self-pair subtraction has to carry both and be binned identically, and
-    those three are measured in separate passes -- possibly years apart in
-    wall-clock time. This is the one place that decides, so they agree by
-    construction rather than by three copies happening to match.
-
-    The edges come from cfg rather than being rebuilt here, so a bundle cannot
-    end up on a different grid from the R*/U* cache it is differenced against.
-    """
-    _, _, P = bin_power_spectrum_2d(prod, k_grid, cfg.grid, cfg.box,
-                                    k_bins=cfg.k_bins)
-    return np.asarray(P) * cfg.box ** 2
-
-
-# ------------------------------------------------------------------------------
 # 3-D painting, for the large-scale half of a stitched measurement
-# ------------------------------------------------------------------------------
 def _scaled_weights(weights):
     """(weights / mean, mean), so tsc accumulates in float32 around unity."""
     if weights is None:
@@ -167,28 +112,3 @@ def overdensity_3d(dens, ngrid):
     dens /= (dens.sum(dtype=np.float64) / ngrid ** 3)
     dens -= 1.0
     return dens
-
-
-def as_projected(P3, box):
-    """A 3-D spectrum in this pipeline's projected convention.
-
-    delta_2d is the column MEAN of delta_3d, so its discrete transform is
-    delta_3d(k_perp, k_z = 0) exactly, and
-
-        P_2d(k) = L^2 |delta_2d|^2 = P_3d(k_perp, k_z = 0) / L_box.
-
-    Under statistical isotropy the k_z = 0 plane and the full shell have the
-    same expectation, so dividing a spherically averaged P_3d by L_box gives
-    the quantity the 2-D run measures -- with many more modes behind it. The
-    step that stops being true in redshift space is that last one.
-    """
-    return np.asarray(P3, dtype=float) / float(box)
-
-
-def binned_spectrum_3d(cfg, prod, binner):
-    """binned_spectrum's 3-D twin, returned in the projected convention.
-
-    The TSC window IS deconvolved here and is not in the 2-D path: it is
-    3e-5 at k = 0.1 on the 2048^2 grid and 1.8% on a 256^3 one.
-    """
-    return as_projected(binner(prod) * cfg.box ** 3, cfg.box)

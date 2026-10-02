@@ -110,7 +110,7 @@ def labels() -> dict:
         'profile':   rf'$(R - R_\star)\,/\,{P}$',
         'template':  rf'$(U - U_\star)\,/\,{P}$',
         'above':     rf'$-V_\star\,/\,{P}$ (above $M_{{\max}}$, unmodelled)',
-        'seff':      rf'$S_{{\rm eff}}=U_\star/(\tilde f_u \, P^{{\,h_r{TRACER_SYM}}})$',
+        'seff':      rf'$S_{{\rm eff}}=U_\star/(f_{{\rm out}} \, P^{{\,h_r{TRACER_SYM}}})$',
         'shell':     rf'$(R_{{\star i}}(x)-R_{{\star i}}(1))\,/\,{P}$',
     }
 
@@ -868,9 +868,7 @@ class SpheriseData:
     with the same weights, so the three differ only in what they say about the
     inside of a halo:
 
-        R_meas      f_part * u_bar * P_halo_gas, the measured radial profile
-        R_nfw       the same with u_m from NFW + c(M,z), for context: it is
-                    what the production reconstruction actually uses
+        R_meas      f_in * u_bar * P_halo_gas, the measured radial profile
         R_star      the exact contribution of those particles
         R_star_rand the same after the halo interiors are randomised
 
@@ -889,8 +887,6 @@ class SpheriseData:
     R_star_i: np.ndarray                      # (nbins, nk) production
     mode: str = 'shuffle'
     aperture: float = 1.0
-    R_nfw: Optional[np.ndarray] = None
-    sigma: Optional[np.ndarray] = None        # randomisation noise on R*_rand
     k_split: Optional[float] = None
 
 
@@ -901,7 +897,6 @@ SPHERISE_STYLE = {
     'star':  dict(color='k', ls='-', lw=2.6),
     'rand':  dict(color='C1', ls='-', lw=2.0),
     'meas':  dict(color='C0', ls='--', lw=2.0),
-    'nfw':   dict(color='C2', ls=':', lw=1.8),
     'intra': dict(color='C3', ls='-', lw=2.2),
     'halo':  dict(color='C0', ls='--', lw=2.0),
     'total': dict(color='k', ls='-', lw=2.4, alpha=0.6),
@@ -914,8 +909,7 @@ def _spherise_labels(mode):
     return {
         'star': rf'${r}$ (measured)',
         'rand': rf'${r}$, {mode}d halos',
-        'meas': r'$R = \sum_i \tilde f_i \bar u_m P^{\,h e}$',
-        'nfw':  r'$R$ with $u_m^{\rm NFW}$',
+        'meas': r'$R = \sum_i f_{{\rm in},i} \bar u_m P^{\,h e}$',
         'total': rf'$(R - {r})/P^{{\,me}}$  total',
         'halo': rf'$(R - {r}^{{\rm\,rand}})/P^{{\,me}}$  halo-to-halo',
         'intra': rf'$({r} - {r}^{{\rm\,rand}})/P^{{\,me}}$  intra-halo',
@@ -929,22 +923,16 @@ def panel_spherise(ax, d: SpheriseData, legend=True):
     The four bin sums lie on top of one another on a log axis -- the whole
     effect is a few per cent -- so the panel would be empty of information
     without C(k) itself on it. C is what the model is missing, in the units it
-    would have to be added in, and sigma underneath it says where it stops
-    being measurable.
+    would have to be added in.
     """
     L = _spherise_labels(d.mode)
     ax.loglog(d.k, np.abs(d.R_star), label=L['star'], **SPHERISE_STYLE['star'])
     ax.loglog(d.k, np.abs(d.R_star_rand), label=L['rand'],
               **SPHERISE_STYLE['rand'])
     ax.loglog(d.k, np.abs(d.R_meas), label=L['meas'], **SPHERISE_STYLE['meas'])
-    if d.R_nfw is not None:
-        ax.loglog(d.k, np.abs(d.R_nfw), label=L['nfw'], **SPHERISE_STYLE['nfw'])
     intra = d.R_star - d.R_star_rand
     ax.loglog(d.k, np.abs(intra), label=L['intra_abs'],
               **SPHERISE_STYLE['intra'])
-    if d.sigma is not None:
-        ax.loglog(d.k, np.abs(d.sigma), color='0.6', ls=':', lw=1.4,
-                  label=r'randomisation noise $\sigma$')
     # Keep the axis on the part of the range the curves occupy: C is small but
     # it is the point, so the floor is set by it rather than by R*.
     finite = np.isfinite(intra) & (np.abs(intra) > 0)
@@ -965,9 +953,6 @@ def panel_spherise_ratio(ax, d: SpheriseData):
                     **SPHERISE_STYLE['rand'])
         ax.semilogx(d.k, d.R_meas / d.R_star - 1.0, label=L['meas'],
                     **SPHERISE_STYLE['meas'])
-        if d.R_nfw is not None:
-            ax.semilogx(d.k, d.R_nfw / d.R_star - 1.0, label=L['nfw'],
-                        **SPHERISE_STYLE['nfw'])
     _guides(ax, d, level=0.0, band=TOTAL_ERR_BAND, ylim=(-0.30, 0.15),
             ylabel=r'curve $/\,R_\star - 1$', xlabel=LABEL_K)
 
@@ -988,10 +973,6 @@ def panel_spherise_split(ax, d: SpheriseData, legend=True):
         ax.semilogx(d.k, halo, label=L['halo'], **SPHERISE_STYLE['halo'])
         ax.semilogx(d.k, -intra, label=rf'$-${L["intra"]}',
                     **SPHERISE_STYLE['intra'])
-        if d.sigma is not None:
-            ax.fill_between(d.k, -np.abs(d.sigma / d.P_true),
-                            np.abs(d.sigma / d.P_true), color='0.85',
-                            zorder=0, label=r'$\pm\sigma$')
     _guides(ax, d, level=0.0, ylim=(-0.18, 0.08),
             ylabel=r'fraction of $P^{\,me}$',
             legend=dict(loc='lower left', fontsize=SMALL_LEGEND) if legend

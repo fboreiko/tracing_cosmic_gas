@@ -4,8 +4,9 @@
 
 Projecting to k_z = 0 costs a factor 2k/k_f in modes -- 4.7x in sigma at
 k = 0.1 and 10x at k = 0.5 -- and buys nothing below the projection scale. So
-the same spectra are re-measured on a small cubic grid, converted to the 2-D
-convention by painting.as_projected, and spliced in below --k-split.
+the same spectra are re-measured on a small cubic grid, through the same
+kspace functions as the 2-D ones (which return both in the projected
+convention), and spliced in below --k-split.
 
 Everything here carries the SAME KEY NAMES as the 2-D bundle, on the same k
 bin edges, so the splice in bundle.stitch is a straight assignment and
@@ -21,12 +22,11 @@ import numpy as np
 from utils.catalog_loaders import load_particle_properties
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path)
-from utils.power_spectrum_utils import Binner3D, compute_3d_fft
 
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos, log_mass_bin_edges
-from Pmx_reconstruction.pmxlib.painting import (binned_spectrum_3d, overdensity_3d,
-                                                paint_3d)
-from Pmx_reconstruction.pmxlib.self_pairs import measure_shot_spectra_3d
+from Pmx_reconstruction.pmxlib.kspace import bin_spectrum, fft, make_binning
+from Pmx_reconstruction.pmxlib.painting import overdensity_3d, paint_3d
+from Pmx_reconstruction.pmxlib.self_pairs import measure_shot_spectra
 
 BUNDLE3D_VERSION = 'v1'
 
@@ -73,17 +73,17 @@ def measure_spectra_3d(cfg, nbins, logm_min, logm_max, k_bins,
     print(f"Measuring the large scales on a {ngrid3}^3 grid")
     print("=" * 70)
 
-    binner = Binner3D(ngrid3, cfg.box, k_bins)
-    k_center = binner.k_center
-    print(f"  k_Nyquist = {binner.k_Nyquist:.3f} h/cMpc, cell = "
+    binning = make_binning(ngrid3, cfg.box, k_bins, 3)
+    k_center = binning['k_mid']
+    print(f"  k_Nyquist = {binning['k_Nyquist']:.3f} h/cMpc, cell = "
           f"{cfg.box / ngrid3:.3f} cMpc/h, TSC window deconvolved")
 
     def _binned(prod):
-        return binned_spectrum_3d(cfg, prod, binner)
+        return bin_spectrum(prod, binning)
 
     print("\n3-D fields:")
-    gas_fft = compute_3d_fft(species_delta_3d(cfg, 'gas', ngrid3), ngrid3)
-    dm_fft = compute_3d_fft(species_delta_3d(cfg, 'dm', ngrid3), ngrid3)
+    gas_fft = fft(species_delta_3d(cfg, 'gas', ngrid3))
+    dm_fft = fft(species_delta_3d(cfg, 'dm', ngrid3))
     gc.collect()
 
     print(f"\n  matter field from the bundle's fractions: "
@@ -97,7 +97,7 @@ def measure_spectra_3d(cfg, nbins, logm_min, logm_max, k_bins,
     del m_fft
     gc.collect()
 
-    shot = measure_shot_spectra_3d(cfg, ngrid3, binner)
+    shot = measure_shot_spectra(cfg, binning)
 
     print("\nHalo catalogue:")
     all_pos, all_mass, bin_index, logM_edges, _ = load_binned_halos(cfg)
@@ -119,7 +119,7 @@ def measure_spectra_3d(cfg, nbins, logm_min, logm_max, k_bins,
 
         M_mean[i] = float(np.mean(all_mass[sel]))
         dens_h = paint_3d(all_pos[sel], None, cfg.box, ngrid3, cfg.threads)
-        halo_fft = compute_3d_fft(overdensity_3d(dens_h, ngrid3), ngrid3)
+        halo_fft = fft(overdensity_3d(dens_h, ngrid3))
         del dens_h
 
         P_halo_gas[i] = _binned((gas_fft * np.conj(halo_fft)).real)
@@ -138,11 +138,11 @@ def measure_spectra_3d(cfg, nbins, logm_min, logm_max, k_bins,
     return dict(
         k_bins=np.asarray(k_bins),
         k_center=k_center,
-        k_Nyquist=binner.k_Nyquist,
-        k_Nyquist_3d=binner.k_Nyquist,
-        k_eff=binner.k_eff,
-        nmodes=binner.nmodes,
-        nmodes_eff=binner.nmodes_eff,
+        k_Nyquist=binning['k_Nyquist'],
+        k_Nyquist_3d=binning['k_Nyquist'],
+        k_eff=binning['k_eff'],
+        nmodes=binning['nmodes'],
+        nmodes_eff=binning['nmodes_eff'],
         logM_edges=logM_edges,
         logM_cen=logM_cen,
         M_mean=M_mean,
@@ -263,8 +263,9 @@ def report_stitch(data, ks=(0.03, 0.05, 0.1, 0.2, 0.3, 0.5)):
 
     k_eff_3d against k_eff_2d is the cheap check that the two halves weight
     the inside of a bin the same way; the ratio is the check that they measure
-    the same thing. A flat offset near 0.98 is an undeconvolved window, one
-    near L_box is the projection factor, and scatter at the level of sigma_2d
+    the same thing. The 3-D grid is window-deconvolved and the 2-D one is not,
+    so a small flat offset of about <W^2>_2d (0.993 at k = 0.5) is expected;
+    one near L_box is the projection factor, and scatter at the level of sigma_2d
     with no offset is what a correct splice looks like.
     """
     k = np.asarray(data['k_center'], dtype=float)

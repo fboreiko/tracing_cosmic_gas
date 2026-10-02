@@ -26,7 +26,7 @@ USAGE
     from Pmx_reconstruction.pmxlib import u_bar as ub
     cache = ub.load_or_measure_u_bar(cfg)          # measures if absent
     u = ub.u_bar_of_k(cache, k)                    # (nbins, nk), -> 1 at k -> 0
-    fu = ub.f_tilde(cache)[:, None] * u            # what enters R
+    fu = ub.f_in(cache)[:, None] * u            # what enters R
 
     python -m Pmx_reconstruction.pmxlib.u_bar --aperture 1
 """
@@ -45,7 +45,7 @@ from Pmx_reconstruction.pmxlib.rstar_ustar import (SPECIES, assign_particles,
                                                    load_binned_centrals)
 
 __all__ = ['CACHE_VERSION', 'NX_SHELLS', 'mass_grid', 'cache_path',
-           'compute_u_bar', 'load_or_measure_u_bar', 'u_bar_of_k', 'f_tilde',
+           'compute_u_bar', 'load_or_measure_u_bar', 'u_bar_of_k', 'f_in',
            'resolved_bins', 'measured_range', 'u_bar_interp',
            'check_against_rstar']
 
@@ -242,7 +242,7 @@ def compute_u_bar(cfg, aperture=1.0, chunk_particles=5e7):
     mass_bin = {s: W_r[s].sum(axis=1) for s in SPECIES}
     npart_bin = N_p['dm'] + N_p['gas']
     npart_mean = np.where(counts > 0, npart_bin / np.maximum(counts, 1.0), 0.0)
-    f_part = (mass_bin['dm'] + mass_bin['gas']) / M_tot
+    f_in = (mass_bin['dm'] + mass_bin['gas']) / M_tot
 
     unit_total = cfg.rhobar_m * cfg.box ** 3 / M_tot
     with np.errstate(divide='ignore', invalid='ignore'):
@@ -259,14 +259,14 @@ def compute_u_bar(cfg, aperture=1.0, chunk_particles=5e7):
                                         logM_edges=logM_edges))
 
     print("\n  bin  logM_cen   n_halo    <n_part>   stack N   sigma(u)   "
-          "f_part    <M_assigned/M200b>")
+          "f_in    <M_assigned/M200b>")
     for i in np.flatnonzero(counts > 0):
         flag = '' if ok[i] else '   <- below the floor'
         sig = 1.0 / np.sqrt(npart_bin[i]) if npart_bin[i] > 0 else np.inf
         print(f"  {i:3d}   {logM_cen[i]:6.2f}  {int(counts[i]):9d}  "
               f"{npart_mean[i]:9.1f}  {npart_bin[i]:8.2e}  {sig:8.1e}  "
-              f"{f_part[i]:.6f}   {q_med[i]:8.4f}{flag}")
-    print(f"  sum f_part = {f_part.sum():.4f} over the whole grid")
+              f"{f_in[i]:.6f}   {q_med[i]:8.4f}{flag}")
+    print(f"  sum f_in = {f_in.sum():.4f} over the whole grid")
     if ok.any():
         print(f"  measured floor: logM = {logm_floor:.2f} "
               f"(>= {N_HALO_MIN} halos and >= {N_STACK_MIN:g} particles in "
@@ -284,7 +284,7 @@ def compute_u_bar(cfg, aperture=1.0, chunk_particles=5e7):
         counts=counts, M_mean=M_mean,
         npart_dm=N_p['dm'], npart_gas=N_p['gas'], npart_mean=npart_mean,
         mass_bin_dm=mass_bin['dm'], mass_bin_gas=mass_bin['gas'],
-        M_tot_particles=M_tot, f_part=f_part,
+        M_tot_particles=M_tot, f_in=f_in,
         assigned_over_m200b_median=q_med,
         m_p_dm=m_p_species['dm'], m_p_gas=m_p_species['gas'],
         logm_floor=logm_floor, bin_ok=ok,
@@ -343,7 +343,7 @@ def u_bar_of_k(cache, k, species=None):
     Each shell is transformed at its own MASS-WEIGHTED mean radius, which is
     what makes the shell width a second-order error rather than a first-order
     one. u_bar(0) = 1 identically, by construction and not by convention --
-    that is the sharpest check against u_tilde, which does not.
+    that is the sharpest check against R*_i / (f_in,i P^he), which does not.
     """
     W, S = _shells(cache, species)
     k = np.atleast_1d(np.asarray(k, dtype=float))
@@ -358,11 +358,11 @@ def u_bar_of_k(cache, k, species=None):
     return out
 
 
-def f_tilde(cache, species=None):
-    """Mass fraction inside the membership spheres, per bin (f_tilde_i).
+def f_in(cache, species=None):
+    """Mass fraction inside the membership spheres, per bin (f_in,i).
 
     The weight that PAIRS with u_bar: both are normalised to the mass actually
-    assigned inside the aperture, so f_tilde * u_bar is the measured form of
+    assigned inside the aperture, so f_in * u_bar is the measured form of
     the unnormalised f_i u_m that enters R. Pairing u_bar with n_i M_i /
     rhobar_m instead mixes two different masses and gives a wrong answer that
     looks entirely plausible.
@@ -437,7 +437,7 @@ def u_bar_interp(cache, k, M, species=None):
 
 
 def check_against_rstar(cfg, cache, aperture=1.0):
-    """Cross-check f_tilde over the bundle's range against the R*/U* cache.
+    """Cross-check f_in over the bundle's range against the R*/U* cache.
 
     Both passes sort the catalogue by descending mass and assign first-wins, so
     lowering the floor only adds halos BELOW the bundle's range and cannot take
@@ -467,9 +467,10 @@ def check_against_rstar(cfg, cache, aperture=1.0):
         return None
 
     with np.load(path, allow_pickle=False) as f:
-        there = float(np.asarray(f['f_part'], float).sum())
-    here = float(f_tilde(cache)[int(np.flatnonzero(hit)[0]):].sum())
-    print(f"  [check] sum f_part above logM {cfg.logm_min:g}: "
+        key = 'f_in' if 'f_in' in f.files else 'f_part'   # pre-rename caches
+        there = float(np.asarray(f[key], float).sum())
+    here = float(f_in(cache)[int(np.flatnonzero(hit)[0]):].sum())
+    print(f"  [check] sum f_in above logM {cfg.logm_min:g}: "
           f"u_bar {here:.12f} vs R*/U* {there:.12f}, "
           f"difference {here - there:+.3e}")
     if not np.isclose(here, there, rtol=1e-10, atol=0.0):
@@ -506,11 +507,6 @@ def main():
     for i in np.flatnonzero(counts > 0):
         row = "  ".join(f"{v:12.5f}" for v in u[i])
         print(f"  {i:3d}   {cache['logM_cen'][i]:6.2f}   {row}")
-    # u_bar(0) = 1 identically, so at the box fundamental the only departure is
-    # the leading 1 - u ~ k^2 <r^2> / 6, which is ~5e-6 even for the largest
-    # halo in the box. u_tilde does NOT pass this: its k -> 0 limit carries
-    # Cov(M, b) within the bin. This line is the cheapest way to tell the two
-    # apart, so it is worth reading every run.
     dev = float(np.nanmax(np.abs(u[:, 0] - 1.0)))
     print(f"\n  max |u_bar(k_f) - 1| = {dev:.2e} over the occupied bins "
           f"(k_f = {k_f:.5f} h/cMpc); expected ~k^2<r^2>/6, below 1e-4. "

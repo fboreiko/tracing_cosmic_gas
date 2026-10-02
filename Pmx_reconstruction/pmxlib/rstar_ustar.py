@@ -36,48 +36,31 @@ RANDOMISED VARIANTS  (--randomise, experiment D)
     and R*(true) - R*(randomised) is the intra-halo matter-gas correlation
     that no radial profile can carry. See pmxlib.spherise for the algebra.
 
-    Three things follow, and all three are load-bearing:
+    Some things to follow:
 
       - Unlabelled particles do not move, so delta_m^out and therefore U* are
-        identical to the production run at the same aperture. U* is still
-        MEASURED here rather than copied, by painting the unassigned particles
-        directly; agreeing with the production cache is then a check on the
-        membership rather than an assumption about it.
-      - Labels do not change, so f_i, f_part, M_mean, counts and the mass
-        moments are bit-identical to the production cache. Anything else is a
-        bug, not a result.
-      - The self-pair correction changes shape but does NOT go away, and this
-        is the easiest thing here to get wrong. A member gas particle is still
-        in the gas field at its true position while its copy in delta_m^(i)
-        has moved to a random direction at the same radius, so the pair is
-        smeared to a separation of order r rather than removed, and what comes
-        off R*_i is m^2 j0(k r)^2 instead of m^2. An UNASSIGNED gas particle
-        never moved, so U* keeps exactly the term it always had. Both live in
-        self_pairs.rstar_self_pair_terms, which the loader calls with the
-        cache's own `randomise` key, so a randomised cache and a production
-        one stay differenceable -- the entire point of deciding it in one
-        place. Leaving R*_i uncorrected biases R*(randomised) HIGH by nearly
-        the full self-pair at low k, which subtracts straight out of the
-        intra-halo term and can turn it negative wherever the spectrum is
-        shot-dominated.
-
-    U* being untouched also means the reconstruction's U side is unaffected,
-    which is why experiment D compares R against R* and not (R + U) against
-    the full spectrum.
+        identical to the production run at the same aperture. 
+      - The self-pair correction changes shape but does NOT go away. A member 
+        gas particle is still in the gas field at its true position while its 
+        copy in delta_m^(i) has moved to a random direction at the same radius, 
+        so the pair is smeared to a separation of order r rather than removed, 
+        and what comes off R*_i is m^2 j0(k r)^2 instead of m^2. An UNASSIGNED 
+        gas particle never moved, so U* keeps exactly the term it always had. 
+        Both live in self_pairs.rstar_self_pair_terms, which the loader calls 
+        with the cache's own `randomise` key, so a randomised cache and a 
+        production one stay differenceable -- the entire point of deciding it 
+        in one place.
 
 WHAT IS IN THE CACHE
     Raw:        R_star_gas (nbins, nk), U_star_gas (nk,)
     Shot:       P_shot_gg (copied from the bundle), m2_bin_gas, m2_tot_gas --
                 the ingredients only; the terms are derived on load and
                 handed to the shared subtract_self_pairs.
-    Moments:    m2_bin_mat, m2_tot_mat -- the same second moments over dm AND
-                gas. Nothing in the self-pair path wants them; they set the
-                noise a randomised run adds, and experiment_D reports it.
     Smearing:   m2_shell_gas, m2r_shell_gas (nbins, selfpair_nx) -- the member
                 gas m^2 against radius, RANDOMISED CACHES ONLY. This is what
                 turns the coincident self-pair into m^2 j0(k r)^2 on the way
                 out; without it R*_i comes off disk uncorrected.
-    Binning:    k_center, k_bins, counts, f_i, f_part, M_mean, logM_cen,
+    Binning:    k_center, k_bins, counts, f_i, f_in, M_mean, logM_cen,
                 logM_edges
     Provenance: box, ngrid, kbins_per_decade, nbins, logm_min, logm_max, redshift,
                 feedback, mass_def, centrals_only, aperture, randomise,
@@ -113,17 +96,13 @@ from scipy.spatial import cKDTree
 from utils.catalog_loaders import load_particle_properties
 from utils.pipeline_paths import (DATA_ROOT, ensure_parents,
                                   get_particle_file_path)
-from utils.power_spectrum_utils import (Binner3D, bin_mode_stats,
-                                        compute_2d_fft, compute_3d_fft,
-                                        compute_k_grid_2d)
 
 from Pmx_reconstruction.pmxlib.binning import load_binned_halos
 from Pmx_reconstruction.pmxlib.bundle import _load_or_compute_delta
 from Pmx_reconstruction.pmxlib.bundle3d import stitch_on_k
+from Pmx_reconstruction.pmxlib.kspace import bin_spectrum, fft, make_binning
 from Pmx_reconstruction.pmxlib.nfw import r200m_of_M
-from Pmx_reconstruction.pmxlib.painting import (binned_spectrum,
-                                                binned_spectrum_3d, paint_2d,
-                                                paint_3d)
+from Pmx_reconstruction.pmxlib.painting import paint_2d, paint_3d
 from Pmx_reconstruction.pmxlib.self_pairs import (rstar_self_pair_terms,
                                                   subtract_self_pairs)
 from Pmx_reconstruction.pmxlib import spherise
@@ -137,15 +116,11 @@ CACHE_VERSION = 'v1'
 
 SPECIES = ('dm', 'gas')
 
-# Raw particles per chunk when painting the unassigned ones. Its own constant
-# rather than --chunk-particles, which counts EXPECTED MEMBERS and is sized for
-# query_ball_point's list-of-lists; here the transient is a straight
-# (chunk, 3) float32 copy, 240 MB at this value.
 PAINT_CHUNK = 20_000_000
 
 
 # Path
-def cache_path(cfg, aperture=1.0, ngrid3=None, randomise=None):
+def cache_path(cfg, aperture=1.0, ngrid3=None, randomise=None, seed=None):
     """Companion to bundle_path: same binning knobs in the stem.
 
     `aperture` is the membership radius in units of r200m (see
@@ -157,13 +132,16 @@ def cache_path(cfg, aperture=1.0, ngrid3=None, randomise=None):
     valid and only what is missing gets measured.
 
     `randomise` likewise appends only when set, so every cache measured before
-    experiment D existed keeps its name and none of them is re-measured. The
-    mode is IN the stem rather than a key inside, because a randomised cache
-    and the production one it is differenced against have to be able to sit
-    side by side.
+    experiment D existed keeps its name and none of them is re-measured.
+
+    `seed` (randomised caches only) likewise appends only when given, so the
+    legacy-seed cache keeps its name while each explicit draw gets its own
+    file and two draws can be compared.
     """
     ap = '' if float(aperture) == 1.0 else f'_ap{float(aperture):g}'
     rnd = '' if not randomise else f'_rand-{spherise.check_mode(randomise)}'
+    if randomise and seed is not None:
+        rnd += f'_seed{int(seed)}'
     grid = f'ngrid{cfg.grid}' if ngrid3 is None else f'3d_n{int(ngrid3)}'
     stem = (f'rstar_ustar_{CACHE_VERSION}_{cfg.feedback}_{cfg.mass_def}'
             f'_logM{cfg.logm_min:g}-{cfg.logm_max:g}_nb{cfg.nbins}'
@@ -177,15 +155,9 @@ def load_binned_centrals(cfg, aperture=1.0, nbins=None, logm_min=None,
                          logm_max=None):
     """Positions, masses, radii and bin index of the in-range centrals.
 
-    The binning is pmxlib.binning's, the same code measure_spectra uses, so bin
-    i here is bin i in the spectra bundle by construction -- unless the caller
-    overrides it, which only pmxlib.u_bar does and which puts it on its own
-    mass grid deliberately.
-
     Halos come back sorted by DESCENDING mass, and assign_particles is
     first-assignment-wins, so extending the range downwards adds halos at the
-    bottom of the order and cannot take a particle from any halo above them:
-    the membership of the bundle's bins is bit-identical whatever the floor.
+    bottom of the order and cannot take a particle from any halo above them.
     """
     pos, mass, bin_index, logM_edges, extras = load_binned_halos(
         cfg, extra_props=('r200b',), restrict_to_range=True,
@@ -224,14 +196,6 @@ def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass,
     member particles per chunk is ~chunk_particles, which bounds the transient
     Python-list memory of query_ball_point. First assignment wins, so a
     particle in two overlapping spheres belongs to the more massive halo.
-
-    `max_halos_per_chunk` bounds the chunk from the other side. Sizing purely
-    by expected particles is fine while the catalogue stops at 10^11, but
-    n(M) ~ M^-1.9, so a floor two decades lower multiplies the halo count by
-    ~60 and most of those halos expect under one particle each: the cumulative
-    sum barely advances and a single chunk swallows millions of halos, whose
-    list-of-lists from query_ball_point is the memory the sizing was meant to
-    bound. With the bundle's own range the cap never binds.
     """
     n_p = pos_p.shape[0]
     label = np.full(n_p, -1, dtype=np.int32)
@@ -270,41 +234,38 @@ def assign_particles(cfg, pos_p, halo_pos, halo_r, halo_mass,
 
 
 # The measurement
-def _bin_spectra(dens_bin, dens_avg, gas_fft, fft_of, binned, occupied, nk,
-                 m_fft=None, dens_out=None):
-    """R*_i against the gas field, and U* from whichever route is available.
+def _bin_spectra(dens_bin, M_tot, gas_fft, binning, occupied, u_input,
+                 randomised):
+    """R*_i against the gas field, and U* from `u_input`, on `binning`'s grid.
 
-    `m_fft` (production): U* is taken from the full matter transform minus the
-    summed per-bin ones rather than painted separately, so
-    P_matter_gas = sum_i R*_i + U* closes exactly on whichever grid this is
-    called on, and _closure can say so.
+    The painted grids are turned into overdensities of the TOTAL matter mean,
+    M_tot / ngrid^dim per cell, so R*_i + U* is P_matter_gas exactly.
 
-    `dens_out` (randomised): the per-bin fields have been moved and the full
-    matter field has not, so the residual route would measure
-    U* + (in-place - moved) instead of U*. The unassigned particles are
-    painted directly instead; they are the ones the randomisation leaves
-    alone, so this U* is the production one re-measured by a second route.
+    randomised=False: `u_input` is the full matter transform, and U* is it
+    minus the summed per-bin transforms rather than painted separately.
 
-    Exactly one of the two must be given.
+    randomised=True: `u_input` is the painted grid of the unassigned
+    particles. The per-bin fields have been moved and the full matter field
+    has not, so the residual route would measure U* + (in-place - moved)
+    instead of U*; the unassigned particles are painted directly instead.
     """
-    if (m_fft is None) == (dens_out is None):
-        raise ValueError("_bin_spectra takes m_fft (production) or dens_out "
-                         "(randomised), not both and not neither")
-    R_star = np.zeros((occupied.size, nk))
-    sum_fft = None if m_fft is None else np.zeros_like(m_fft)
+    dens_avg = M_tot / binning['ngrid'] ** binning['dim']
+    R_star = np.zeros((occupied.size, binning['k_bins'].size - 1))
+    sum_fft = None if randomised else np.zeros_like(u_input)
     for i in np.flatnonzero(occupied):
-        fft_i = fft_of(np.asarray(dens_bin[i], dtype=np.float64) / dens_avg)
-        if sum_fft is not None:
+        fft_i = fft(np.asarray(dens_bin[i], dtype=np.float64) / dens_avg)
+        if not randomised:
             sum_fft += fft_i
-        R_star[i] = binned((fft_i * np.conj(gas_fft)).real)
+        R_star[i] = bin_spectrum((fft_i * np.conj(gas_fft)).real, binning)
         del fft_i
         print(f"  bin {i:2d} done")
-    if sum_fft is None:
-        out_fft = fft_of(np.asarray(dens_out, dtype=np.float64) / dens_avg)
-        U_star = binned((out_fft * np.conj(gas_fft)).real)
+    if randomised:
+        out_fft = fft(np.asarray(u_input, dtype=np.float64) / dens_avg)
+        U_star = bin_spectrum((out_fft * np.conj(gas_fft)).real, binning)
         del out_fft
     else:
-        U_star = binned(((m_fft - sum_fft) * np.conj(gas_fft)).real)
+        U_star = bin_spectrum(((u_input - sum_fft) * np.conj(gas_fft)).real,
+                              binning)
         del sum_fft
     gc.collect()
     return R_star, U_star
@@ -321,7 +282,6 @@ def _paint_unassigned(cfg, pos, mass, label, ngrid, out_2d, ngrid3, out_3d,
     """
     n_p = label.size
     step = max(1, int(chunk))
-    n_out = 0
     for a in range(0, n_p, step):
         b = min(a + step, n_p)
         sel = label[a:b] < 0
@@ -329,13 +289,11 @@ def _paint_unassigned(cfg, pos, mass, label, ngrid, out_2d, ngrid3, out_3d,
             continue
         p = pos[a:b][sel]
         m = mass[a:b][sel]
-        n_out += int(m.size)
         if out_2d is not None:
             out_2d += paint_2d(p, m, cfg.box, ngrid, cfg.threads)
         if out_3d is not None:
             paint_3d(p, m, cfg.box, ngrid3, cfg.threads, out=out_3d)
         del p, m, sel
-    return n_out
 
 
 def _closure(tag, R_star, U_star, data, suffix='', randomise=None):
@@ -344,14 +302,6 @@ def _closure(tag, R_star, U_star, data, suffix='', randomise=None):
     Against the RAW bundle spectrum: the identity holds for the painted fields,
     and R*/U* here have not had their self-pair term taken off yet. Comparing
     them to the corrected spectrum would report the shot fraction instead.
-
-    There is nothing to check on a randomised run and the ratio is not printed
-    as though there were. Two separate things break it: the matter field has
-    been changed and the bundle's spectrum has not, and R*_i no longer carries
-    a self-pair term while the bundle's spectrum still does, so the number
-    would be a physical effect and an accounting mismatch added together.
-    Scoring the randomised run is experiment_D's job, on corrected spectra and
-    against the production cache rather than against the bundle.
     """
     if randomise is not None:
         print(f"  closure [{tag}]: not applicable to a '{randomise}' run; "
@@ -375,7 +325,7 @@ def _closure(tag, R_star, U_star, data, suffix='', randomise=None):
 
 
 def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
-                          want_2d=True, ngrid3=None, randomise=None):
+                          want_2d=True, ngrid3=None, randomise=None, seed=None):
     """Measure R*_i and U*. Returns (cache_2d, cache_3d), either may be None.
 
     `aperture` changes WHICH particles carry a halo label, so how the identity
@@ -383,11 +333,9 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
     the identity. Bins stay labelled by M200b, so R*_i is comparable across
     apertures bin by bin.
 
-    `randomise` ('shuffle' or 'rotate') moves each labelled particle inside its
+    `randomise` ('shuffle') moves each labelled particle inside its
     own host before painting, preserving its radius exactly; see the module
-    docstring and pmxlib.spherise. The halo catalogue, the labels, the mass
-    budget and the gas field are all untouched, so the only thing that can
-    differ from the production cache is the spectra.
+    docstring and pmxlib.spherise. `seed` fixes the draw.
 
     The two grids are measured in the SAME pass because the cost here is the
     membership KD-tree, which is grid-independent; painting a second grid
@@ -396,43 +344,37 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
     """
     randomise = spherise.check_mode(randomise)
     ngrid, nthread, nbins = cfg.grid, cfg.threads, cfg.nbins
-    k_grid = compute_k_grid_2d(ngrid, cfg.box)
     f_c, f_g = float(data['f_c']), float(data['f_g'])
     if not (want_2d or ngrid3):
         raise ValueError("nothing to measure: want_2d is False and ngrid3 is None")
     k_bins = cfg.k_bins
-    nmodes, k_center = bin_mode_stats(k_grid, k_bins)
     if not np.allclose(k_bins, np.asarray(data['k_bins'], dtype=float)):
         raise SystemExit("The k binning here differs from the spectra bundle's. "
                          "The two are differenced against each other, so they "
                          "must share --kbins-per-decade, --kbin-wmin and "
                          "--ngrid.")
 
-    def _binned(prod):
-        return binned_spectrum(cfg, prod, k_grid)
-
-    binner3 = None
+    binning2 = make_binning(ngrid, cfg.box, k_bins, 2) if want_2d else None
+    binning3 = make_binning(ngrid3, cfg.box, k_bins, 3) if ngrid3 else None
     if ngrid3:
-        binner3 = Binner3D(ngrid3, cfg.box, k_bins)
         print(f"\n3-D companion on a {ngrid3}^3 grid, k_Nyquist = "
-              f"{binner3.k_Nyquist:.3f} h/cMpc, TSC window deconvolved")
+              f"{binning3['k_Nyquist']:.3f} h/cMpc")
 
     if randomise:
         print(f"\n{'=' * 70}\nRANDOMISED RUN: '{randomise}'. Every labelled "
               f"particle is moved inside its own host at fixed radius; the "
               f"gas\nfield it is crossed against is the true one. See "
-              f"pmxlib.spherise.\n{'=' * 70}")
+              f"pmxlib.spherise.\n"
+              f"Seed: {'legacy (species share one stream)' if seed is None else seed}"
+              f"\n{'=' * 70}")
 
     # --- the projected fields, exactly as measure_spectra builds them ---------
-    # delta_m is only needed to get U* as a residual. A randomised run cannot
-    # use that route (the per-bin fields have moved and this one has not), so
-    # it paints the unassigned particles instead and never reads the dm field.
     gas_fft = m_fft = None
     if want_2d:
         print("\nProjected fields:")
-        gas_fft = compute_2d_fft(_load_or_compute_delta(cfg, 'gas'), ngrid)
+        gas_fft = fft(_load_or_compute_delta(cfg, 'gas'))
         if randomise is None:
-            dm_fft = compute_2d_fft(_load_or_compute_delta(cfg, 'dm'), ngrid)
+            dm_fft = fft(_load_or_compute_delta(cfg, 'dm'))
             m_fft = f_c * dm_fft + f_g * gas_fft
             del dm_fft
             gc.collect()
@@ -447,19 +389,10 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
     n_halo = h_mass.size
     h_bin16 = h_bin.astype(np.int16)
 
-    # One draw for the whole run, shared by both species: a halo's dark matter
-    # and its gas have to turn together, or the halo's MATTER is not rigidly
-    # rotated but two independently rotated pieces.
-    quat = spherise.halo_rotations(n_halo) if randomise == 'rotate' else None
-
     dens_bin = (np.zeros((nbins, ngrid, ngrid), dtype=np.float64)
                 if want_2d else None)
-    # float32 here: tsc accumulates in float32 anyway, and the stack is
-    # 2.0 GB at 256^3 against 4.0 in float64.
     dens_bin_3d = (np.zeros((nbins, ngrid3, ngrid3, ngrid3), dtype=np.float32)
                    if ngrid3 else None)
-    # Only the gas field is wanted whole on a randomised run; dm enters
-    # nowhere but m_fft, which that run does not build.
     species_all = SPECIES if randomise is None else ('gas',)
     dens_all_3d = ({s: np.zeros((ngrid3,) * 3, dtype=np.float32)
                     for s in species_all} if ngrid3 else None)
@@ -469,14 +402,8 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
                    if (randomise and ngrid3) else None)
     mass_bin_species = {s: np.zeros(nbins) for s in SPECIES}
     m2_bin_gas = np.zeros(nbins)
-    m2_bin_mat = np.zeros(nbins)
     mass_tot_species = {}
     m2_tot_gas = 0.0
-    m2_tot_mat = 0.0
-    n_unassigned = 0
-    # Radial histogram of the member gas m^2, for the smeared self-pair that a
-    # randomised run leaves behind. Gas only: dark matter shares no particle
-    # with the gas field.
     m2_shell = m2r_shell = None
     mass_halo_assigned = np.zeros(n_halo)
     # P^shot_gg is not re-measured here: the bundle carries it already, and
@@ -507,10 +434,8 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
         del part
         gc.collect()
         mass_tot_species[species] = float(mass.sum())
-        m2_species = float(np.sum(mass ** 2))
-        m2_tot_mat += m2_species
         if species == 'gas':
-            m2_tot_gas = m2_species
+            m2_tot_gas = float(np.sum(mass ** 2))
         print(f"    {pos.shape[0]:.3e} particles, {time.time() - t0:.1f} s")
 
         if ngrid3 and species in dens_all_3d:
@@ -533,10 +458,6 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
                                           minlength=n_halo)
 
         if randomise:
-            # Order matters twice over: the out-of-sphere grid has to be
-            # painted from the TRUE positions, and the randomisation has to
-            # happen before the per-bin painting and after nothing else reads
-            # `pos`, because it overwrites it.
             if species == 'gas':
                 print(f"[{species}] radial histogram of m^2, for the smeared "
                       f"self-pair ...")
@@ -547,22 +468,14 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
                 print(f"    {time.time() - t0:.1f} s")
             print(f"[{species}] painting the unassigned particles ...")
             t0 = time.time()
-            n_unassigned += _paint_unassigned(
+            _paint_unassigned(
                 cfg, pos, mass, label, ngrid, dens_out_2d, ngrid3, dens_out_3d)
             print(f"    {time.time() - t0:.1f} s")
             print(f"[{species}] randomising inside the hosts ...")
             t0 = time.time()
-            info = spherise.randomise_in_place(pos, label, h_pos, cfg.box,
-                                               randomise, quat=quat)
-            tol = spherise.position_tolerance(cfg.box)
-            if info['dr_max'] > tol:
-                raise RuntimeError(
-                    f"[{species}] a particle's radius moved by "
-                    f"{info['dr_max']:.3e} cMpc/h, past the {tol:.3e} the "
-                    f"float32 positions can explain. The randomisation is "
-                    f"supposed to preserve it exactly, so this is the "
-                    f"minimum image, the wrap or the host indexing -- not a "
-                    f"tolerance to widen.")
+            spherise.randomise_in_place(
+                pos, label, h_pos, cfg.box, randomise,
+                seed=spherise.species_seed(seed, SPECIES.index(species)))
             print(f"    {time.time() - t0:.1f} s")
 
         print(f"[{species}] painting per bin ...")
@@ -576,10 +489,8 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
             m_i = mass[sel]
             pos_i = pos[sel]
             mass_bin_species[species][i] = float(m_i.sum())
-            m2_i = float(np.sum(m_i ** 2))
-            m2_bin_mat[i] += m2_i
             if species == 'gas':
-                m2_bin_gas[i] = m2_i
+                m2_bin_gas[i] = float(np.sum(m_i ** 2))
             if want_2d:
                 dens_bin[i] += paint_2d(pos_i, m_i, cfg.box, ngrid, nthread)
             if ngrid3:
@@ -601,24 +512,10 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
               "the same particle file? The truth m_fft uses the bundle values.")
 
     mass_bin = mass_bin_species['dm'] + mass_bin_species['gas']
-    f_part = mass_bin / M_tot                        # true mass fraction per bin
+    f_in = mass_bin / M_tot                        # true mass fraction per bin
     counts = data['counts']
     n_i = counts / cfg.box ** 3
     f_i = n_i * data['M_mean'] / cfg.rhobar_m        # what the reconstruction uses
-
-    print("\n  bin  logM   f_i (n_i M_i/rhobar)   f_part (assigned)   ratio")
-    for i in range(nbins):
-        if counts[i] > 0:
-            r = f_part[i] / f_i[i] if f_i[i] > 0 else np.nan
-            print(f"  {i:3d}  {data['logM_cen'][i]:5.2f}   {f_i[i]:.5f}"
-                  f"              {f_part[i]:.5f}        {r:.4f}")
-    print(f"  sum f_i = {f_i[counts > 0].sum():.4f},  "
-          f"sum f_part = {f_part.sum():.4f},  "
-          f"true out-of-sphere fraction = {1 - f_part.sum():.4f}")
-    if randomise:
-        print(f"  {n_unassigned:.3e} particles carried no halo label and were "
-              f"left where they are; U* is the production one by "
-              f"construction, and is re-measured from them here")
     unit_total = cfg.rhobar_m * cfg.box ** 3 / M_tot
     with np.errstate(divide='ignore', invalid='ignore'):
         q = mass_halo_assigned * unit_total / h_mass
@@ -630,23 +527,16 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
         version=CACHE_VERSION,
         k_bins=k_bins,
         logM_edges=logM_edges, logM_cen=data['logM_cen'],
-        M_mean=data['M_mean'], counts=counts, f_i=f_i, f_part=f_part,
+        M_mean=data['M_mean'], counts=counts, f_i=f_i, f_in=f_in,
         M_tot_particles=M_tot, f_c=f_c_here, f_g=f_g_here,
         m2_bin_gas=m2_bin_gas, m2_tot_gas=m2_tot_gas,
-        # Matter (dm + gas) second moments. Not used by the self-pair
-        # subtraction, which is a gas-only affair; they are what sets the
-        # noise a randomised run adds, so experiment_D can weigh its own
-        # answer. Extra keys rather than a CACHE_VERSION bump, so nothing
-        # already measured is invalidated by their arrival.
-        m2_bin_mat=m2_bin_mat, m2_tot_mat=m2_tot_mat,
-        # Only a randomised run carries these, and only a randomised run's
-        # self-pair term needs them.
         **({} if m2_shell is None else
            dict(m2_shell_gas=m2_shell, m2r_shell_gas=m2r_shell,
                 selfpair_nx=spherise.SELFPAIR_NX)),
         mass_bin_dm=mass_bin_species['dm'], mass_bin_gas=mass_bin_species['gas'],
         assigned_over_m200b_median=float(np.nanmedian(q)),
         randomise=str(randomise or ''),
+        seed=(-1 if seed is None else int(seed)),       # -1: the legacy draw
         box=cfg.box, kbins_per_decade=cfg.kbins_per_decade,
         kbin_wmin_kf=cfg.kbin_wmin_kf,
         nbins=nbins, logm_min=cfg.logm_min, logm_max=cfg.logm_max,
@@ -663,14 +553,15 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
     if want_2d:
         print("\nPer-bin cross spectra R*_i (projected) ...")
         R_star, U_star = _bin_spectra(
-            dens_bin, M_tot / ngrid ** 2, gas_fft,
-            lambda d: compute_2d_fft(d, ngrid), _binned, mass_bin > 0,
-            k_center.size, m_fft=m_fft, dens_out=dens_out_2d)
+            dens_bin, M_tot, gas_fft, binning2, mass_bin > 0,
+            u_input=(dens_out_2d if randomise else m_fft),
+            randomised=bool(randomise))
         del dens_bin, m_fft, dens_out_2d
         gc.collect()
         _closure('2d', R_star, U_star, data, suffix='_2d',
                  randomise=randomise)
-        out_2d = dict(shared, k_center=k_center, nmodes=np.asarray(nmodes),
+        out_2d = dict(shared, k_center=binning2['k_eff'],
+                      nmodes=binning2['nmodes'],
                       ngrid=ngrid, R_star_gas=R_star, U_star_gas=U_star,
                       P_shot_gg=P_shot_2d)
 
@@ -684,11 +575,11 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
                    / (mass_tot_species['dm'] / ngrid3 ** 3) - 1.0)
         del dens_all_3d
         gc.collect()
-        gas_fft3 = compute_3d_fft(gas3, ngrid3)
+        gas_fft3 = fft(gas3)
         del gas3
         gc.collect()
         if randomise is None:
-            dm_fft3 = compute_3d_fft(dm3, ngrid3)
+            dm_fft3 = fft(dm3)
             del dm3
             gc.collect()
             m_fft3 = f_c * dm_fft3 + f_g * gas_fft3
@@ -696,19 +587,18 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
             gc.collect()
 
         R_star3, U_star3 = _bin_spectra(
-            dens_bin_3d, M_tot / ngrid3 ** 3, gas_fft3,
-            lambda d: compute_3d_fft(d, ngrid3),
-            lambda prod: binned_spectrum_3d(cfg, prod, binner3),
-            mass_bin > 0, binner3.k_center.size,
-            m_fft=m_fft3, dens_out=dens_out_3d)
+            dens_bin_3d, M_tot, gas_fft3, binning3, mass_bin > 0,
+            u_input=(dens_out_3d if randomise else m_fft3),
+            randomised=bool(randomise))
         del dens_bin_3d, m_fft3, gas_fft3, dens_out_3d
         gc.collect()
         _closure('3d', R_star3, U_star3, data, suffix='_3d',
                  randomise=randomise)
-        out_3d = dict(shared, k_center=binner3.k_center, ngrid=ngrid3,
-                      ngrid_3d=ngrid3, k_Nyquist_3d=binner3.k_Nyquist,
-                      nmodes=binner3.nmodes,
-                      nmodes_eff=binner3.nmodes_eff, k_eff=binner3.k_eff,
+        out_3d = dict(shared, k_center=binning3['k_mid'], ngrid=ngrid3,
+                      ngrid_3d=ngrid3, k_Nyquist_3d=binning3['k_Nyquist'],
+                      nmodes=binning3['nmodes'],
+                      nmodes_eff=binning3['nmodes_eff'],
+                      k_eff=binning3['k_eff'],
                       R_star_gas=R_star3, U_star_gas=U_star3,
                       P_shot_gg=P_shot_3d)
 
@@ -717,37 +607,24 @@ def compute_R_star_U_star(cfg, data, chunk_particles=5e7, aperture=1.0,
 
 # Cache
 def cache_randomise(cache):
-    """Which randomisation, if any, a loaded cache was measured with.
-
-    Read off the cache rather than passed in, so that a file decides for
-    itself whether it wants a self-pair subtraction and no caller can put a
-    randomised cache on the production footing by forgetting an argument.
-    Caches written before experiment D existed carry no key and are
-    production by construction.
-    """
+    """Which randomisation, if any, a loaded cache was measured with."""
     return spherise.check_mode(str(cache.get('randomise', '')))
 
 
 def _read_cache(path):
-    """Load a cache and put its spectra on the corrected footing.
-
-    A randomised cache is corrected too, but not in the same places: a moved
-    gas particle no longer coincides with its own copy in the gas field, so
-    R*_i has no delta-function self-pair left (what replaces it -- that
-    particle's new position correlating with its true one -- is part of the
-    spherised signal), while the unassigned particles never moved and U* keeps
-    the term it always had. rstar_self_pair_terms is where that distinction
-    lives, so both files come off disk meaning the same thing.
-    """
+    """Load a cache and put its spectra on the corrected footing."""
     with np.load(path, allow_pickle=False) as f:
         cache = {key: f[key] for key in f.files}
+    if 'f_part' in cache:                     # caches written before the rename
+        cache['f_in'] = cache.pop('f_part')
     terms = rstar_self_pair_terms(
         cache, randomised=cache_randomise(cache) is not None)
     return subtract_self_pairs(cache, terms=terms, report=False)
 
 
 def load_or_measure_rstar_ustar(cfg, data, recompute=False, chunk_particles=5e7,
-                    allow_compute=True, aperture=1.0, randomise=None):
+                    allow_compute=True, aperture=1.0, randomise=None,
+                    seed=None):
     """Read the cache, or measure and write it. None if absent and not allowed.
 
     With cfg.ngrid_3d set there are two caches, one per grid, each corrected
@@ -757,13 +634,14 @@ def load_or_measure_rstar_ustar(cfg, data, recompute=False, chunk_particles=5e7,
     full particle pass, so both are written when both are absent.
 
     `randomise` selects a sibling cache measured with the halo interiors
-    randomised (experiment D); None is the production measurement.
+    randomised (experiment D); None is the production measurement. `seed`
+    picks which draw of it; None is the legacy one.
     """
     randomise = spherise.check_mode(randomise)
     ngrid3 = cfg.ngrid_3d
-    path = cache_path(cfg, aperture=aperture, randomise=randomise)
+    path = cache_path(cfg, aperture=aperture, randomise=randomise, seed=seed)
     path3 = (cache_path(cfg, aperture=aperture, ngrid3=ngrid3,
-                        randomise=randomise) if ngrid3 else None)
+                        randomise=randomise, seed=seed) if ngrid3 else None)
 
     want_2d = recompute or not path.exists()
     want_3d = bool(ngrid3) and (recompute or not path3.exists())
@@ -778,7 +656,7 @@ def load_or_measure_rstar_ustar(cfg, data, recompute=False, chunk_particles=5e7,
         out_2d, out_3d = compute_R_star_U_star(
             cfg, data, chunk_particles=chunk_particles, aperture=aperture,
             want_2d=want_2d, ngrid3=(ngrid3 if want_3d else None),
-            randomise=randomise)
+            randomise=randomise, seed=seed)
         for target, out in ((path, out_2d), (path3, out_3d)):
             if out is None:
                 continue
@@ -812,7 +690,7 @@ def measured_partition(cfg, cache, data, mr=None):
         hidden = above = np.zeros_like(occ)
     else:
         resolved, hidden, above = mr.resolved, mr.hidden, mr.above
-    f_part = np.asarray(cache['f_part'], dtype=float)
+    f_in = np.asarray(cache['f_in'], dtype=float)
 
     R_star = R_i[resolved].sum(axis=0)
     U_star = U + R_i[hidden].sum(axis=0)
@@ -821,17 +699,17 @@ def measured_partition(cfg, cache, data, mr=None):
                 R_star=R_star, U_star=U_star, V_star=V_star,
                 total=R_star + U_star if V_star is None
                       else R_star + U_star + V_star,
-                f_part=np.where(resolved, f_part, 0.0),
-                f_out=1.0 - float(f_part[resolved | above].sum()))
+                f_in=np.where(resolved, f_in, 0.0),
+                f_out=1.0 - float(f_in[resolved | above].sum()))
 
 
 def load_measured_partition(cfg, data, recompute=False, allow_compute=True,
-                            aperture=1.0, mr=None, randomise=None):
+                            aperture=1.0, mr=None, randomise=None, seed=None):
     """What plotting callers want: the partition dict, or None."""
-    path = cache_path(cfg, aperture=aperture, randomise=randomise)
+    path = cache_path(cfg, aperture=aperture, randomise=randomise, seed=seed)
     cache = load_or_measure_rstar_ustar(cfg, data, recompute=recompute,
                             allow_compute=allow_compute, aperture=aperture,
-                            randomise=randomise)
+                            randomise=randomise, seed=seed)
     if cache is None:
         return None, path
     k_c = np.asarray(cache['k_center'], dtype=float)
@@ -859,12 +737,16 @@ def main():
                     choices=list(spherise.MODES),
                     help="measure the SIBLING cache in which every labelled "
                          "particle is moved inside its own host at fixed "
-                         "radius: 'shuffle' spherises each halo, 'rotate' "
-                         "turns it rigidly. Both have the same expectation; "
-                         "'shuffle' is the low-noise one. experiment_D "
+                         "radius, spherising each halo. experiment_D "
                          "differences the result against the production cache")
+    ap.add_argument('--seed', default=None,
+                    help="with --randomise: the draw, as a non-negative int or "
+                         "'random' (drawn and printed). Each seed gets its own "
+                         "cache, so two draws can be compared. Omitted, the "
+                         "legacy draw, whose two species share one stream")
     args = ap.parse_args()
     cfg = PmxConfig.from_args(args)
+    seed = spherise.resolve_seed(args.seed) if args.randomise else None
 
     bpath = bundle_path(cfg, cfg.nbins, cfg.logm_min, cfg.logm_max, cfg.grid)
     if not bpath.exists():
@@ -878,14 +760,16 @@ def main():
     cache = load_or_measure_rstar_ustar(cfg, data, recompute=args.recompute,
                             chunk_particles=args.chunk_particles,
                             aperture=args.aperture,
-                            randomise=args.randomise)
+                            randomise=args.randomise, seed=seed)
     part = measured_partition(cfg, cache, data)
     frac = np.nanmedian(part['U_star'] / part['total'])
     print(f"  median U*/(R*+U*) = {frac:.4f}")
     if args.randomise:
+        seed_arg = '' if seed is None else f' --seed {seed}'
         print(f"\nThat was the '{args.randomise}' cache. Score it against the "
               f"production one with\n      python -m "
-              f"Pmx_reconstruction.experiment_D --randomise {args.randomise}")
+              f"Pmx_reconstruction.experiment_D --randomise {args.randomise}"
+              f"{seed_arg}")
 
 
 if __name__ == '__main__':

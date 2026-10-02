@@ -53,6 +53,12 @@ Every halo of mass $M$ has a matter density profile $\rho_m(\bx \mid M)$. We def
     u_m(k \mid M) \;=\; \frac{1}{M} \int \dd^3x \; \rho_m(\bx \mid M) \, e^{-i \bk \cdot \bx},
     \qquad u_m(k\to 0 \mid M) = 1
 \end{equation}
+\textcolor{blue}{The integral is over $\bk$, but we have written the
+result as a function of $k$, which is an assumption---it is true only if $\rho_m(\bx\mid M)$ is spherically symmetric, in
+which case the angular integral equals $j_0(kr)$ (this is
+Equation~\eqref{eq:angular}, done explicitly for NFW in
+Section~\ref{sec:nfw}).
+We carry this assumption from here to Section~\ref{sec:profiles}.}
 We can define a dimensionless matter weight function, $W_m(k,M)$, which represents the fractional contribution of a halo's mass to the background density at a given scale:
 \begin{equation} \label{eq:Wm}
     W_m(k,M) \;\equiv\; \frac{M}{\bar\rho_m} \, u_m(k \mid M)
@@ -151,27 +157,27 @@ Since in practice we are working with finite-box simulations filled with discret
 The term is derived as follows. Say we work at fixed $\mathbf{k} \neq 0$. Painting a set $S$ of particles with masses $m_p$ at positions 
 $\mathbf{x}_p$ onto the grid and Fourier transforming gives, up to the overall convention constant $c$ that turns $\langle |\cdot|^2\rangle$ into the pipeline's power units (the $\mathrm{BOX}^2$ and FFT normalisation),
 \begin{equation}
-    \rho_S(\mathbf{k}) \;=\; \sum_{p \in S} m_p \, W(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_p}, 
+    \rho_S(\mathbf{k}) \;=\; \sum_{p \in S} m_p \, W_\mathrm{TSC}(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_p}, 
 \end{equation}
-with $W(\mathbf{k})$ the TSC assignment window. The fields are
+with $W_\mathrm{TSC}(\mathbf{k})$ the TSC assignment window. The fields are
 \begin{equation} \label{eq:ft_fields_def}
-    \delta_m^{(i)} (\mathbf{k}) \;=\; \frac{1}{M_\mathrm{tot}} \sum_{p \in i} m_p \, W(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_p}, \qquad \delta_x(\mathbf{k}) \;=\; \frac{1}{M_x} \sum_{q \in x} m_q \, W(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_q}
+    \delta_m^{(i)} (\mathbf{k}) \;=\; \frac{1}{M_\mathrm{tot}} \sum_{p \in i} m_p \, W_\mathrm{TSC}(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_p}, \qquad \delta_x(\mathbf{k}) \;=\; \frac{1}{M_x} \sum_{q \in x} m_q \, W_\mathrm{TSC}(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_q}
 \end{equation}
 Note that the mean subtraction only touches the $\mathbf{k}=0$ mode. Now, cross-correlate the $i$ bin with field $x$:
 \begin{equation}
-    \langle \delta_m^{(i)} \, \delta_x^* \rangle \;=\; c \,\frac{|W|^2}{M_\mathrm{tot}M_x} \sum_{p \in i}\sum_{q \in x} m_pm_q\langle e^{-i \mathbf{k}(\mathbf{x}_p - \mathbf{x}_q)} \rangle,
+    \langle \delta_m^{(i)} \, \delta_x^* \rangle \;=\; c \,\frac{|W_\mathrm{TSC}|^2}{M_\mathrm{tot}M_x} \sum_{p \in i}\sum_{q \in x} m_pm_q\langle e^{-i \mathbf{k}(\mathbf{x}_p - \mathbf{x}_q)} \rangle,
 \end{equation}
 Splitting the double sum into $p=q$ and $p \neq q$, we can single out the self-pairing term:
 \begin{equation} \label{eq:self_similar_term}
-    \langle \delta_m^{(i)} \, \delta_x^* \rangle_\mathrm{self} \;=\; c \, \frac{|W|^2}{M_\mathrm{tot}M_x} \sum_{q \in i \cap x} m_q^2
+    \langle \delta_m^{(i)} \, \delta_x^* \rangle_\mathrm{self} \;=\; c \, \frac{|W_\mathrm{TSC}|^2}{M_\mathrm{tot}M_x} \sum_{q \in i \cap x} m_q^2
 \end{equation}
 Setting $i \rightarrow$ everything gives the same expression but with $\sum_{q \in x} m_q^2$, which is the term in the truth $P^{mx}$. To measure \eqref{eq:self_similar_term}, we can paint species $x$ with its own masses at uniform random $\mathbf{u}_q$:
 \begin{equation}
-    \langle|\delta_r|^2\rangle \;=\; c\,\frac{|W|^2}{M_x^2} \left[ \sum_q m_q^2 + \sum_{p \neq q} m_p m_q \langle e^{-i \mathbf{k}(\mathbf{u}_p - \mathbf{u}_q)} \rangle\right],
+    \langle|\delta_r|^2\rangle \;=\; c\,\frac{|W_\mathrm{TSC}|^2}{M_x^2} \left[ \sum_q m_q^2 + \sum_{p \neq q} m_p m_q \langle e^{-i \mathbf{k}(\mathbf{u}_p - \mathbf{u}_q)} \rangle\right],
 \end{equation}
 and the cross-terms here vanish for $\mathbf{k} \neq 0$ because the positions are independent and uniform. Hence
 \begin{equation} \label{eq:P_shot_def}
-    P^{xx}_\mathrm{shot} \;=\; c \, \frac{|W|^2}{M_x^2} \sum_{q \in x} m_q^2
+    P^{xx}_\mathrm{shot} \;=\; c \, \frac{|W_\mathrm{TSC}|^2}{M_x^2} \sum_{q \in x} m_q^2
 \end{equation}
 Dividing Equation~\ref{eq:self_similar_term} by this gives 
 \begin{equation}
@@ -181,9 +187,9 @@ For the entire field (not binned), the last fraction cancels and we just obtain
 \begin{equation}
     \langle \delta_m \, \delta_x^* \rangle_\mathrm{self} \;=\; f_x \,P_\mathrm{shot}^{xx},
 \end{equation}
-with $f_x$ being the mass fraction of particles $x$. The reason of measuring $P^{xx}_\mathrm{shot}$ is that the unknown constant $c$ and the window $|W|^2$ cancel identically. For $x$ = matter, we have
+with $f_x$ being the mass fraction of particles $x$. The reason of measuring $P^{xx}_\mathrm{shot}$ is that the unknown constant $c$ and the window $|W_\mathrm{TSC}|^2$ cancel identically. For $x$ = matter, we have
 \begin{equation}
-    P^{mm}_\mathrm{shot} \;=\; c \, \frac{|W|^2}{M_\mathrm{tot}^2} \left( \sum_\mathrm{dm} m^2 + \sum_\mathrm{gas} m^2\right),
+    P^{mm}_\mathrm{shot} \;=\; c \, \frac{|W_\mathrm{TSC}|^2}{M_\mathrm{tot}^2} \left( \sum_\mathrm{dm} m^2 + \sum_\mathrm{gas} m^2\right),
 \end{equation}
 and using $f_x^2 / M_x^2 = 1 / M_\mathrm{tot}^2$, we got 
 \begin{equation}
@@ -193,15 +199,16 @@ and using $f_x^2 / M_x^2 = 1 / M_\mathrm{tot}^2$, we got
 \textcolor{blue}{\textbf{The halo-dm self-pairing term.} Turns out halos are assigned positions of the most bound dm particle, meaning there is an unaccounted for shot term in my analysis. 
 Analogous to Equation~\ref{eq:ft_fields_def}, halo bin's overdensity field in $\mathbf{k}$ space is defined as
 \begin{equation}
-    \delta_h^{(i)}(\mathbf{k}) \;=\; \frac{1}{N_i}\sum_{a\in i}W(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_a},
+    \delta_h^{(i)}(\mathbf{k}) \;=\; \frac{1}{N_i}\sum_{a\in i}W_\mathrm{TSC}(\mathbf{k}) \, e^{-i \mathbf{k} \cdot \mathbf{x}_a},
+    \label{eq:halo_field}
 \end{equation}
 where $N_i$ is the number of halos in bin $i$ -- this is because each halo enters with unit weight, in contrast to cdm which are mass-weighted. As previously, the mean subtraction touches only $\mathbf{k} =0$ and there is a constant in front. The cross-power spectrum of bin $i$ with $\delta_h$ then
 \begin{equation}
-    \langle \delta_h^{(i)} \, \delta_c^* \rangle \;=\; c \,\frac{|W|^2}{N_iM_c} \sum_{a \in i}\sum_{q \in \mathrm{dm}} m_q\langle e^{-i \mathbf{k}(\mathbf{x}_a - \mathbf{x}_q)} \rangle,
+    \langle \delta_h^{(i)} \, \delta_c^* \rangle \;=\; c \,\frac{|W_\mathrm{TSC}|^2}{N_iM_c} \sum_{a \in i}\sum_{q \in \mathrm{dm}} m_q\langle e^{-i \mathbf{k}(\mathbf{x}_a - \mathbf{x}_q)} \rangle,
 \end{equation}
 Splitting into coincident and non-coincident pairs: because each halo centre is the position of that halo's most bound cdm particle, the coincident set is not empty. Write $q(a)$ for the most bound particle of halo $a$. The pairs $q = q(a)$ have $\mathbf{x}_a - \mathbf{x}_q = 0$, so
 \begin{equation}
-    \langle \delta_h^{(i)} \, \delta_c^* \rangle_\mathrm{self} \;=\; c \,\frac{|W|^2}{N_iM_c} \sum_{a \in i} m_{q(a)}
+    \langle \delta_h^{(i)} \, \delta_c^* \rangle_\mathrm{self} \;=\; c \,\frac{|W_\mathrm{TSC}|^2}{N_iM_c} \sum_{a \in i} m_{q(a)}
 \end{equation}
 Then we divide out the measured cdm shot power spectrum as given by Equation~\ref{eq:P_shot_def} and obtain
 \begin{equation}
@@ -226,7 +233,7 @@ For matter, using $\delta_m = f_c \delta_c + f_e \delta_e$, we get:
 
 
 
-\subsection{Setting NFW for $u_m(k\,|\,M)$}
+\subsection{Setting NFW for $u_m(k\,|\,M)$} \label{sec:nfw}
 We get $u_m(k\,|\,M_i)$ from NFW + empirical concentration-mass relationship. To start, let me derive the NFW in Fourier Space.
 
 The NFW profile with scale radius $r_s$ and characteristic density $\rho_s$,
@@ -573,23 +580,11 @@ particles, so it is exact and linear, and
   U_\star \;\equiv\; \big\langle \delta_m^{\,\rm out} \, \delta_e^* \big\rangle .
   \label{eq:T_split}
 \end{equation}
-Note that $R_\star$ and $U_\star$ are not $R$ and $U$ -- the former are measured, the latter are modelled. Every particle in $\delta_m^{\,\rm in}$ carries a halo label, so $R_\star$ can be written as a bin sum of exactly the same form as $R$. Remember, our starting point is $\delta_m(\mathbf{k}) = \sum_j \frac{M_j}{\rho_m} \, u_m(k \mid M_j) \, e^{-i\mathbf{k}\cdot \mathbf{x}_j}$, where $j$ runs over individual halos. Cross this with $\delta_e$ and write $C_j \equiv \langle e^{-i\mathbf{k}\cdot \mathbf{x}_j} \, \delta_e^*\rangle$ for halo $j$'s own cross-correlation with the gas field. Grouping into bins, the contribution of bin $i$ is exactly 
-\[
-\langle \delta_m ^{(i)} \, \delta_e^*\rangle \; = \; \frac{1}{\bar \rho_m} \sum_{j \, \in \, i}M_j\,u_m^{(i)}(k)\,C_j(k)
-\]
-Previously, we obtained equation for $R$ by pulling out $u_m$ from the sum, replacing every halo's profile by $u_m^\mathrm{NFW}(k \mid M_i)$ at the bin's representative mass and a deterministic $c(M, z)$. Now, we can define $\tilde u_m$ as whatever makes it exact:
-%
-\begin{equation}
-  \tilde u_m(k\mid M_i) \;\equiv\; \frac{1}{\bar \rho_m}\frac{\sum_{j \, \in \, i}M_j\,u_m^{(i)}(k)\,C_j(k)}{f_i \, P^{he}(k \mid M_i)} ,
-  \label{eq:utilde_def}
-\end{equation}
-%
-Thus $\tilde u_m$ is not a median NFW profile but the \emph{gas-cross-weighted} mean
-matter profile of the bin. We got:
+Note that $R_\star$ and $U_\star$ are not $R$ and $U$ -- the former are measured, the latter are modelled. Every particle in $\delta_m^{\,\rm in}$ carries a halo label, so $R_\star$ splits exactly into per-bin terms, which we set against the model:
 \begin{equation} \label{R_Rstar}
-R(k) \; = \; \sum_i f_i \, u_m^\mathrm{NFW}(k \mid M_i) \, P^{he}(k \mid M_i), \qquad R_\star(k) \; = \; \sum_i \tilde f_i \, \tilde u_m(k \mid M_i) \, P^{he}(k \mid M_i)
+R(k) \; = \; \sum_i f_i \, u_m^\mathrm{NFW}(k \mid M_i) \, P^{he}(k \mid M_i), \qquad R_\star(k) \; = \; \sum_i R_{\star\,i}(k), \qquad R_{\star\,i} \;\equiv\; \big\langle \delta_m^{\,{\rm in}\,(i)} \, \delta_e^* \big\rangle
 \end{equation}
-where we defined
+The measured partition comes with its own mass weights,
 \begin{equation}
     \tilde f_i \;\equiv\; \frac{1}{M_{\rm tot}}\sum_{p\,\in\,i} m_p,
   \qquad
@@ -612,8 +607,9 @@ In further results sections, we often plot $R+U / P^{me}$ in the bottom left pan
   \underbrace{\frac{U - U_\star}{R_\star + U_\star}}_{\text{template error}} ,  
 \end{equation}
 %
-The two terms are separately measurable in the simulation: $\tilde u_m$
-by stacking matter profiles per bin and transforming them, and $U_\star$ by painting only the
+The two terms are separately measurable in the simulation: $R_{\star\,i}$
+by painting only the particles inside $r_{200b}$ of the centrals in bin $i$ and crossing with
+$\delta_e$, and $U_\star$ by painting only the
 particles outside $r_{200b}$ of any catalogue central onto the grid and crossing with
 $\delta_e$.
 
@@ -812,10 +808,12 @@ It will be argued later that $S(k; \, x) \simeq S(k; \, 1)$, so we can write $S(
 \end{equation}
 Because $\delta_m = \sum_i \delta_m^{\,\mathrm{in} \,(i)} + \delta_m^{\,\rm out}$ exactly, $b_m = 1$ gives the sum rule
 \begin{equation}
-    \sum_i \tilde f_i(x)\, \tilde u_m (k \mid M_i) \, b_i \;+\; \tilde f_u(x)\, \tilde  b_u(x) \;=\; 1
+    \sum_i \tilde f_i(x)\, b_{\star\,i}(x) \;+\; \tilde f_u(x)\, \tilde  b_u(x) \;=\; 1,
+    \qquad
+    b_{\star\,i}(x) \;\equiv\; \lim_{k\to0} \frac{R_{\star\,i}(k;\,x)}{\tilde f_i(x)\, P^{me}(k)}
     \label{eq:LS-sumrule}
 \end{equation}
-For the sake of qualitative argument it is enough to set $\tilde u_m(k \to 0 \mid M) \simeq 1$. It is not exactly 1 because of a non-zero covariance of halo mass with halo bias inside bin $i$, which, as it turns out, enters the definition \eqref{eq:utilde_def} of $\tilde u_m$. Then, we can remove $\tilde b_u$ with \eqref{eq:LS-sumrule}, and using $\Delta \tilde f_u = -\sum_i \Delta \tilde f_i$ with $\Delta \tilde f_i \equiv \tilde f_i(x) - \tilde f_i(1) \ge 0$,
+For the sake of qualitative argument it is enough to set $b_{\star\,i} \simeq b_i$. It is not exact because $R_{\star\,i}$ weights the haloes of bin $i$ by mass while $P^{he}(k\mid M_i)$ weights them by number, so a non-zero covariance of halo mass with halo bias inside the bin makes $b_{\star\,i}$ slightly larger than $b_i$. Then, we can remove $\tilde b_u$ with \eqref{eq:LS-sumrule}, and using $\Delta \tilde f_u = -\sum_i \Delta \tilde f_i$ with $\Delta \tilde f_i \equiv \tilde f_i(x) - \tilde f_i(1) \ge 0$,
 \begin{equation}
     \Delta\!\left[\frac{R+U}{P^{me}}\right]_{k\to0} \;\simeq\; \sum_i \Delta \tilde f_i(x)\, \left[ \,b_i - b_u \,\right]
     \label{eq:LS-shift}
@@ -976,7 +974,7 @@ $h/\mathrm{cMpc}$ for the halos holding most of the moved mass.
     \label{fig:shells}
 \end{figure}
 
-\subsection{Measuring true matter profiles around halos} \label{sec:profiles}
+\subsection{Measuring stacked radial density profiles around halos} \label{sec:profiles}
 
 Remember the blue derivation following right after Equation~\ref{eq:stack}. One of the lines read
 \begin{equation}
@@ -989,6 +987,7 @@ where the sum goes over haloes. We can express $\rho_m(\mathbf{x} - \mathbf{x}_j
 Then inserting this into definition of $u_m(k \mid M)$ \eqref{eq:u_def} gives
 \begin{equation}
     u_j(\mathbf{k}) \; =\; \frac{1}{M_j^a} \sum_{p \, \in \, j} \, m_p \, e^{-i \mathbf{k} \cdot (\mathbf{x}_p - \mathbf{x}_j)}, \qquad u_j(0) = 1
+    \label{eq:u_j}
 \end{equation}
 Now we define the bin's stacked profile:
 \begin{equation}
@@ -1081,7 +1080,7 @@ assumption flagged under Equation~\eqref{eq:unnormalised} that the NFW form
 survives past $r_{200m}$: extending the truncation radius tests the model exactly where
 it is least accurate, and the measurement demonstrates it. Substituting the measured profile into the reconstruction,
 Figure~\ref{fig:expB_measured}, shows that nothing really changes. The discrepancy on 
-intermediate to small scales therefore is not caused by profile mismatch, so we need to turn our attention back to
+intermediate to small scales therefore is not caused by profile mismatch, so we would like to turn our attention back to
 the transfer function.
 
 
@@ -1151,6 +1150,7 @@ catastrophically at small scales.
 \subsection{Addressing the residual small-scale dip}
 
 \subsubsection{Why the dip appears?}
+\label{sec:dip}
 
 The residual dip sits at $k \sim 3$--$7$, and the first thing to say about it is
 that the aperture does not touch it. The four $x$ curves, which are
@@ -1197,151 +1197,399 @@ ingredients it already has.
 \subsubsection{Isolating the term: spherising the halo interiors}
 \label{sec:spherise}
 
-The argument above says what the missing term must be, but it is an argument.
-What follows measures it.
-
-Return to Equation~\eqref{eq:utilde_def}. Writing $u_j(k)$ for halo $j$'s own
-(clumpy, non-spherical) profile, $M_j^a$ for the mass assigned to it and
-$C_j(k) = \langle e^{-i\bk\cdot\bx_j}\delta_e^*\rangle$ for its own cross with
-the gas, bin $i$'s exact contribution and the model's version of it are
+In what follows we try to measure the missing "halo interior" term in the $P^{me}$. 
+First of all, we need to determine what is being captured by $R_\star$ but not by $R$.
+Starting from the matter field of Equation~\eqref{eq:ft_fields_def}, and
+writing it without the TSC window $W(\bk)$ --- the 3-D pipeline divides it
+out and the 2-D one does not, but every field on a grid is TSC-painted, so
+each spectrum on that grid carries the same $W^2$ and it cancels in every
+ratio taken below --- we have,
 \begin{equation}
-  R_{\star\,i} \;=\; \frac{1}{M_{\rm tot}}\sum_{j\,\in\,i} M_j^a\,u_j(k)\,C_j(k),
-  \qquad
-  R_i \;=\; \tilde f_i\,\bar u_m(k\mid M_i)\,P^{he}(k\mid M_i) ,
+  \delta_m^{\,{\rm in}\,(i)}(\bk) \;=\; \frac{1}{M_{\rm tot}} \sum_{p\,\in\,i} m_p\,
+  e^{-i\bk\cdot\bx_p}
 \end{equation}
-and since $\bar u_m = \sum_j M_j^a u_j / \sum_j M_j^a$ and
-$P^{he}(k\mid M_i) = \langle C\rangle_i$, the second is the first with the sum
-of products replaced by the product of sums. Subtracting,
+Writing each position relative to its own centre, $\bx_p = \bx_j + \mathbf r_p$,
+the centre's phase comes out of the inner sum:
 \begin{equation}
-  R_{\star\,i} - R_i \;=\; \frac{N_i}{M_{\rm tot}}\,
-  \mathrm{Cov}_{j\,\in\,i}\!\big(M_j^a\,u_j(k),\; C_j(k)\big) .
-  \label{eq:cov-identity}
+  \delta_m^{\,{\rm in}\,(i)}(\bk)
+  \;=\; \frac{1}{M_{\rm tot}} \sum_{j\,\in\,i} e^{-i\bk\cdot\bx_j}
+        \sum_{p\,\in\,j} m_p\, e^{-i\bk\cdot\mathbf r_p}
+  \label{eq:dm_in_i}
 \end{equation}
-Nothing here is an approximation: Equation~\eqref{eq:cov-identity} holds for
-the realised fields, bin by bin, at each $\bk$. It is the same statement as
-$\tilde u_m \neq \bar u_m$, now written so that what separates them is visible.
+Crossing with $\delta_e$ and shell-averaging gives the measured per-bin term,
+$R_{\star\,i} = \langle \delta_m^{\,{\rm in}\,(i)}\,\delta_e^* \rangle_{\hat\bk}$,
+after the self-pair subtraction of Equation~\eqref{eq:self_similar_term}. Keeping
+the double sum over haloes and members explicit,
+\begin{equation}
+  R_{\star\,i}(k) \;=\; \frac{1}{M_{\rm tot}} \sum_{j\,\in\,i}\,\sum_{p\,\in\,j} m_p\,
+  \Big\langle\,
+  \underbrace{e^{-i\bk\cdot\mathbf r_p}}_{\text{$p$ within its halo}}\;
+  \underbrace{e^{-i\bk\cdot\bx_j}\,\delta_e^*(\bk)}_{\text{halo centre}\,\times\,\text{gas}}
+  \,\Big\rangle_{\hat\bk} ,
+  \label{eq:Rstar_particles}
+\end{equation}
+real part understood, with $\langle\cdot\rangle_{\hat\bk}$ the average over the
+directions of the $k$ shell, which is how the pipeline bins every spectrum. The second factor is also what $P^{he}$ is
+built from: the halo field of bin $i$ is $\delta_h^{(i)} = N_i^{-1}\sum_{j\in i}
+e^{-i\bk\cdot\bx_j}$, so $P^{he}(k\mid M_i) = N_i^{-1}\sum_{j\in i}\langle
+e^{-i\bk\cdot\bx_j}\,\delta_e^*\rangle_{\hat\bk}$.
 
-Two physically different things live inside that covariance. The
-\emph{intra-halo} part is the one Section~\ref{sec:profiles} argues for: a
-halo's clumps hold gas, so where its mass sits and how it correlates with the
-gas are not independent. The \emph{halo-to-halo} part survives even if every
-halo is a smooth sphere --- inside a bin of finite width the more massive
-haloes have both a larger $M u$ and a larger $C$ --- and it is the $k\to0$
-limit of the same covariance, the mass--bias covariance already noted under
-Equation~\eqref{eq:LS-sumrule}. Separating them is what the experiment does.
+Now compare this with the model: the stack $\bar u_m$ of
+Equation~\eqref{eq:u_bar_estimator} shell-averages the first factor on its own,
+$\langle e^{-i\bk\cdot\mathbf r_p}\rangle_{\hat\bk} = j_0(k\,r_p)$. The
+reconstruction $R_i = \tilde f_i\,\bar u_m\,P^{he}$ of
+Equation~\eqref{eq:R_measured} is therefore Equation~\eqref{eq:Rstar_particles}
+with $\langle ab\rangle$ replaced by $\langle a\rangle\langle b\rangle$. That
+is exact only if the directions in which a halo's mass lies are uncorrelated with
+the directions in which the gas lies around it. A halo whose mass is piled
+into a few gas-bearing subhaloes does not satisfy this. 
 
-\paragraph{The randomisation.} Move every particle that carries a halo label to
-a new position inside the \emph{same} host, chosen so that its distance from
-the halo centre is preserved exactly. Two ways:
-\begin{align}
-  \texttt{shuffle}\quad & \text{each particle to a random direction at its own
-  radius; the halo is spherised,} \notag \\
-  \texttt{rotate}\quad & \text{the whole halo rigidly turned by one random
-  rotation; every clump survives.} \notag
-\end{align}
-For a fixed $\bk$, $\langle e^{-i\bk\cdot r\hat n}\rangle_{\hat n} = j_0(kr)$,
-and a Haar-uniform rotation gives the same. \textbf{Both modes therefore have
-the same expectation}, namely the halo's own spherised profile $\bar u_j$, and
-\texttt{rotate} is not an independent physical control: it cannot preserve the
-clump--gas alignment either, because the gas is not turned with the matter.
-What distinguishes them is variance --- \texttt{shuffle} draws once per
-particle and averages down as $N_{\rm part}^{-1/2}$, \texttt{rotate} once per
-halo and only as $N_{\rm halo}^{-1/2}$ --- so \texttt{shuffle} is the estimator
-and \texttt{rotate} a cross-check.
+The gap $R_{\star\,i} - R_i$ is therefore a covariance, and it splits, with no
+approximation, into two pieces:
+\begin{itemize}
+  \item[(i)] \emph{intra-halo} --- within each halo, the covariance over the
+  directions of the $k$ shell between the phases $e^{-i\bk\cdot\mathbf r_p}$ of
+  its particles and its own centre--gas factor. This is the statement that a
+  halo's clumps and the gas in them point the same way, and it is the term
+  Section~\ref{sec:dip} argues for. No radial profile can carry it, because a
+  radial profile is by construction $\hat\bk$-independent.
 
-Because the new directions are drawn independently of everything else, taking
-the expectation replaces $u_j$ by $\bar u_j$ and leaves $C_j$ alone. So the
-randomised measurement retains exactly the halo-to-halo part of
-Equation~\eqref{eq:cov-identity}, and the difference
+  \textcolor{blue}{Write the gas field out,
+  $\delta_e^*(\bk) = M_{\rm gas}^{-1}\sum_q m_q\,e^{i\bk\cdot\bx_q}$, and use
+  $\langle e^{-i\bk\cdot\mathbf s}\rangle_{\hat\bk} = j_0(ks)$
+  (Equation~\eqref{eq:angular}) on each matter--gas pair. With
+  $\mathbf d_q \equiv \bx_q - \bx_j$ the gas particle's position relative to the
+  same centre, Equation~\eqref{eq:Rstar_particles} becomes
+  \begin{equation}
+    R_{\star\,i} \;=\; \frac{1}{M_{\rm tot}M_{\rm gas}}\sum_{j\,\in\,i}\,
+    \sum_{p\,\in\,j}\,\sum_q m_p\,m_q\; j_0\big(k\,|\mathbf r_p - \mathbf d_q|\big),
+    \label{eq:Rstar_pairs}
+  \end{equation}
+  Spherising halo $j$ moves each member particle to a random direction at its
+  own radius, and leaves the gas field where it is:
+  \begin{equation}
+    \mathbf r_p \;\to\; r_p\,\hat{\mathbf n}_p ,
+    \qquad \hat{\mathbf n}_p \text{ uniform on the unit sphere, drawn
+    independently for every } p
+  \end{equation}
+  Thus, for a particular set of $\{\hat{\mathbf{n}_p}\}$ realisations, $R_{\star\,i}$ reads as:
+  \begin{equation}
+    R_{\star\,i}\big[\{\hat{\mathbf n}\}\big] \;=\;
+    \frac{1}{M_{\rm tot}M_{\rm gas}}\sum_{j\,\in\,i}\,\sum_{p\,\in\,j}\,\sum_q
+    m_p\,m_q\; j_0\big(k\,|r_p\hat{\mathbf n}_p - \mathbf d_q|\big)
+    \label{eq:Rstar_shuffled}
+  \end{equation}
+  To obtain the randomised
+  spectrum, we average over every particle's
+  direction,
+  \begin{equation}
+    R_{\star\,i}^{\rm rand} \;\equiv\; \int \prod_{p'}
+    \frac{\dd\Omega_{p'}}{4\pi}\; R_{\star\,i}\big[\{\hat{\mathbf n}\}\big],
+    \label{eq:Rrand_def}
+  \end{equation}
+  where we use the fact that the set $\{\hat{\mathbf{n}_p}\}$ is uniformly distributed, i.e. $\mathbb P(\hat{\mathbf n}\in A) = \Omega(A)/4\pi$, and that each direction is an independent draw.  
+  We can move the integral into the sum:
+  \begin{equation}
+    R_{\star\,i}^{\rm rand} \;=\;
+    \frac{1}{M_{\rm tot}M_{\rm gas}}\sum_{j\,\in\,i}\,\sum_{p\,\in\,j}\,\sum_q
+    m_p\,m_q\; J(r_p, d_q),
+    \qquad
+    J(r,d) \;\equiv\; \int\frac{\dd\Omega_n}{4\pi}\;
+    j_0\big(k\,|r\hat{\mathbf n} - \mathbf d|\big).
+  \end{equation}
+  To solve the angular integral, take the polar axis
+  along $\mathbf d$ and write $\mu \equiv \hat{\mathbf n}\cdot\hat{\mathbf d}$.
+  Then $|r\hat{\mathbf n} - \mathbf d|^2 = r^2 + d^2 - 2rd\mu$ and
+  \begin{equation}
+    J \;=\; \frac12\int_{-1}^{1} j_0\Big(k\sqrt{r^2+d^2-2rd\mu}\Big)\,\dd\mu .
+  \end{equation}
+  Substitute $s = \sqrt{r^2+d^2-2rd\mu}$, so that $s\,\dd s = -rd\,\dd\mu$ and
+  $\mu = -1, 1$ correspond to $s = r+d,\ |r-d|$. With $j_0(ks) = \sin(ks)/ks$,
+  \begin{equation}
+    J \;=\; \frac{1}{2rd}\int_{|r-d|}^{r+d} j_0(ks)\,s\,\dd s
+      \;=\; \frac{1}{2krd}\int_{|r-d|}^{r+d}\sin(ks)\,\dd s
+      \;=\; \frac{\cos k(r-d) - \cos k(r+d)}{2k^2rd}
+      \;=\; \frac{\sin kr}{kr}\,\frac{\sin kd}{kd} ,
+  \end{equation}
+  therefore
+  $J(r,d) = j_0(kr)\,j_0(kd)$. Putting $J$ back,
+  \begin{equation}
+    R_{\star\,i}^{\rm rand} \;=\; \frac{1}{M_{\rm tot}M_{\rm gas}}\sum_{j\,\in\,i}\,
+    \sum_{p\,\in\,j}\,\sum_q m_p\,m_q\; j_0(k\,r_p)\,j_0(k\,d_q).
+    \label{eq:Rstar_rand_pairs}
+  \end{equation}
+  In practice the pipeline never evaluates Equation~\eqref{eq:Rrand_def}. It
+  makes one draw of the directions,
+  paints the moved particles and Fourier transforms them, crosses the result with the unmoved $\delta_e$ and
+  shell-averages it. That is
+  Equation~\eqref{eq:Rstar_shuffled} for a single draw and nothing more, yet it
+  returns Equation~\eqref{eq:Rstar_rand_pairs}, because the sum over a halo's
+  particles carries out the angular integral over $\mu$ by itself.}
+
+  \textcolor{blue}{One draw reproduces Equation~\eqref{eq:Rstar_rand_pairs}
+  only up to a zero-mean fluctuation, the sum of one random term per particle,
+  which shrinks as $N_{{\rm dm},j}^{-1/2}$ per halo and further over the
+  haloes and modes of a bin.}
+
+  \textcolor{blue}{Now, consider the addition theorem,
+  \begin{equation}
+    j_0\big(k\,|\mathbf r - \mathbf d|\big) \;=\; \sum_{\ell\,\ge\,0}(2\ell+1)\,
+    j_\ell(kr)\,j_\ell(kd)\,P_\ell(\hat{\mathbf r}\cdot\hat{\mathbf d}),
+  \end{equation}
+  which shows that $j_0 j_0$ is exactly its $\ell = 0$ term. Subtracting
+  Equation~\eqref{eq:Rstar_rand_pairs} from Equation~\eqref{eq:Rstar_pairs}
+  therefore leaves only $\ell\ge1$:
+  \begin{equation}
+    \text{(i)} \;\equiv\; R_{\star\,i} - R_{\star\,i}^{\rm rand} \;=\; \frac{1}{M_{\rm tot}M_{\rm gas}}\sum_{j\,\in\,i}\,
+    \sum_{p\,\in\,j}\,\sum_q m_p\,m_q \sum_{\ell\,\ge\,1}(2\ell+1)\,
+    j_\ell(k r_p)\,j_\ell(k d_q)\,P_\ell(\hat{\mathbf r}_p\cdot\hat{\mathbf d}_q).
+    \label{eq:intra_multipoles}
+  \end{equation}
+  Spherising keeps only the monopole of how matter and gas are arranged around
+  the centre; (i) is every higher multipole, i.e.\ the angular correlation
+  between where a halo's matter lies and where the gas lies, seen from the same
+  centre. $\ell = 1$ is matter and gas displaced to the same side of the centre
+  (the centre is the most bound particle, not the centroid), $\ell = 2$ a shared
+  triaxial shape, high $\ell$ clumps. So (i) is not only substructure---any
+  non-spherical structure the two share is in it. Since $j_\ell(x)\propto x^\ell$ at small $x$, multipole $\ell$ of
+  structure at radius $r$ switches on near $kr\sim\ell$: (i) $\propto k^2$ as
+  $k\to0$, and finer structure enters at higher $k$. Gas far outside the halo,
+  $d_q \gg r_p$, contributes only if the halo's anisotropy is aligned with its
+  surroundings; at $k \gtrsim 3$ the relevant scales are well inside
+  $r_{200m}$, where alignment with the large-scale field is not a plausible
+  carrier.}
+
+  \item[(ii)] \emph{halo-to-halo} --- across the haloes of the bin, the
+  covariance of each halo's $M_j^a\,\bar u_j$,
+  with its own shell-averaged centre--gas factor. This survives even if every
+  halo is a smooth sphere: inside a bin of finite width the more massive haloes
+  have both a larger $M^a \bar u$ and a larger cross. Its $k\to0$ limit is the
+  gap $b_{\star\,i} - b_i$ noted under Equation~\eqref{eq:LS-sumrule}.
+
+  \textcolor{blue}{We can rewrite Equation~\eqref{eq:Rstar_rand_pairs}, separating the sums:
+  \begin{equation}
+    R_{\star\,i}^{\rm rand} \;=\; \frac{1}{M_{\rm tot}}\sum_{j\,\in\,i}
+    \Big[\sum_{p\,\in\,j} m_p\, j_0(k r_p)\Big]
+    \Big[\frac{1}{M_{\rm gas}}\sum_q m_q\, j_0(k d_q)\Big] .
+  \end{equation}
+  The first bracket is $M_j^a\bar u_j$, with $\bar u_j \equiv \sum_{p\in j}
+  m_p\,j_0(kr_p)/M_j^a$ halo $j$'s own spherised profile, the one-halo version
+  of Equation~\eqref{eq:u_bar_estimator}. The second is halo $j$'s
+  shell-averaged centre--gas factor,
+  \begin{equation}
+    g_j \;\equiv\; \big\langle e^{-i\bk\cdot\bx_j}\,\delta_e^*(\bk)\big\rangle_{\hat\bk} ,
+    \label{eq:g_j}
+  \end{equation}
+  since writing
+  $\delta_e^*$ out, $e^{-i\bk\cdot\bx_j}\delta_e^* = M_{\rm gas}^{-1}\sum_q m_q
+  e^{i\bk\cdot\mathbf d_q}$, and the shell average turns each phase into
+  $j_0(kd_q)$. Hence
+  \begin{equation}
+    R_{\star\,i}^{\rm rand} \;=\; \frac{1}{M_{\rm tot}}\sum_{j\,\in\,i}
+    M_j^a\,\bar u_j\,g_j \;=\; \frac{N_i}{M_{\rm tot}}\,
+    \big\langle M^a\bar u\,g\big\rangle_j,
+  \end{equation}
+  where $\langle\cdot\rangle_j$ stands for a plain average over
+  the $N_i$ haloes of the bin.
+  The model instead builds each factor as its own bin average. As in Equation~\eqref{eq:ftilde}, we model the mass fraction as follows:
+  \begin{equation}
+    \tilde f_i \;=\; \frac{1}{M_{\rm tot}}\sum_{p\,\in\,i} m_p
+    \;=\; \frac{1}{M_{\rm tot}}\sum_{j\,\in\,i}\,\sum_{p\,\in\,j} m_p
+    \;=\; \frac{1}{M_{\rm tot}}\sum_{j\,\in\,i} M_j^a
+  \end{equation}
+  We also remind ourselves of how we defined $\bar u_j$ back in Section \ref{sec:profiles}:
+  \begin{equation}
+    \bar u_m \;=\; \frac{\sum_{p\in i} m_p\, j_0(kr_p)}{\sum_{p\in i} m_p}
+    \;=\; \frac{\sum_{j\in i} M_j^a\,\bar u_j}{\sum_{j\in i} M_j^a} ,
+  \end{equation}
+  Therefore,
+  \begin{equation}
+    \tilde f_i\,\bar u_m \;=\; \frac{1}{M_{\rm tot}}\sum_{j\,\in\,i} M_j^a\,\bar u_j
+    \;=\; \frac{N_i}{M_{\rm tot}}\,\big\langle M^a\bar u\big\rangle_j
+  \end{equation}
+  So the model side looks like
+  \begin{equation}
+    R_i \;=\; \tilde f_i\,\bar u_m\,P^{he} \;=\; \frac{N_i}{M_{\rm tot}}\,
+    \big\langle M^a\bar u\big\rangle_j\,\langle g\rangle_j ,
+  \end{equation}
+  using $P^{he}(k\mid M_i) = N_i^{-1}\sum_{j\in i} g_j = \langle g\rangle_j$, the
+  number-weighted average that follows from the halo field below
+  Equation~\eqref{eq:Rstar_particles}. Compare $R_{\star\,i}^{\rm rand} =
+  (N_i/M_{\rm tot})\langle M^a\bar u\, g\rangle_j$: the measurement averages the product over the haloes, the model
+  multiplies the two averages. With $\langle ab\rangle = \langle a\rangle\langle
+  b\rangle + {\rm Cov}(a,b)$,
+  \begin{equation}
+    \text{(ii)} \;=\; R_{\star\,i}^{\rm rand} - R_i \;=\;
+    \frac{N_i}{M_{\rm tot}}\;{\rm Cov}_j\big(M_j^a\,\bar u_j,\; g_j\big).
+    \label{eq:halo_to_halo}
+  \end{equation}
+  The model gives every halo of the bin the bin's mean cross and counts each
+  once; the measurement weights each halo's cross by its own mass. If the
+  heavier haloes of the bin also cross the gas more strongly, the mass-weighted
+  mean cross exceeds the number-weighted one.}
+
+  \textcolor{blue}{Unlike (i), (ii) survives
+  at $k\to0$. As we said many times already, $\bar u_j \to
+  1$. The per-halo large-scale bias is $b_j \;\equiv\; \lim_{k\to0} \left[\,g_j(k) / P^{me}(k) \,\right]$, and since $P^{he} = \langle
+  g\rangle_j$, its bin average is $\langle b\rangle_j = \lim P^{he}/P^{me} =
+  b_i$. As $k\to0$, (i) $\to0$, so
+  $R_{\star\,i} \to R_{\star\,i}^{\rm rand} = (N_i/M_{\rm tot})\langle
+  M^a\bar u\,g\rangle_j$. With $\tilde f_i = (N_i/M_{\rm
+  tot})\langle M^a\rangle_j$,
+  \begin{equation}
+    \frac{R_{\star\,i}}{\tilde f_i\,P^{me}} \;\to\;
+    \frac{\langle M^a b\rangle_j}{\langle M^a\rangle_j} \;\equiv\; b_{\star\,i},
+  \end{equation}
+  the bias with each halo weighted by its mass. On the model side, we have
+  \begin{equation}
+    \frac{R_i}{\tilde f_i\,P^{me}} \;=\; \frac{\bar u_m\,P^{he}}{P^{me}}
+    \;\to\; \langle b\rangle_j \;=\; b_i,
+  \end{equation}
+  the bias with each halo counted once. The gap between the two is
+  \begin{equation}
+    b_{\star\,i} - b_i \;=\; \frac{\langle M^a b\rangle_j}{\langle M^a\rangle_j}
+    - \langle b\rangle_j
+    \;=\; \frac{\langle M^a b\rangle_j - \langle M^a\rangle_j\langle b\rangle_j}
+               {\langle M^a\rangle_j}
+    \;=\; \frac{{\rm Cov}_j(M^a, b)}{\langle M^a\rangle_j}
+  \end{equation}
+  Since both functions $f(M) = M$ and $h = b(M)$ increase with mass, ${\rm Cov}(M,
+  b(M)) \ge 0$.}
+\end{itemize}
+
+So, here we are trying to measure the intra-halo part via
 \begin{equation}
   C(k) \;\equiv\; R_\star(\text{true}) \;-\; R_\star(\text{randomised})
   \label{eq:Cdef}
 \end{equation}
-is the intra-halo part, measured rather than modelled. It is the term the
-reconstruction has no representation for.
-
-\paragraph{What moves and what does not.} $\delta_m^{(i)}$ is the
-\emph{matter} field of bin $i$, so it is painted from dark matter \emph{and}
-gas, and both species' member particles are randomised --- a halo with its gas
-left in place would not be spherised at all. What is held fixed is the gas
-\emph{field} $\delta_e$ the result is crossed against: it is painted from every
-gas particle at its true position, before anything moves. The asymmetry is the
-design, for three reasons. It is the reference, and one cannot ask how much of
-$R_\star$ depends on the matter's non-radial structure while varying both
-sides. The model it is scored against, $R = \tilde f_i \bar u_m P^{he}$, uses a
-$P^{he}$ measured against the true gas field, so moving $\delta_e$ would put
-measurement and model on different footings unless $P^{he}$ were re-measured
-too. And randomising the gas independently would change nothing in expectation,
-the two draws being uncorrelated, while adding noise.
-
-The control that \emph{would} preserve the clump--gas alignment is a rigid
-rotation of each halo's matter \emph{and} its gas by the same rotation, which
-destroys the halo's alignment with its environment while leaving its interior
-intact. That separates gas-bearing clumps from a triaxial halo pointing down a
-filament. It requires $P^{he}$ re-measured against the rotated gas field, so it
-is a second measurement and has not been done; at $k \gtrsim 3$ the scales in
-question are well inside $r_{200m}$, where alignment with the large-scale field
-is not a plausible carrier.
-
-\paragraph{A self-pairing term that is smeared, not removed.} Since
-$\delta_m^{(i)}$ contains gas, a member gas particle appears twice: at its
-randomised position in $\delta_m^{(i)}$ and at its true position in $\delta_e$.
-Its self-pair is therefore \emph{displaced} rather than deleted. Averaging over
-the new direction and over the $\bk$ shell, the coincident pair's $1$ becomes
-$j_0(kr)^2$, so what must come off $R_{\star\,i}$ is
+Reconstruction has no representation for this term yet. We note that $R_{\star \, i}^\mathrm{rand}$ carries a smeared self-pairing term and in what follows we derive it. The bin--gas cross is
+\begin{equation}
+  \big\langle \delta_m^{(i)}\,\delta_e^*\big\rangle \;=\;
+  \frac{c\,|W|^2}{M_{\rm tot}M_{\rm gas}}\sum_{p\,\in\,i}\,\sum_{q\,\in\,{\rm gas}}
+  m_p\,m_q\;\big\langle e^{-i\bk\cdot(\bx_p - \bx_q)}\big\rangle_{\hat\bk} ,
+\end{equation}
+whose shell average turns each phase into $j_0(k|\bx_p - \bx_q|)$, as in
+Equation~\eqref{eq:Rstar_pairs}. A self-pair the $p = q$ term; in the true
+measurement the copies coincide, the separation is $0$, $j_0(0) = 1$, and the
+self-pair part is
+\begin{equation}
+  \big\langle \delta_m^{(i)}\,\delta_e^*\big\rangle_{\rm self} \;=\;
+  \frac{c\,|W|^2}{M_{\rm tot}M_{\rm gas}}\sum_{q\,\in\,i} m_q^2 ,
+\end{equation}
+which is Equation~\eqref{eq:self_similar_term}. After the shuffle, the matter copy sits at $r_q\hat{\mathbf n}_q$ and the gas copy at $\mathbf r_q$, so by
+Equation~\eqref{eq:Rstar_shuffled} with $p = q$ the pair's factor is
+$j_0(k\,|r_q\hat{\mathbf n}_q - \mathbf r_q|)$. The randomised spectrum is its
+average over $\hat{\mathbf n}_q$, Equation~\eqref{eq:Rrand_def}, which is the
+integral $J(r_q, d_q)$ of (i) at $d = r = r_q$:
+\begin{equation}
+  J(r,r) \;=\; \frac{\cos 0 - \cos 2kr}{2k^2r^2} \;=\;
+  \frac{2\sin^2 kr}{2k^2r^2} \;=\; j_0(kr)^2 ,
+\end{equation}
+so that
+\begin{equation}
+  \big\langle \delta_m^{(i)}\,\delta_e^*\big\rangle_{\rm self}^{\rm rand} \;=\;
+  \frac{c\,|W|^2}{M_{\rm tot}M_{\rm gas}}\sum_{q\,\in\,i} m_q^2\,j_0(kr_q)^2 ,
+\end{equation}
+which is also the $p = q$ term of Equation~\eqref{eq:Rstar_rand_pairs}. The constant is
+removed with the measured shot spectrum, Equation~\eqref{eq:P_shot_def}:
+$P^{gg}_{\rm shot} = c|W|^2 M_{\rm gas}^{-2}\sum_{q\in\rm gas} m_q^2$ gives
+$c|W|^2 = P^{gg}_{\rm shot}\,M_{\rm gas}^2/\sum_{\rm gas} m_q^2$, and with $f_g =
+M_{\rm gas}/M_{\rm tot}$ what must come off $R_{\star\,i}$ is
 \begin{equation}
   \big\langle \delta_m^{(i)}\,\delta_e^*\big\rangle_{\rm self}^{\rm rand}
   \;=\; f_g\,P^{gg}_{\rm shot}\,
-  \frac{\sum_{q\,\in\,i} m_q^2\, j_0(k\,r_q)^2}{\sum_{q\,\in\,\rm gas} m_q^2} ,
+  \frac{\sum_{q\,\in\,i} m_q^2\, j_0(k\,r_q)^2}{\sum_{q\,\in\,\rm gas} m_q^2}
   \label{eq:smeared-selfpair}
 \end{equation}
-against the plain $\sum_{q\in i}m_q^2$ of the production run. The
-\emph{unassigned} gas particles never move, so $U_\star$ keeps precisely the
-term it always had. Equation~\eqref{eq:smeared-selfpair} $\to$ the ordinary
-share as $k\to0$: the randomisation cannot hide a self-pair, only move it.
-\textcolor{blue}{This matters more here than the algebra suggests. $C$ is a
-difference of two nearly equal spectra, so a term that is a few per cent of
-$R_\star$ is a large fraction of $C$; left uncorrected it drove the measured
-intra-halo term negative wherever the gas spectrum is shot-dominated --- which,
-with $P^{gg}$ up to $94\%$ self-pairs below Nyquist, is most of the small
-scales.}
+Like the rest of
+$R_{\star\,i}^{\rm rand}$ this is an average over directions: one draw's
+self-pair is $m_q^2\,j_0(k|r_q\hat{\mathbf n}_q - \mathbf r_q|)$, which
+scatters about $j_0^2$ as part of the single-draw noise.
+\texttt{spherise.selfpair\_shells} evaluates the sum by histogramming $m_q^2$
+against radius in each bin and taking $j_0^2$ at each shell's mass-weighted
+radius.
 
-\paragraph{Consistency checks.} Labels do not change under the randomisation,
-so $f_i$, $\tilde f_i$, the counts, $\langle M\rangle_i$ and the mass moments
-must be bit-identical to the production cache, and they are. $U_\star$ is
-re-measured by painting the unassigned particles directly rather than copied,
-and agrees with the production value (taken there as a residual) to
-$1\times10^{-4}$. And since $u_j \to 1$ whatever the angles,
-$R_\star(\text{randomised})/R_\star(\text{true}) \to 1$ as $k\to 0$: measured,
-$4\times10^{-4}$ over $k < 0.15$.
+What we actually compute is three $R$'s over
+the resolved bins (above $M_r = 10^{12}\,M_\odot$), all on the same $k$ bins (the 3-D
+grid below $k_{\rm split}$, the 2-D one above) and all self-pair corrected.
+The first two are measured: $R_\star = \sum_i R_{\star\,i}$ from the true
+particle positions, and $R_\star^{\rm rand} = \sum_i R_{\star\,i}^{\rm rand}$
+from one shuffle of the member particles, corrected with
+Equation~\eqref{eq:smeared-selfpair}. The third is the model the residual is
+measured against, and it is deliberately the one built on the measured radial
+profile,
+\begin{equation}
+  R \;=\; \sum_i \tilde f_i(x)\;\bar u_m(k\mid M_i;\,x)\;P^{he}(k\mid M_i),
+  \label{eq:R_expD}
+\end{equation}
+with three ingredients that are each chosen to match how $R_\star$ is
+measured. The profile is the
+stacked $\bar u_m$ of Equation~\eqref{eq:u_bar_estimator} at the same
+aperture $x$, since it is the shell average of exactly the matter factor that
+enters $R_\star$; against it the gap between $R_\star$ and the model is the two
+covariances (i) and (ii) and nothing else.  Two practical
+departures from the idealised $\bar u_m$ are worth noting. The stack is
+measured on its own mass grid, eight bins per decade, and interpolated in
+$\log M$ to each bin's $\langle M\rangle_i$, rather than stacked on the bins of
+$R_\star$ themselves; and outside the mass range the stack resolves
+($\log_{10}M \simeq 10.6$--$14.4$ here) the pipeline falls back to $u_m^{\rm
+NFW}$, so the top few cluster bins carry an NFW profile. Both make
+Equation~\eqref{eq:R_expD} slightly differ from the exact $\tilde f_i\bar u_m
+P^{he}$ of (ii), and that difference ends up in the halo-to-halo term.
 
-\subsubsection{What the spherisation measures}
+From these three the pipeline forms, as fractions of the measured, self-pair
+corrected $P^{me}$,
+\begin{equation}
+  \underbrace{\frac{R - R_\star}{P^{me}}}_{\text{total}}
+  \;=\;
+  \underbrace{\frac{R - R_\star^{\rm rand}}{P^{me}}}_{\text{halo-to-halo}}
+  \;+\;
+  \underbrace{\Big(-\frac{R_\star - R_\star^{\rm rand}}{P^{me}}\Big)}_{-\text{intra-halo}}
+  \label{eq:expD_split}
+\end{equation}
+The intra-halo term is $C = R_\star - R_\star^{\rm
+rand} = $ (i), measured and model-free; the halo-to-halo term is $R -
+R_\star^{\rm rand} = -$(ii), the part of the residual that survives
+spherisation. The intra-halo share quoted alongside is $C/(R_\star - R)$,
+the fraction of the residual that spherising removes, and the tabulated values
+are medians over $k = 2$--$8\;h/\mathrm{cMpc}$. The figures show, besides the
+split, the three spectra and $C$ themselves, $R$ and $R_\star^{\rm rand}$ as
+fractions of $R_\star$, and the per-bin ratio
+$C_i/R_{\star\,i}$ against host mass.
+
+\subsubsection{Spherising results}
+\label{sec:spherise_results}
 
 \begin{figure}
     \centering
     \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expD_spherise_gas_m200b_nb30_logMmin11.00_logMmax15.00_Mr12.00_Mmax14.91_prod_shuffle_3d384k1.pdf}
     \caption{Spherising the halo interiors, \texttt{shuffle}, $x=1$,
-    $M_r = 10^{12}\,M_\odot$. \textbf{Left top:} the four bin sums, with
-    $C(k)$ of Equation~\eqref{eq:Cdef} drawn beside them --- they lie on top of
-    one another on a log axis, the whole effect being a few per cent, so $C$
-    itself is the only informative curve. \textbf{Left bottom:} each as a
-    fraction of the measured $R_\star$. \textbf{Right top:} the exact split
-    $(R-R_\star) = (R-R_\star^{\rm rand}) - C$, as fractions of $P^{me}$.
-    \textbf{Right bottom:} $C_i/R_{\star\,i}$ per bin against host mass, at
-    three $k$.}
+    $M_r = 10^{12}\,M_\odot$, 3-D grid below $k = 1$ and 2-D above.
+    \textbf{Left top:} the measured $R_\star$, the shuffled $R_\star^{\rm rand}$,
+    and the model $R = \sum_i\tilde f_i\bar u_m P^{he}$; the
+    three lie on top of one another on a log axis, the whole effect being a few
+    per cent, so the intra-halo term $C = R_\star - R_\star^{\rm rand}$ of
+    Equation~\eqref{eq:Cdef} is drawn beside them. \textbf{Left bottom:} each
+    as a fraction of the measured $R_\star$, with a $\pm5\%$ band for
+    reference. \textbf{Right top:} the exact split $(R-R_\star) =
+    (R-R_\star^{\rm rand}) - C$, as fractions of $P^{me}$: total,
+    halo-to-halo and minus the intra-halo term. \textbf{Right bottom:}
+    $C_i/R_{\star\,i}$ per bin against host mass, at three $k$.}
     \label{fig:expD_x1}
 \end{figure}
 
 \begin{figure}
     \centering
     \includegraphics[trim=0 0 0 2, clip, width=\textwidth]{Figures/expD_spherise_gas_m200b_nb30_logMmin11.00_logMmax15.00_Mr12.00_Mmax14.91_prod_shuffle_ap1.5_3d384k1.pdf}
-    \caption{As Figure~\ref{fig:expD_x1} but at $x = 1.5$. The residual is
-    larger and the intra-halo share is not: $90.5\%$ against $89.5\%$.}
+    \caption{As Figure~\ref{fig:expD_x1} but at $x = 1.5$. The intra-halo term
+    is larger and peaks at larger scale, and the halo-to-halo term now sits at
+    a constant offset on large scales.}
     \label{fig:expD_x15}
 \end{figure}
 
-The answer is that the residual is intra-halo. Over $k = 2$--$8$, the median
-split of $R - R_\star$ is
+Figures~\ref{fig:expD_x1} and~\ref{fig:expD_x15} show the results at the
+two apertures, and the main conclusion is that the residual is intra-halo. Over $k =
+2$--$8$ the median split of $R - R_\star$ is
 \begin{center}
 \renewcommand{\arraystretch}{1.2}
 \begin{tabular}{lccc}
@@ -1353,40 +1601,116 @@ $x=1.5$ & $-0.0921\,P^{me}$ & $90.5\%$ & $-0.0094\,P^{me}$ \\
 \hline
 \end{tabular}
 \end{center}
-so what survives spherisation is under one per cent of $P^{me}$. The
-bin-width objection is therefore not what is happening: the halo-to-halo term
-is real but small, and it does not grow with aperture.
+so at both apertures spherising the haloes removes about nine tenths of the
+small-scale residual, and what survives it is under one per cent of $P^{me}$.
+Figure~\ref{fig:expD_x1} shows how this comes about at $x = 1$. In its left
+bottom panel the shuffled $R_\star^{\rm rand}$ and the model built on the
+stacked profile fall away from the measured $R_\star$ together, to about
+$-13\%$ at the Nyquist frequency, which is what
+Equation~\eqref{eq:Rstar_rand_pairs} says they should do: the model with the
+measured radial profile is, up to the halo-to-halo term, exactly the spherised
+halo. The right top panel puts the same thing in units of
+$P^{me}$: the total and the intra-halo term coincide from $k\sim1$ to the
+Nyquist frequency, both reaching $\simeq -8\%$, while the halo-to-halo term
+stays within about a per cent of zero at every $k$. On large scales all three
+vanish, as they must, since $u_j \to 1$ whatever the angles and spherising
+can change nothing there; measured, $R_\star^{\rm rand}/R_\star - 1$ is a few
+times $10^{-4}$ over $k < 0.15$.
 
-Three features make this more than a number. First, $C(k)$ has the right
-shape. It vanishes at both ends --- as it must, since $u_j \to 1$ at $k\to0$
-whatever the angles, and since $u_j \to 0$ at large $k$ either way --- and
-peaks at $k = 1.69\;h/\mathrm{cMpc}$, i.e.\ $1/k = 0.59\;\mathrm{cMpc}/h$.
-That is neither the size of a halo nor the size of a clump but the scale of
-clump \emph{positions within} the halo, around $0.6\,r_{200m}$ of a
-$10^{14}M_\odot$ host, which is where subhaloes sit. It is detected at
-$13$--$21\sigma$ against the randomisation noise over $k = 1.5$--$7$.
-
-Second, and most tellingly, the term lives in the haloes that host satellites
-rather than in the haloes that hold the mass:
+The shape of $C(k)$ in the left top panel says what the term is. It vanishes
+at both ends --- at $k\to0$ because $u_j\to1$, at large $k$ because $u_j\to0$
+either way --- and peaks at $k = 1.69\;h/\mathrm{cMpc}$, i.e.\ $1/k =
+0.59\;\mathrm{cMpc}/h$. That is neither the size of a halo nor the size of a
+clump but the scale of clump positions within the halo, around
+$0.6\,r_{200m}$ of a $10^{14}M_\odot$ host, which is where subhaloes sit. Where in host mass the term
+lives points to the same conclusion. Shares of $C$ by host mass, with the mass each range
+holds, are
 \begin{center}
 \renewcommand{\arraystretch}{1.2}
 \begin{tabular}{lcccc}
 \hline
 host bin & $k=1$ & $k=3$ & $k=5$ & mass held, $\sum\tilde f_i$ \\
 \hline
-$\log_{10}M = 11$--$12$ & $0.00$ & $-0.01$ & $0.01$ & $0.084$ \\
-$12$--$13$              & $0.03$ & $0.06$  & $0.11$ & $0.096$ \\
-$13$--$14$              & $0.26$ & $0.40$  & $0.49$ & $0.055$ \\
-$14$--$15$              & $0.71$ & $0.55$  & $0.39$ & $0.014$ \\
+$\log_{10}M = 12$--$13$ & $0.03$ & $0.06$  & $0.11$ & $0.096$ \\
+$13$--$14$              & $0.26$ & $0.40$  & $0.50$ & $0.055$ \\
+$14$--$15$              & $0.71$ & $0.55$  & $0.40$ & $0.014$ \\
 \hline
 \end{tabular}
 \end{center}
-Haloes above $10^{13}M_\odot$ carry $95\%$ of $C$ at $k=3$ with $28\%$ of the
-resolved mass, and cluster-mass haloes over half of it with $5.6\%$. This is
-the cleanest discriminator available: a bin-width or mass-scatter artefact
-would track the \emph{mass}, and this tracks the \emph{host mass}. Third, the
-per-bin $C_i/R_{\star\,i}$ grows with both host mass and $k$, which is what a
-substructure term does and what a binning artefact does not.
+so haloes above $10^{13}M_\odot$ carry $95\%$ of $C$ at $k=3$ with $42\%$ of
+the resolved mass, and cluster-mass haloes over half of it with $8.5\%$. The
+term lives in the haloes that host satellites rather than in the haloes that
+hold the mass. The right bottom panel shows the same bin by bin, with
+$C_i/R_{\star\,i}$ growing with both host mass and $k$, from $\simeq3\%$ at
+$10^{12.5}M_\odot$ to $\simeq16\%$ at $10^{14.5}M_\odot$ at $k = 4.9$, which is
+what a substructure term does and what a binning artefact does not; the last
+bins, holding a handful of clusters each, scatter.
+
+Opening the aperture to $x = 1.5$ (Figure~\ref{fig:expD_x15}) changes both
+terms, for reasons that follow from what the extra shell between $r_{200m}$
+and $1.5\,r_{200m}$ contains. It is far from smooth: it holds satellites near
+the edge, infalling groups and, since every particle is given to the most
+massive sphere that contains it, whole smaller neighbouring haloes, each with
+its own gas. Assigned to the host, each of these is one more gas-bearing clump,
+at a larger offset than the subhaloes inside $r_{200m}$. The intra-halo term therefore grows --- its
+maximum rises from $8.0\%$ to $11.2\%$ of $P^{me}$, and from $13\%$ to $17\%$ of
+$R_\star$ --- and its peak moves to larger scale, from $1/k = 0.59$ to
+$1.01\;\mathrm{cMpc}/h$, a factor $1.7$ close to the ratio of the apertures,
+because the clumps it adds sit at radii the aperture sets. Its weight also
+moves down in host mass, since it is now the apertures of group-scale hosts
+that reach their neighbours: $C_i/R_{\star\,i}$ at $k = 4.9$ is $\simeq8\%$ at
+$10^{12.5}M_\odot$ against $\simeq3\%$ at $x = 1$, and the share of $C$ carried
+by $10^{12}$--$10^{13}M_\odot$ hosts at $k = 5$ doubles, from $11\%$ to $21\%$.
+Yet the intra-halo \emph{share} of the residual stays at nine tenths ($89.5\%$
+against $90.5\%$), because the extra shell adds to $R - R_\star$ and to $C$
+alike: the model has no more representation of a neighbour's gas-bearing
+clumps than of a subhalo's.
+
+The halo-to-halo term grows too, and the large scales show why. There (i)
+vanishes and $\bar u_j \to 1$, so the whole of $R - R_\star$ is (ii), which by
+Equation~\eqref{eq:halo_to_halo} tends to
+\begin{equation}
+  \frac{R}{R_\star} - 1 \;\to\; -\,\frac{\sum_i \tilde f_i\,
+  (b_{\star\,i} - b_i)}{\sum_i \tilde f_i\, b_{\star\,i}},
+  \qquad
+  b_{\star\,i} - b_i \;=\; \frac{{\rm Cov}_j(M_j^a, b_j)}{\langle M^a\rangle_j}
+\end{equation}
+since $R_\star$ weights each halo's large-scale bias by its assigned mass and
+the model counts each halo once through $P^{he}$. Measured over $0.02 < k <
+0.1$, at the bin width of the figures and at one a third of it,
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lcc}
+\hline
+$R/R_\star - 1$ & 30 bins & 100 bins \\
+\hline
+$x = 1$   & $-0.0013$ & $+0.0002$ \\
+$x = 1.5$ & $-0.0170$ & $-0.0155$ \\
+\hline
+\end{tabular}
+\end{center}
+At $x = 1$ the assigned mass is essentially the halo's own, $M_j^a \simeq
+M_j$, so the only covariance is that of mass with bias across the width of a
+bin: the $\beta\,{\rm Var}(\ln M)$ of (ii), small and shrinking with the bin
+width as it should, which is why the halo-to-halo curve of
+Figure~\ref{fig:expD_x1} goes to zero on large scales and $R/R_\star \to 1$.
+At $x = 1.5$ the gap is $1.6\%$ of $R_\star$ --- the constant offset of the
+halo-to-halo curve in Figure~\ref{fig:expD_x15} below $k\sim1$, and of $R$
+below $R_\star$ in its left bottom panel --- and it is \emph{not} a bin-width
+effect, since cutting ${\rm Var}(\ln M)$ elevenfold moves it by a tenth. What
+the aperture changes is what $M_j^a$ contains. The shell beyond $r_{200m}$
+raises the assigned mass by a third ($R_\star/P^{me}$ goes from $0.34$ to
+$0.45$ at $k = 0.05$), and how much of it a halo collects at fixed mass depends
+on its surroundings: infall, filaments and neighbouring haloes are all richer
+in dense environments, and at fixed mass the haloes in dense environments are
+the more strongly clustered. $M^a/M$ therefore correlates with $b$ \emph{inside}
+a mass bin, the mass weighting of $R_\star$ favours haloes with rich
+surroundings, $b_{\star\,i}$ rises above $b_i$, and $R$ falls below $R_\star$ by
+an amount that no narrowing of the bins removes. The same environmental
+covariance is behind the growth of the halo-to-halo column in the first table,
+from $-0.0061$ to $-0.0094\,P^{me}$. Whatever its origin, it would be removed
+by painting the halo field with weights $M_j^a$ instead of $1$, which makes
+$P^{he}$ mass-weighted and sets $b_i = b_{\star\,i}$ exactly as $k\to0$.
 
 \subsubsection{Modelling it: a clumping factor on $u_m$}
 \label{sec:clumping}
@@ -1483,7 +1807,8 @@ power law runs low around $k\,x\,r_{200m} = 6$ and the cap takes over above
 $6.6$, so a smooth saturating form would fit better than a power law with a
 knee. And it does not touch the halo-to-halo residual, correctly --- $\xi\to0$
 as $k\to0$ by construction --- which at $x = 1.5$ leaves about $1.5\%$ on large
-scales that belongs to the within-bin mass--bias covariance and is a
-bin-width question rather than this one.
+scales. That residual is the environmental part of the halo-to-halo covariance
+(Section~\ref{sec:spherise_results}), not a bin-width effect, and a
+mass-weighted halo field would remove it.
 
 \end{document}

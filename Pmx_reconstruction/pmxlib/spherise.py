@@ -4,84 +4,56 @@
 
 This is the geometry behind experiment D. It moves every particle that carries
 a halo label to a new position inside the SAME host, chosen so that the
-particle's distance from the halo centre is preserved exactly. Nothing else in
-the box is touched: unlabelled particles stay where they are, halo centres stay
-where they are, and the gas field the result is crossed against is the true one.
+particle's distance from the halo centre is preserved. Nothing else in the box 
+is touched: unlabelled particles stay where they are, halo centres stay where 
+they are, and the gas field the result is crossed against is the true one.
 
 WHY THIS IS THE TEST
-    R writes bin i's contribution as a single radial profile times the bin's
-    measured halo-gas cross spectrum,
+    A halo's own profile u_j(k) is a function of the WAVEVECTOR, not of its
+    modulus, and that is where clumpiness lives: a halo with its mass piled
+    into a few subhaloes varies with k-hat at fixed |k|, a spherical one does
+    not. u_bar is the k-hat average of it, so it keeps how much mass lies at
+    each radius and throws away exactly the angular information that says
+    whether that mass is spread over the shell or piled into clumps. The same
+    goes for a halo's own cross with the gas, of which P_halo_gas is the shell
+    average.
 
-        R_i = f_i u_m(k|M_i) P_halo_gas(k|M_i),
+    Spectra are binned in |k|, so R*_i is the shell average of a PRODUCT while
+    the model R_i = f_i u_bar P_halo_gas is a product of two separately
+    shell-averaged factors. Their gap splits, with no approximation, into
 
-    while the exact contribution of the same particles is
+      intra-halo    within each halo, the covariance over the directions of
+                    the k shell between its own profile and its own cross --
+                    its clumps and the gas in them pointing the same way. No
+                    radial profile can carry this, a radial profile being
+                    k-hat independent by construction.
+      halo-to-halo  across the bin's haloes, the covariance of the
+                    shell-averaged quantities. It survives even if every halo
+                    is a smooth sphere, since within a bin of finite width the
+                    more massive ones have both a larger M u and a larger
+                    cross.
 
-        R*_i = (1/M_tot) sum_{j in i} M_j^a u_j(k) c_j(k),
+    Randomising a halo's interior independently of everything else replaces
+    u_j(k) by its own angular average. It therefore removes the first and
+    leaves the second exactly alone, so
 
-    with u_j the halo's OWN (non-spherical, clumpy) profile and c_j its own
-    cross with the gas. Writing u_bar_m = sum_j M_j^a u_j / sum_j M_j^a and
-    P_halo_gas = <c>_i, the two differ by exactly
+        C(k) = R*(true) - R*(randomised)
 
-        R*_i - R_i = (N_i / M_tot) Cov_{j in i}( M_j^a u_j(k), c_j(k) ),      (*)
+    is the intra-halo term, measured rather than modelled -- the term the
+    reconstruction has no representation for.
 
-    a covariance ACROSS the halos of the bin between where a halo's mass sits
-    and how that halo correlates with the gas. Nothing in (*) is an
-    approximation: it holds for the realised fields, bin by bin, at each
-    k VECTOR.
-
-    The pipeline's R is built from two separately shell-averaged scalars,
-    u_bar_m(k) and P_halo_gas(k), so on binned spectra the same difference is
-    a covariance over the halos AND over the directions in the k shell. The
-    two averages agree on the mean -- the shell average of u_j(k) over k-hat
-    is that halo's own spherised profile, sum_p m_p j0(k r_p) / M_j^a, which
-    is exactly what u_bar stacks -- so no term is lost. What the extra
-    direction average adds is the alignment of a halo's shape with the field
-    around it, which is why the randomisation below removes that too and why
-    "intra-halo" here means clumps and asphericity together.
-
-    Randomising each halo's internal configuration independently of everything
-    else replaces u_j by something whose expectation is the halo's own
-    SPHERISED profile u_bar_j, and leaves c_j untouched. So the measurement
-    made on the randomised field isolates the part of (*) that survives
-    spherisation -- the halo-to-halo piece, driven by within-bin mass scatter
-    and assembly bias -- and the difference between the two measurements,
-
-        C(k) = R*(true) - R*(randomised),
-
-    is the intra-halo piece: the correlation between a halo's clumps and the
-    gas sitting in those same clumps. That is the term the reconstruction has
-    no representation for, and C(k) is it, measured rather than modelled.
-
-THE TWO MODES, AND WHY THEY HAVE THE SAME EXPECTATION
-    'shuffle'   each particle is moved to a random direction at its own radius.
-                The halo is spherised: all substructure, triaxiality and
-                alignment go at once.
-    'rotate'    the whole halo is rigidly rotated by one random rotation.
-                Every clump survives intact; only the halo's orientation is
-                randomised.
-
-    For a fixed k vector, E[exp(-i k.r n)] over uniform n is j0(k r), and a
-    Haar-uniform rotation gives the same: E[exp(-i k.R r)] = j0(k r). Both
-    modes therefore have the SAME expectation, u_bar_j, and 'rotate' is not an
-    independent physical control -- it cannot preserve the clump-gas alignment,
-    because the gas is not rotated with the matter. What it is is an
-    independent implementation of the same expectation with a very different
-    noise model: 'shuffle' draws one direction per particle, so its error on
-    u_j averages down as 1/sqrt(N_particles), while 'rotate' draws one per
-    halo and averages down only as 1/sqrt(N_halos). 'shuffle' is therefore the
-    estimator to use; 'rotate' is worth a run only as a cross-check, and is
-    expected to agree within its (larger) noise.
-
-    The control that WOULD preserve the clump-gas alignment has to rotate each
-    halo's gas by the same rotation and re-measure P_halo_gas against the
-    rotated gas field. That is a second measurement, not a mode here.
+THE SHUFFLE
+    Each particle is moved to a random direction at its own radius, one
+    independent direction per particle. The halo is spherised: substructure,
+    triaxiality and alignment go at once. For a fixed k vector, E[exp(-i k.r n)]
+    over uniform n is j0(k r), so the expectation is the halo's own u_bar_j,
+    and the error on it averages down as 1/sqrt(N_particles).
 
 NOISE
     The random directions are uncorrelated with the gas field, so the estimator
     is unbiased; what they add is variance, at the level of the member
-    particles' own shot power crossed with the gas. experiment_D prints it
-    next to the signal, the same way self_pairs reports its subtraction, and
-    it is the thing to check before reading the high-k end of C(k).
+    particles' own shot power crossed with the gas. Two runs with different
+    --seed values show its size directly.
 
 SELF-PAIRS, WHICH DO NOT GO AWAY
     delta_m is painted from dark matter AND gas, so a member gas particle sits
@@ -98,29 +70,56 @@ SELF-PAIRS, WHICH DO NOT GO AWAY
 
 USAGE
     from Pmx_reconstruction.pmxlib import spherise
-    quat = spherise.halo_rotations(n_halo)          # 'rotate' only
     info = spherise.randomise_in_place(pos, label, h_pos, box, 'shuffle')
 
     python -m Pmx_reconstruction.pmxlib.spherise     # self-test, no data needed
 """
 import numpy as np
 
-__all__ = ['MODES', 'ROTATION_SEED', 'SHUFFLE_SEED', 'CHUNK', 'SELFPAIR_NX',
-           'halo_rotations', 'randomise_in_place', 'check_mode',
-           'selfpair_shells', 'position_tolerance']
+__all__ = ['MODES', 'SHUFFLE_SEED', 'resolve_seed', 'species_seed', 'CHUNK',
+           'SELFPAIR_NX', 'randomise_in_place', 'check_mode',
+           'selfpair_shells']
 
-MODES = ('shuffle', 'rotate')
+MODES = ('shuffle',)
 
 # Fixed so a randomised cache can be reproduced from the command line alone.
-# The two differ so that a run of each is not secretly sharing draws.
 SHUFFLE_SEED = 20260923
-ROTATION_SEED = 20260924
 
-# Particles per chunk. Sized by the transient it bounds: 'rotate' holds about
-# four (chunk, 3) float64 temporaries at once, so 2e7 is ~2 GB. Rotating by
-# quaternion rather than by a stacked rotation matrix is what keeps it to
-# that: scipy's Rotation.apply would materialise (chunk, 3, 3) instead, twice
-# the memory for the same answer, and pull scipy.spatial in besides.
+
+def resolve_seed(seed):
+    """A --seed value as the int the caches are named by, or None.
+
+    None keeps the legacy draw: SHUFFLE_SEED, with the stream restarted for
+    each species, so the k-th moved dark matter particle
+    and the k-th moved gas particle share a direction. That leaves every
+    particle's direction uniform, so the expectation is untouched, but the two
+    species' draws are not independent. An explicit seed gives each species
+    its own stream (see species_seed). 'random' draws one from the OS and
+    prints it, so the run can be repeated.
+    """
+    if seed is None:
+        return None
+    if str(seed).lower() == 'random':
+        import secrets
+        seed = secrets.randbelow(2 ** 32)
+        print(f"[spherise] drew seed {seed}; pass --seed {seed} to repeat it")
+    seed = int(seed)
+    if seed < 0:
+        raise ValueError(f"seed must be non-negative, got {seed}")
+    return seed
+
+
+def species_seed(seed, species_index):
+    """Entropy for one species' shuffle stream under an explicit seed.
+
+    default_rng([seed, i]) hashes the pair through SeedSequence, so the
+    streams for i = 0, 1 are independent of each other and of every other
+    seed, and the whole run is still fixed by `seed` alone.
+    """
+    return None if seed is None else [int(seed), int(species_index)]
+
+# Particles per chunk. Sized by the transient it bounds: a few (chunk, 3)
+# float64 temporaries at once, so 2e7 is ~2 GB.
 CHUNK = 20_000_000
 
 
@@ -133,33 +132,6 @@ def check_mode(mode):
         raise ValueError(f"unknown randomisation mode {mode!r}; "
                          f"expected one of {', '.join(MODES)}")
     return mode
-
-
-def halo_rotations(n_halo, seed=ROTATION_SEED):
-    """Haar-uniform rotations, one per halo, as quaternions (n_halo, 4).
-
-    A normalised 4-vector of independent Gaussians is uniform on the
-    3-sphere, and the unit quaternions ARE the 3-sphere, so this is Haar
-    measure on SO(3) with no rejection step and no scipy dependency at
-    generation time.
-
-    Quaternions rather than matrices because these live in memory for the
-    whole pass while particles reach into them at random: 4 floats per halo
-    against 9, which at a few times 10^7 centrals is the difference between
-    half a gigabyte and one and a half.
-
-    Generated ONCE and shared by both species, so that a halo's dark matter
-    and its gas turn together -- otherwise the halo's matter is not rigidly
-    rotated, it is two independently rotated pieces.
-    """
-    rng = np.random.default_rng(seed)
-    q = rng.standard_normal((int(n_halo), 4))
-    nrm = np.sqrt(np.einsum('ij,ij->i', q, q))
-    bad = nrm <= 0.0                       # measure zero; keeps it total
-    if np.any(bad):
-        q[bad] = np.array([0.0, 0.0, 0.0, 1.0])
-        nrm[bad] = 1.0
-    return (q / nrm[:, None]).astype(np.float32)
 
 
 SELFPAIR_NX = 64
@@ -212,24 +184,6 @@ def selfpair_shells(pos, label, h_pos, h_r, h_bin, weights, box, nbins,
     return W, S
 
 
-def _rotate_by_quat(q, v):
-    """Rotate each row of v by the unit quaternion in the same row of q.
-
-    q is scalar-LAST, (n, 4) = (x, y, z, w), as halo_rotations writes it.
-    The identity is
-
-        v' = v + 2 u x (u x v + w v),      u = (x, y, z),
-
-    which is the same rotation a 3x3 matrix would apply without ever building
-    one: four (n, 3) temporaries instead of an (n, 3, 3) stack.
-    """
-    u = q[:, :3]
-    w = q[:, 3:4]
-    t = np.cross(u, v)
-    t += w * v
-    return v + 2.0 * np.cross(u, t)
-
-
 def _random_directions(n, rng):
     """n unit vectors, uniform on the sphere, (n, 3) float64."""
     g = rng.standard_normal((n, 3))
@@ -241,8 +195,8 @@ def _random_directions(n, rng):
     return g / nrm[:, None]
 
 
-def randomise_in_place(pos, label, h_pos, box, mode, seed=None, quat=None,
-                       chunk=CHUNK, report=True):
+def randomise_in_place(pos, label, h_pos, box, mode, seed=None, chunk=CHUNK,
+                       report=True):
     """Move every labelled particle inside its host. Modifies `pos` in place.
 
     Parameters
@@ -257,42 +211,25 @@ def randomise_in_place(pos, label, h_pos, box, mode, seed=None, quat=None,
                                DESCENDING-mass halo arrays.
     h_pos : (n_halo, 3) float  halo centres in [0, box).
     box   : float              periodic box side [cMpc/h].
-    mode  : 'shuffle' | 'rotate'
-    seed  : int                'shuffle' only; SHUFFLE_SEED if None.
-    quat  : (n_halo, 4)        'rotate' only, from halo_rotations. Required,
-                               rather than made here, because both species
-                               must turn each halo the same way.
+    mode  : 'shuffle'
+    seed  : int or [int, int]  SHUFFLE_SEED if None. A pair is species_seed's
+                               per-species entropy.
 
     Returns
     -------
-    dict with n_moved, r_max, dr_max (the largest change in a particle's
-    radius, which must be at the float32 position quantum) and dr_rel_max.
-
-    The radius is recomputed FROM THE WRITTEN float32 positions rather than
-    from the float64 intermediates, so dr_max tests the minimum image, the
-    wrap, the write-back and the dtype round trip in one number, and the
-    caller can assert on it the way u_bar asserts on its aperture overshoot.
+    dict with n_moved and r_max. That radii are preserved is checked by the
+    self-test, not on every call.
     """
     mode = check_mode(mode)
     if mode is None:
         raise ValueError("randomise_in_place needs a mode; None means the "
                          "caller should not have called it")
-    if mode == 'rotate':
-        if quat is None:
-            raise ValueError("mode 'rotate' needs `quat` from halo_rotations: "
-                             "both species must rotate each halo identically, "
-                             "so the draw cannot be made here")
-        quat = np.asarray(quat)
-        if quat.shape != (h_pos.shape[0], 4):
-            raise ValueError(f"quat has shape {quat.shape}, expected "
-                             f"{(h_pos.shape[0], 4)}")
 
-    rng = np.random.default_rng(SHUFFLE_SEED if seed is None else int(seed))
+    rng = np.random.default_rng(SHUFFLE_SEED if seed is None else seed)
     box_f32 = np.float32(box)
-    eps = float(box) * 2.0 ** -23          # the float32 position quantum
     n_p = label.size
     n_moved = 0
-    r_max = dr_max = dr_rel_max = 0.0
+    r_max = 0.0
 
     for a in range(0, n_p, int(chunk)):
         b = min(a + int(chunk), n_p)
@@ -312,10 +249,7 @@ def randomise_in_place(pos, label, h_pos, box, mode, seed=None, quat=None,
         r = np.sqrt(np.einsum('ij,ij->i', d, d))
         r_max = max(r_max, float(r.max()))
 
-        if mode == 'shuffle':
-            d = r[:, None] * _random_directions(r.size, rng)
-        else:
-            d = _rotate_by_quat(quat[lab].astype(np.float64), d)
+        d = r[:, None] * _random_directions(r.size, rng)
 
         new = np.mod(centre + d, box)
         new32 = new.astype(np.float32)
@@ -324,29 +258,12 @@ def randomise_in_place(pos, label, h_pos, box, mode, seed=None, quat=None,
         new32[new32 >= box_f32] -= box_f32
         view[sel] = new32
         n_moved += int(r.size)
+        del view, lab, sel, centre, d, r
 
-        # Read back what was actually stored and re-derive the radius.
-        d2 = view[sel] - centre
-        d2 -= box * np.round(d2 / box)
-        r2 = np.sqrt(np.einsum('ij,ij->i', d2, d2))
-        dr = np.abs(r2 - r)
-        dr_max = max(dr_max, float(dr.max()))
-        # Relative only where a radius is long enough for a ratio to mean
-        # something. A halo centre IS its most-bound particle, so members sit
-        # at r = 0 exactly; against those the fixed float32 slop is an
-        # arbitrarily large "relative error" and says nothing. dr_max is the
-        # number that gets asserted on for this reason.
-        big = r > 100.0 * eps
-        if np.any(big):
-            dr_rel_max = max(dr_rel_max, float(np.max(dr[big] / r[big])))
-        del view, lab, sel, centre, d, d2, r, r2, dr
-
-    info = dict(mode=mode, n_moved=n_moved, r_max=r_max, dr_max=dr_max,
-                dr_rel_max=dr_rel_max)
+    info = dict(mode=mode, n_moved=n_moved, r_max=r_max)
     if report:
         print(f"    [{mode}] {n_moved:.3e} labelled particles moved; "
-              f"max radius {r_max:.4f} cMpc/h, max |dr| {dr_max:.2e} cMpc/h "
-              f"({dr_rel_max:.1e} relative, over r > 100 float32 quanta)")
+              f"max radius {r_max:.4f} cMpc/h")
     return info
 
 
@@ -361,9 +278,9 @@ def position_tolerance(box, ulps=4.0):
 
 # Self-test
 def _self_test():
-    """Synthetic halos, no simulation data. Checks the four things that would
+    """Synthetic halos, no simulation data. Checks the things that would
     silently ruin the measurement: radii, wrapping, host identity and the
-    rigidity of 'rotate'."""
+    isotropy of the directions."""
     rng = np.random.default_rng(7)
     box = 10.0
     n_halo, per_halo = 50, 200
@@ -386,13 +303,12 @@ def _self_test():
         return np.sqrt(np.einsum('ij,ij->i', d, d))
 
     tol = position_tolerance(box)
-    quat = halo_rotations(n_halo)
 
     for mode in MODES:
         p = pos.copy()
         r0 = radii(p)
-        info = randomise_in_place(p, label, h_pos, box, mode, quat=quat,
-                                  chunk=3000, report=False)
+        info = randomise_in_place(p, label, h_pos, box, mode, chunk=3000,
+                                  report=False)
         r1 = radii(p)
         assert info['n_moved'] == n_halo * per_halo, info
         assert np.all(p >= 0.0) and np.all(p < box), "left the box"
@@ -406,21 +322,7 @@ def _self_test():
               f"{np.max(np.abs(r1 - r0)):.2e} cMpc/h (tolerance {tol:.2e}); "
               f"unlabelled particles untouched")
 
-    # 'rotate' is rigid: every pairwise distance inside a halo survives.
-    p = pos.copy()
-    randomise_in_place(p, label, h_pos, box, 'rotate', quat=quat, chunk=3000,
-                       report=False)
-    for j in (0, 17):
-        m = np.flatnonzero(label == j)[:40]
-        def _sep(q):
-            d = q[m][:, None, :] - q[m][None, :, :]
-            d -= box * np.round(d / box)
-            return np.sqrt(np.einsum('ijk,ijk->ij', d, d))
-        err = np.max(np.abs(_sep(p) - _sep(pos)))
-        assert err <= 10.0 * tol, f"rotate is not rigid in halo {j}: {err:.2e}"
-    print(f"  [rotate] intra-halo separations preserved to {err:.2e} cMpc/h")
-
-    # 'shuffle' is not rigid, and its directions are isotropic. The mean of
+    # The shuffled directions are isotropic. The mean of
     # n unit vectors has |mean| ~ 1/sqrt(n); 5/sqrt(n) is a loose gate that
     # still catches a hemisphere bug.
     p = pos.copy()
@@ -572,9 +474,6 @@ def _science_test(n_halo=400, n_part=80, verbose=True):
               it does in FLAMINGO, and R*(shuffled) lands back on the model --
               so the difference accounts for the residual rather than merely
               correlating with it.
-
-    'rotate' is run alongside and must agree with 'shuffle': same expectation,
-    different draw.
     """
     rng = np.random.default_rng(3)
     L, r_halo = 100.0, 2.0
@@ -631,9 +530,6 @@ def _science_test(n_halo=400, n_part=80, verbose=True):
         h_pos, m_pos, g_pos, label = build(clumpy)
         shuf = m_pos.copy()
         randomise_in_place(shuf, label, h_pos, L, 'shuffle', report=False)
-        rot = m_pos.copy()
-        randomise_in_place(rot, label, h_pos, L, 'rotate',
-                           quat=halo_rotations(n_halo), report=False)
         d = np.asarray(m_pos, float) - h_pos[label]
         d -= L * np.round(d / L)
         r_p = np.linalg.norm(d, axis=1)
@@ -647,7 +543,6 @@ def _science_test(n_halo=400, n_part=80, verbose=True):
             kv, kmag = shell(n_int), n_int * 2.0 * np.pi / L
             R_star = cross(kv, m_pos, g_pos)
             R_shuf = cross(kv, shuf, g_pos)
-            R_rot = cross(kv, rot, g_pos)
             P_he = cross(kv, h_pos, g_pos)
             R_mod = float(np.mean(np.sinc(kmag * r_p / np.pi))) * P_he
             total, intra = R_mod - R_star, R_star - R_shuf
@@ -655,9 +550,6 @@ def _science_test(n_halo=400, n_part=80, verbose=True):
             if verbose:
                 print(f"   {kmag:5.2f} {R_star:11.3e}{R_shuf:11.3e}"
                       f"{R_mod:11.3e}   {total / R_star:+9.3f}   {share:+9.3f}")
-            assert abs(R_rot / R_shuf - 1.0) < 0.05, \
-                f"{name} k={kmag:.2f}: rotate and shuffle disagree by " \
-                f"{abs(R_rot / R_shuf - 1.0):.3f}; they share an expectation"
             if clumpy:
                 # Only score where there is a residual to account for.
                 deepest = max(deepest, abs(total / R_star))
